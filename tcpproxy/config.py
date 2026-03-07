@@ -50,6 +50,15 @@ class ProxyConfig:
 
     Logging:
         log_level: Python logging level name ("DEBUG", "INFO", "WARNING", ...).
+
+    TLS:
+        tls_listen:          Wrap client connections with TLS (MITM mode).
+        tls_upstream:        Connect to upstream server over TLS.
+        tls_upstream_verify: Verify upstream cert/hostname (default True).
+        ca_cert_path:        CA cert path. Auto-generated at ~/.tcpproxy/ca.crt.
+        ca_key_path:         CA key path.  Auto-generated at ~/.tcpproxy/ca.key.
+        tls_cert_path:       Manual cert override (skips auto-CA).
+        tls_key_path:        Private key for tls_cert_path.
     """
     # Networking
     listen_host:      str   = "127.0.0.1"
@@ -71,3 +80,35 @@ class ProxyConfig:
 
     # Logging
     log_level: str = "INFO"
+
+    # ------------------------------------------------------------------
+    # TLS / SSL
+    # ------------------------------------------------------------------
+
+    # Listening side — wrap client→proxy connections with TLS (MITM mode).
+    # The proxy presents a certificate to the client; the client must trust
+    # the proxy CA (see ca_cert_path) for the handshake to succeed silently.
+    tls_listen: bool = False
+
+    # Upstream side — connect to the upstream server over TLS.
+    tls_upstream: bool = False
+
+    # When True (default) the proxy verifies the upstream server's certificate
+    # chain and hostname.  Set False to accept any certificate — useful for
+    # self-signed or expired certs on internal services (equivalent to Burp's
+    # "Accept any certificate" toggle).
+    tls_upstream_verify: bool = True
+
+    # --- CA for auto-generated per-session leaf certificates (Burp-style) ---
+    # If both are None the CA is stored at ~/.tcpproxy/ca.crt / ca.key and
+    # reused across proxy restarts.  Point these at your own CA to use a root
+    # that clients already trust (e.g. a corporate CA).
+    ca_cert_path: Optional[str] = None
+    ca_key_path:  Optional[str] = None
+
+    # --- Manual cert override ---
+    # Supply a ready-made certificate instead of auto-generating one via the CA.
+    # When set, ca_cert_path / ca_key_path are ignored.  Useful for wildcard
+    # certs or certs that clients trust unconditionally.
+    tls_cert_path: Optional[str] = None
+    tls_key_path:  Optional[str] = None

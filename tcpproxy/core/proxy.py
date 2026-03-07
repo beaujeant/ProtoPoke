@@ -40,6 +40,7 @@ from ..models import Direction
 from ..events.bus import EventBus, SessionOpenedEvent, SessionClosedEvent
 from ..framing import create_framer
 from ..intercept.controller import InterceptController, PassthroughController
+from ..tls.handler import TLSHandler
 from .session import SessionRegistry, Session
 from .relay import BidirectionalRelay
 
@@ -79,6 +80,10 @@ class ProxyEngine:
         self.event_bus            = event_bus            if event_bus            is not None else EventBus()
         self.session_registry     = session_registry     if session_registry     is not None else SessionRegistry()
 
+        # TLS handler — generates/loads the CA and builds SSL contexts.
+        # setup() is called in start() so cert generation happens lazily.
+        self.tls_handler = TLSHandler(config)
+
         # The asyncio server — set in start(), cleared in stop()
         self._server: Optional[asyncio.Server] = None
 
@@ -97,10 +102,15 @@ class ProxyEngine:
         Returns as soon as the server is bound (does not block).
         The event loop must be running for connections to be handled.
         """
+        # TLS setup is synchronous (cert generation); do it here so any errors
+        # surface before we bind the listening socket.
+        self.tls_handler.setup()
+
         self._server = await asyncio.start_server(
             self._handle_client,
             host=self.config.listen_host,
             port=self.config.listen_port,
+            ssl=self.tls_handler.get_listen_ssl_context(),
         )
         addrs = [str(s.getsockname()) for s in self._server.sockets]
         logger.info(
@@ -182,11 +192,17 @@ class ProxyEngine:
         )
 
         # Connect to upstream
+        upstream_ssl = self.tls_handler.get_upstream_ssl_context()
+
         try:
             server_reader, server_writer = await asyncio.wait_for(
                 asyncio.open_connection(
                     self.config.upstream_host,
                     self.config.upstream_port,
+                    ssl=upstream_ssl,
+                    # server_hostname is required for SNI and hostname
+                    # verification when using TLS; ignored when ssl=None.
+                    server_hostname=self.config.upstream_host if upstream_ssl else None,
                 ),
                 timeout=self.config.connect_timeout,
             )

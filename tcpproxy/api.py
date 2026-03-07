@@ -56,6 +56,8 @@ from .config import ProxyConfig
 from .models import Direction, Frame, InterceptedUnit
 from .core.proxy import ProxyEngine
 from .core.session import Session, SessionRegistry
+from .tls.ca import CertificateAuthority
+from .tls.handler import TLSHandler
 from .events.bus import (
     EventBus,
     SessionOpenedEvent,
@@ -115,6 +117,28 @@ class ProxyAPI:
             framer_name=config.framer_name,
             framer_kwargs=config.framer_kwargs,
         )
+
+    # ------------------------------------------------------------------
+    # TLS helpers
+    # ------------------------------------------------------------------
+
+    @property
+    def tls_handler(self) -> TLSHandler:
+        """The TLSHandler owned by the engine (CA, SSL contexts, etc.)."""
+        return self.engine.tls_handler
+
+    @property
+    def ca(self) -> Optional[CertificateAuthority]:
+        """
+        The active Certificate Authority, or None when TLS is not in auto-CA
+        mode (i.e. tls_listen=False or a manual cert was supplied).
+
+        Use this to export the CA cert so clients can trust it::
+
+            with open("tcpproxy-ca.crt", "wb") as f:
+                f.write(api.ca.cert_pem)
+        """
+        return self.engine.tls_handler.ca
 
     # ------------------------------------------------------------------
     # Lifecycle
