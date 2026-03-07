@@ -21,10 +21,10 @@ import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from tcpproxy.config import ProxyConfig
-from tcpproxy.core.proxy import ProxyEngine
-from tcpproxy.tls.ca import CertificateAuthority, DEFAULT_CA_CERT_PATH, DEFAULT_CA_KEY_PATH
-from tcpproxy.tls.handler import TLSHandler
+from protopoke.config import ProxyConfig
+from protopoke.core.proxy import ProxyEngine
+from protopoke.tls.ca import CertificateAuthority, DEFAULT_CA_CERT_PATH, DEFAULT_CA_KEY_PATH
+from protopoke.tls.handler import TLSHandler
 
 from tests.conftest import free_port, echo_server_ctx
 
@@ -106,14 +106,14 @@ class TestCertificateAuthority:
         bc = cert.extensions.get_extension_for_class(x509.BasicConstraints)
         assert bc.value.ca is True
 
-    def test_ca_subject_contains_tcpproxy(self):
+    def test_ca_subject_contains_protopoke(self):
         ca = CertificateAuthority.generate()
         cert = x509.load_pem_x509_certificate(ca.cert_pem)
         cn_values = [
             attr.value for attr in cert.subject
             if attr.oid == x509.oid.NameOID.COMMON_NAME
         ]
-        assert any("tcpproxy" in v for v in cn_values)
+        assert any("ProtoPoke" in v for v in cn_values)
 
     def test_save_and_load_roundtrip(self, tmp_path):
         ca = CertificateAuthority.generate()
@@ -148,10 +148,10 @@ class TestCertificateAuthority:
 
     def test_get_or_create_uses_default_paths_if_none(self, monkeypatch, tmp_path):
         monkeypatch.setattr(
-            "tcpproxy.tls.ca.DEFAULT_CA_CERT_PATH", str(tmp_path / "ca.crt")
+            "protopoke.tls.ca.DEFAULT_CA_CERT_PATH", str(tmp_path / "ca.crt")
         )
         monkeypatch.setattr(
-            "tcpproxy.tls.ca.DEFAULT_CA_KEY_PATH", str(tmp_path / "ca.key")
+            "protopoke.tls.ca.DEFAULT_CA_KEY_PATH", str(tmp_path / "ca.key")
         )
         ca = CertificateAuthority.get_or_create()
         assert ca is not None
@@ -293,7 +293,7 @@ class TestTLSProxyIntegration:
     End-to-end tests using real TLS connections.
 
     The CA is generated fresh each test so tests are isolated and don't
-    touch ~/.tcpproxy.
+    touch ~/.protopoke.
     """
 
     async def test_tls_listen_and_passthrough(self, tmp_path):

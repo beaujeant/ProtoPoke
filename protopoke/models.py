@@ -1,5 +1,5 @@
 """
-Core data models for tcpproxy.
+Core data models for ProtoPoke.
 
 These are the fundamental data structures used throughout the entire system.
 Everything from the transport layer to the UI passes these objects around.

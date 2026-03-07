@@ -6,8 +6,8 @@ import asyncio
 
 import pytest
 
-from tcpproxy.models import Direction, Frame, InterceptAction
-from tcpproxy.intercept.controller import PassthroughController, QueuedInterceptController
+from protopoke.models import Direction, Frame, InterceptAction
+from protopoke.intercept.controller import PassthroughController, QueuedInterceptController
 
 
 def make_frame(data: bytes = b"test", seq: int = 0) -> Frame:

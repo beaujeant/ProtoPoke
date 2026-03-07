@@ -30,10 +30,10 @@ import logging
 import sys
 from pathlib import Path
 
-from tcpproxy.api import ProxyAPI
-from tcpproxy.config import ProxyConfig
-from tcpproxy.models import InterceptedUnit, ParsedMessage
-from tcpproxy.protocol.display import (
+from protopoke.api import ProxyAPI
+from protopoke.config import ProxyConfig
+from protopoke.models import InterceptedUnit, ParsedMessage
+from protopoke.protocol.display import (
     render_field_tree,
     render_frame_header,
     render_hexdump,

@@ -141,7 +141,7 @@ class ProxyAPI:
 
         Use this to export the CA cert so clients can trust it::
 
-            with open("tcpproxy-ca.crt", "wb") as f:
+            with open("protopoke-ca.crt", "wb") as f:
                 f.write(api.ca.cert_pem)
         """
         return self.engine.tls_handler.ca

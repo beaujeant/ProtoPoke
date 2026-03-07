@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from tcpproxy.models import (
+from protopoke.models import (
     Direction,
     Frame,
     InterceptAction,

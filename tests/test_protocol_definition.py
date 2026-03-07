@@ -15,13 +15,13 @@ import pytest
 import tempfile
 from pathlib import Path
 
-from tcpproxy.protocol.definition.schema import (
+from protopoke.protocol.definition.schema import (
     DirectionFilter,
     DisplayHint,
     FieldType,
     MatchType,
 )
-from tcpproxy.protocol.definition.loader import load_protocol, load_protocol_file
+from protopoke.protocol.definition.loader import load_protocol, load_protocol_file
 
 
 # ---------------------------------------------------------------------------

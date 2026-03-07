@@ -41,7 +41,7 @@ class ProxyConfig:
 
     Framing:
         framer_name:    Which framer to use. Must be a key in
-                        tcpproxy.framing.FRAMER_REGISTRY.
+                        protopoke.framing.FRAMER_REGISTRY.
                         - "raw":          Passthrough; each read() chunk = one frame.
                         - "delimiter":    Split on a byte sequence.
                         - "length_prefix": Fixed-size integer length header.
@@ -55,8 +55,8 @@ class ProxyConfig:
         tls_listen:          Wrap client connections with TLS (MITM mode).
         tls_upstream:        Connect to upstream server over TLS.
         tls_upstream_verify: Verify upstream cert/hostname (default True).
-        ca_cert_path:        CA cert path. Auto-generated at ~/.tcpproxy/ca.crt.
-        ca_key_path:         CA key path.  Auto-generated at ~/.tcpproxy/ca.key.
+        ca_cert_path:        CA cert path. Auto-generated at ~/.protopoke/ca.crt.
+        ca_key_path:         CA key path.  Auto-generated at ~/.protopoke/ca.key.
         tls_cert_path:       Manual cert override (skips auto-CA).
         tls_key_path:        Private key for tls_cert_path.
     """
@@ -100,7 +100,7 @@ class ProxyConfig:
     tls_upstream_verify: bool = True
 
     # --- CA for auto-generated per-session leaf certificates (Burp-style) ---
-    # If both are None the CA is stored at ~/.tcpproxy/ca.crt / ca.key and
+    # If both are None the CA is stored at ~/.protopoke/ca.crt / ca.key and
     # reused across proxy restarts.  Point these at your own CA to use a root
     # that clients already trust (e.g. a corporate CA).
     ca_cert_path: Optional[str] = None

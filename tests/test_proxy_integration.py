@@ -15,9 +15,9 @@ import asyncio
 
 import pytest
 
-from tcpproxy.api import ProxyAPI
-from tcpproxy.config import ProxyConfig
-from tcpproxy.models import Direction
+from protopoke.api import ProxyAPI
+from protopoke.config import ProxyConfig
+from protopoke.models import Direction
 from tests.conftest import echo_server_ctx, free_port
 
 

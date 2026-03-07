@@ -9,8 +9,8 @@ DefinitionBasedEncoder implements ProtocolEncoder.  It encodes a ParsedMessage
 back to bytes, supporting field-level edits for intercept+modify and replay.
 
 Usage:
-    from tcpproxy.protocol.definition import load_protocol_file
-    from tcpproxy.protocol.parser import DefinitionBasedDecoder, DefinitionBasedEncoder
+    from protopoke.protocol.definition import load_protocol_file
+    from protopoke.protocol.parser import DefinitionBasedDecoder, DefinitionBasedEncoder
 
     defn = load_protocol_file("myproto.yaml")
     decoder = DefinitionBasedDecoder(defn)

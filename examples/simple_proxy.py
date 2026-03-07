@@ -22,9 +22,9 @@ import asyncio
 import logging
 import sys
 
-from tcpproxy.api import ProxyAPI
-from tcpproxy.config import ProxyConfig
-from tcpproxy.events.bus import FrameCapturedEvent, SessionOpenedEvent, SessionClosedEvent
+from protopoke.api import ProxyAPI
+from protopoke.config import ProxyConfig
+from protopoke.events.bus import FrameCapturedEvent, SessionOpenedEvent, SessionClosedEvent
 
 logging.basicConfig(
     level=logging.INFO,

@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 # Default storage location – under the user's home directory so it persists
 # across sessions and is not world-readable (key file is chmod 0o600).
-_DEFAULT_DIR = os.path.expanduser("~/.tcpproxy")
+_DEFAULT_DIR = os.path.expanduser("~/.protopoke")
 DEFAULT_CA_CERT_PATH = os.path.join(_DEFAULT_DIR, "ca.crt")
 DEFAULT_CA_KEY_PATH  = os.path.join(_DEFAULT_DIR, "ca.key")
 
@@ -94,8 +94,8 @@ class CertificateAuthority:
         """Generate a new RSA-2048 self-signed root CA."""
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         subject = issuer = x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME,         "tcpproxy CA"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME,   "tcpproxy"),
+            x509.NameAttribute(NameOID.COMMON_NAME,         "ProtoPoke CA"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME,   "ProtoPoke"),
             x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, "Security Research"),
         ])
         now = datetime.datetime.now(datetime.timezone.utc)

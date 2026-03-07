@@ -1,4 +1,4 @@
-"""TLS/SSL support for tcpproxy."""
+"""TLS/SSL support for ProtoPoke."""
 
 from .ca import CertificateAuthority, DEFAULT_CA_CERT_PATH, DEFAULT_CA_KEY_PATH
 from .handler import TLSHandler
