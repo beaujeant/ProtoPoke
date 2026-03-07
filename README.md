@@ -2,7 +2,7 @@
 
 A personal TCP interception and replay tool — think Burp Suite for arbitrary binary protocols.
 
-Proxy any TCP connection, capture traffic in both directions, pause and inspect frames, modify or drop them live, and replay captured sessions against a server. Protocol-agnostic by design: plug in your own framer and decoder for any protocol.
+Proxy any TCP connection, capture traffic in both directions, pause and inspect frames, modify or drop them live, and replay captured sessions against a server. Load a YAML protocol definition and frames are automatically decoded into named fields with a Wireshark-style hex + tree view, and you can edit individual fields by name during intercept or replay.
 
 This is a personal security research tool. It prioritises **readability, extensibility, and hackability** over throughput.
 
@@ -17,6 +17,13 @@ This is a personal security research tool. It prioritises **readability, extensi
 - **Interception queue** — pause frames mid-stream, inspect, modify, forward, or drop
 - **Three built-in framers** — raw (passthrough), delimiter (`\n`, `\r\n`, …), length-prefix (1/2/4/8 byte)
 - **Replay engine** — re-send captured sessions with optional per-frame modifications, direction filter, and frame selector syntax
+- **Protocol definition DSL** — describe any binary protocol in a YAML or JSON file; no code required
+- **Protocol parser** — automatically decode frames into named, typed fields with offset and size metadata
+- **Three match strategies** — identify packet types by magic bytes, by stream sequence position, or with a catch-all
+- **Rich field types** — integers (u/int 8/16/32/64, float), raw bytes, strings (UTF-8/ASCII/UTF-16), bitfields, length-prefixed arrays, TLV sequences
+- **Field-level intercept editing** — modify a single field by name, length fields auto-recomputed on encode
+- **Field-level replay** — replay with per-message-type field edits, no manual frame ID tracking needed
+- **Wireshark-style display** — hex dump with per-field ANSI colour highlights + nested field tree panel
 - **Event bus** — subscribe async handlers to session open/close and frame events
 - **Pluggable storage** — interface ready for SQLite or any backend
 
@@ -29,8 +36,9 @@ This is a personal security research tool. It prioritises **readability, extensi
 | Package | Purpose |
 |---|---|
 | `cryptography >= 41` | TLS MITM: root CA generation, per-session certificate signing |
+| `pyyaml` *(optional)* | Load protocol definitions from `.yaml` / `.yml` files. JSON files work without it. |
 
-The proxy core (relay, framing, intercept, replay) uses only the standard library. `cryptography` is only imported when `tls_listen=True` or `tls_upstream=True`.
+The proxy core (relay, framing, intercept, replay, protocol parser) uses only the standard library. `cryptography` is only imported when `tls_listen=True` or `tls_upstream=True`. `pyyaml` is only imported when loading a YAML definition file.
 
 ### Development / testing
 
@@ -67,16 +75,6 @@ cd tcpproxy
 
 python3 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
-
-pip install -e ".[dev]"
-pytest
-```
-
-### Natively (no venv)
-
-```bash
-git clone https://github.com/beaujeant/tcpproxy.git
-cd tcpproxy
 
 pip install -e ".[dev]"
 pytest
@@ -402,14 +400,273 @@ config = ProxyConfig(
 
 ---
 
+### 10 — Protocol definitions
+
+Define your protocol in a YAML file. Point the proxy at it and every captured frame is automatically decoded into named fields.
+
+#### YAML definition format
+
+Three ways to identify packet types:
+
+```yaml
+protocol:
+  name: "MyProtocol"
+  endianness: big          # or little
+
+  messages:
+
+    # Magic bytes at a fixed offset
+    - name: "LoginRequest"
+      direction: client_to_server   # optional direction filter
+      match:
+        type: magic
+        offset: 0
+        value: "0x01"              # or [0x01, 0x02] for multi-byte magic
+      fields:
+        - { name: opcode,        type: uint8  }
+        - { name: username_len,  type: uint16 }
+        - { name: username,      type: string, length: "{username_len}", encoding: utf8 }
+        - { name: password_len,  type: uint16 }
+        - { name: password,      type: bytes,  length: "{password_len}", display: hex }
+
+    # Stream sequence position (no magic bytes — first packet from server)
+    - name: "ServerBanner"
+      match:
+        type: sequence
+        direction: server_to_client
+        index: 0          # 0-based: 0 = first packet in this direction
+      fields:
+        - { name: banner, type: string, length: -1, encoding: ascii }
+
+    # TLV-structured payload
+    - name: "DataPacket"
+      match:
+        type: magic
+        offset: 0
+        value: "0x10"
+      fields:
+        - { name: opcode,        type: uint8  }
+        - { name: total_length,  type: uint32 }
+        - name: attributes
+          type: tlv_sequence
+          length: "{total_length - 5}"
+          tlv:
+            type_size: 2
+            length_size: 2
+            tags:
+              0x0001: { name: "ChannelID",   value_type: uint32 }
+              0x0002: { name: "ChannelName", value_type: string }
+              0x0003: { name: "Payload",     value_type: bytes,  display: hex }
+
+    # Array of repeated sub-structures
+    - name: "UserList"
+      match:
+        type: magic
+        offset: 0
+        value: "0x20"
+      fields:
+        - { name: opcode,      type: uint8  }
+        - { name: user_count,  type: uint16 }
+        - name: users
+          type: array
+          array:
+            count: "{user_count}"
+            item:
+              - { name: user_id,  type: uint32 }
+              - { name: name_len, type: uint8  }
+              - { name: name,     type: string, length: "{name_len}" }
+              - name: flags
+                type: bitfield
+                bits:
+                  0: online
+                  1: away
+                  2: admin
+
+    # Status codes with human-readable labels
+    - name: "LoginResponse"
+      direction: server_to_client
+      match:
+        type: magic
+        offset: 0
+        value: "0x02"
+      fields:
+        - { name: opcode,  type: uint8 }
+        - name: status
+          type: uint8
+          enum:
+            0x00: "Success"
+            0x01: "Invalid credentials"
+            0x02: "Account locked"
+        - { name: token, type: bytes, length: 16, display: hex }
+
+    # Catch-all — matches anything not identified above
+    - name: "Unknown"
+      match:
+        type: always
+      fields:
+        - { name: raw, type: bytes, length: -1, display: hex }
+```
+
+A complete working example is at `examples/protocols/chat.proto.yaml`.
+
+#### Field type reference
+
+| Type | Size | Notes |
+|---|---|---|
+| `uint8` / `uint16` / `uint32` / `uint64` | 1 / 2 / 4 / 8 B | Unsigned integer |
+| `int8` / `int16` / `int32` / `int64` | 1 / 2 / 4 / 8 B | Signed integer |
+| `float32` / `float64` | 4 / 8 B | IEEE 754 |
+| `bytes` | variable | Raw bytes; `length` required |
+| `string` | variable | Decoded text; `length` or `null_terminated: true` |
+| `bitfield` | variable | Integer with named per-bit children |
+| `array` | variable | Repeated sub-structure; `array.count` required |
+| `tlv_sequence` | variable | Stream of T-L-V triples; `tlv` config required |
+| `padding` | variable | Skip N bytes (alignment / reserved) |
+
+Field `length` sources:
+- Fixed integer: `length: 4`
+- Another field: `length: "{username_len}"`
+- Expression: `length: "{total_length - 5}"`
+- Rest of frame: `length: -1`
+- Null-terminated string: `null_terminated: true`
+
+#### Loading a definition
+
+```python
+# Via config — auto-loaded on start()
+config = ProxyConfig(
+    listen_port=8080,
+    upstream_host="10.0.0.1",
+    upstream_port=9090,
+    protocol_definition_path="myproto.yaml",  # .yaml, .yml, or .json
+)
+api = ProxyAPI(config)
+await api.start()
+
+# Or at runtime
+api.set_protocol_file("myproto.yaml")
+
+# Or from a dict (useful in tests / scripts)
+api.set_protocol_dict({
+    "name": "MyProto",
+    "messages": [...],
+})
+```
+
+#### Decoding frames
+
+```python
+# Decode one frame
+msg = api.decode_frame(frame)
+print(msg.message_type)   # e.g. "LoginRequest"
+for field in msg.fields:
+    print(f"  {field.name}: {field.display_value}  (offset={field.offset}, size={field.size})")
+
+# Decode all frames in a session
+messages = api.decode_session_frames(session_id)
+
+# Access a field by name
+msg.field_by_name("username").value    # Python value (str, int, bytes, …)
+msg.as_dict()                          # {field_name: value, …}
+```
+
+---
+
+### 11 — Protocol-aware interception
+
+```python
+# get_next_intercepted_parsed() returns both the raw unit and the decoded view
+unit, msg = await api.get_next_intercepted_parsed()
+
+print(msg.message_type)               # "LoginRequest"
+print(msg.field_by_name("username").value)  # "admin"
+
+# Forward after editing a single field — length fields are auto-recomputed
+api.modify_field_and_forward(unit.id, {"username": "hacker"})
+
+# Or fall back to raw bytes
+api.modify_and_forward(unit.id, b"\x01\x00\x06hacker...")
+```
+
+> See `examples/protocol_intercept_demo.py` for a full interactive CLI with field editing, hex editing, and the Wireshark-style display.
+
+---
+
+### 12 — Protocol-aware replay
+
+Replay with per-message-type field edits. The encoder decodes each frame, applies your edits, and re-encodes — no manual frame ID tracking needed:
+
+```python
+result = await api.replay_session_with_field_edits(
+    session_id=session_id,
+    field_edits={
+        "LoginRequest": {
+            "username": "admin2",
+            "password": b"newpassword",   # password_len is auto-updated
+        },
+    },
+)
+```
+
+Mix with the existing `modified_frames` raw-bytes override for frames you want to control at the byte level:
+
+```python
+result = await api.replay_session(
+    session_id,
+    frame_selector="1-5",                    # only the first five frames
+    modified_frames={frame_id: b"..."},       # raw override for specific frames
+)
+```
+
+> See `examples/protocol_replay_demo.py` for a full interactive demo.
+
+---
+
+### 13 — Wireshark-style display
+
+```python
+from tcpproxy.protocol.display import (
+    render_hexdump,
+    render_field_tree,
+    render_frame_header,
+    highlights_from_message,
+)
+
+msg = api.decode_frame(frame)
+
+# One-line summary
+print(render_frame_header(frame, msg))
+# Frame #3  C→S  10:23:45.123  48 bytes  [ChatProtocol] LoginRequest
+
+# Field detail panel with box-drawing chrome
+print(render_field_tree(msg))
+# ┌─ ChatProtocol / LoginRequest ─────────────────────────────────────┐
+# │  opcode       [0x0000,  1B]   0x01                                │
+# │  username_len [0x0001,  2B]   5                                   │
+# │  username     [0x0003,  5B]   admin                               │
+# │  password_len [0x0008,  2B]   6                                   │
+# │  password     [0x000A,  6B]   73 65 63 72 65 74                   │
+# └────────────────────────────────────────────────────────────────────┘
+
+# Hex dump with per-field colour highlights
+highlights = highlights_from_message(msg)
+print(render_hexdump(frame.raw_bytes, highlights=highlights))
+# Offset    00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F    ASCII
+# 00000000  01 00 05 61 64 6D 69 6E  00 06 73 65 63 72 65 74    ...admin..secret
+```
+
+Colour highlights are auto-disabled when stdout is not a TTY, or set `NO_COLOR=1` to force plain output.
+
+---
+
 ## Repository Layout
 
 ```
 tcpproxy/
 ├── pyproject.toml
 ├── tcpproxy/
-│   ├── models.py           # Core data: Frame, SessionInfo, InterceptedUnit, ParsedMessage
-│   ├── config.py           # ProxyConfig dataclass (incl. TLS fields)
+│   ├── models.py           # Core data: Frame, ParsedField, ParsedMessage, SessionInfo, InterceptedUnit
+│   ├── config.py           # ProxyConfig dataclass (networking, TLS, framing, protocol)
 │   ├── api.py              # ProxyAPI — the unified control facade
 │   ├── core/
 │   │   ├── proxy.py        # ProxyEngine: listen, connect upstream, wire relay + TLS
@@ -424,7 +681,18 @@ tcpproxy/
 │   │   ├── delimiter.py    # Split on a fixed byte sequence
 │   │   └── length_prefix.py # Fixed-size integer length header (1/2/4/8 bytes)
 │   ├── protocol/
-│   │   └── base.py         # ProtocolDecoder / ProtocolEncoder ABCs
+│   │   ├── base.py         # ProtocolDecoder / ProtocolEncoder ABCs + PassthroughDecoder
+│   │   ├── definition/
+│   │   │   ├── schema.py   # Dataclasses: ProtocolDefinition, MessageDefinition, FieldDefinition, …
+│   │   │   └── loader.py   # Load + validate from YAML / JSON / dict
+│   │   ├── parser/
+│   │   │   ├── engine.py   # DefinitionBasedDecoder (session-aware) + DefinitionBasedEncoder
+│   │   │   ├── fields.py   # Per-type parsers → ParsedField; encode_field() for re-assembly
+│   │   │   ├── matcher.py  # MessageMatcher: magic / sequence / always match rules
+│   │   │   └── expression.py # Safe AST-gated evaluator for "{length_field - 5}" strings
+│   │   └── display/
+│   │       ├── hexdump.py  # Wireshark-style hex+ASCII dump with ANSI field highlights
+│   │       └── tree.py     # Box-drawing field detail panel with nested TLV/array children
 │   ├── intercept/
 │   │   └── controller.py   # PassthroughController + QueuedInterceptController
 │   ├── replay/
@@ -433,11 +701,15 @@ tcpproxy/
 │   │   └── bus.py          # EventBus (pub/sub, async handlers)
 │   └── storage/
 │       └── base.py         # StorageBackend ABC, NullStorage, MemoryStorage
-├── tests/                  # 153 tests (unit + integration with real TCP and TLS)
+├── tests/                  # 176 tests (unit + integration)
 └── examples/
-    ├── simple_proxy.py     # Passthrough with frame printing
-    ├── intercept_demo.py   # Interactive CLI intercept / hex edit
-    └── replay_demo.py      # Capture and replay sessions
+    ├── simple_proxy.py                 # Passthrough with frame printing
+    ├── intercept_demo.py               # Interactive CLI intercept / hex edit
+    ├── replay_demo.py                  # Capture and replay sessions
+    ├── protocol_intercept_demo.py      # Protocol-aware intercept with field editing
+    ├── protocol_replay_demo.py         # Protocol-aware replay with field edits
+    └── protocols/
+        └── chat.proto.yaml             # Full example: magic, sequence, TLV, array, bitfield
 ```
 
 ---
@@ -470,6 +742,24 @@ A framer finds *message boundaries* in the byte stream. A protocol decoder inter
 
 **Tradeoff:** Two abstraction layers instead of one. For a known, simple protocol you could merge them, but doing so would prevent reuse and make the intercept UI harder to build.
 
+### ParsedField carries offset + size + raw bytes
+
+Every `ParsedField` knows exactly where it lives in the original frame (`offset`, `size`, `raw_bytes`). This serves three purposes simultaneously: the hex-dump renderer can highlight each field's byte range in a distinct colour; the encoder can re-assemble bytes field-by-field when the operator edits a value; and nested structures (TLV entries, array items) are expressed as `children` on a parent field, matching the Wireshark tree model exactly.
+
+**Tradeoff:** Slightly heavier objects than storing only the decoded value. The overhead is negligible at the frame sizes a research tool handles.
+
+### Encoder auto-recomputes length fields
+
+When a variable-length field (e.g. `username`) is edited and re-encoded, the encoder walks the message definition looking for any other field whose `length` expression is `{username_len}` and recalculates that field's value from the encoded byte count. The operator edits `username`, not `username_len`. This mirrors what Burp's repeater does transparently.
+
+**Tradeoff:** The heuristic (`length == "{field_name}"`) covers the common case of a simple scalar length field. Complex interdependencies (e.g. a length field covering multiple downstream fields) may still need a manual override.
+
+### Safe expression evaluator
+
+Length and count expressions (`"{total_length - 5}"`) are evaluated with Python's `eval()` on an AST that has been pre-validated to allow only arithmetic operators, name references, and a fixed whitelist of builtins (`min`, `max`, `abs`, `int`). Any other node type — attribute access, subscript, import, arbitrary call — raises `ValueError` before `eval()` runs.
+
+Protocol definitions are authored by the tool operator themselves from local files they control, so this is defence-in-depth against typos and accidental complexity rather than a security sandbox.
+
 ### `is None` checks instead of `or` for optional parameters
 
 `empty_registry or SessionRegistry()` silently created a second registry because `SessionRegistry.__len__` returns `0` when empty, making an empty instance falsy. All optional dependency injection uses explicit `if x is not None else default` guards.
@@ -489,7 +779,7 @@ Passing `ssl=SSLContext` to asyncio is enough for TLS *forwarding* (encrypted tu
 1. **`tcpproxy/tls/ca.py`** — `CertificateAuthority` generates an RSA-2048 root CA on first run and persists it at `~/.tcpproxy/ca.crt`. For each target hostname it issues a short-lived leaf cert (RSA-2048, correct SAN for DNS or IP, signed by the CA, cached in-memory).
 2. **`tcpproxy/tls/handler.py`** — `TLSHandler` builds `ssl.SSLContext` objects from those certs and exposes `get_listen_ssl_context()` / `get_upstream_ssl_context()` which are passed directly to `asyncio.start_server()` and `asyncio.open_connection()`. The relay, framing, and intercept layers are untouched — they see plaintext `StreamReader`/`StreamWriter` regardless of whether TLS is in use.
 
-The `cryptography` library is used specifically for cert generation because Python's built-in `ssl` module has no API for creating X.509 certificates programmatically. See [why `cryptography`](#) for a full comparison of alternatives.
+The `cryptography` library is used specifically for cert generation because Python's built-in `ssl` module has no API for creating X.509 certificates programmatically.
 
 **Tradeoff:** TLS does not support TCP half-close (`write_eof()` raises `NotImplementedError` on `SSLTransport`). The relay's `_send_eof_to_dest()` already guards with `can_write_eof()` before calling `write_eof()`, so the relay code is unchanged. For TLS sessions, the connection closes fully rather than half-closes when one side finishes sending.
 
@@ -509,17 +799,21 @@ The `cryptography` library is used specifically for cert generation because Pyth
 
 ### Protocol layer
 
-- **Protocol decoders** — implement `ProtocolDecoder` subclasses for specific protocols (e.g. HTTP/1.1, Redis, DNS). Register them in a `DECODER_REGISTRY` keyed by framer name or magic bytes.
+- **Protocol definition DSL** ✅ *implemented* — define field layouts in YAML or JSON; the `DefinitionBasedDecoder` decodes frames automatically. Supports magic-byte, sequence, and always match rules; integers, bytes, strings, bitfields, arrays, TLV sequences; variable-length `{expression}` references; enum value labels; and display hints. See `tcpproxy/protocol/`.
 
-- **Declarative protocol DSL** — define field layouts in YAML or JSON; auto-generate a `ProtocolDecoder` from the schema. No changes to the transport/framing/intercept layers required.
+- **Field-level intercept editing** ✅ *implemented* — `modify_field_and_forward()` re-encodes with a field name → value dict; length fields are auto-recomputed.
+
+- **Field-level replay** ✅ *implemented* — `replay_session_with_field_edits()` applies per-message-type field edits across all matching frames in a replay.
+
+- **Wireshark-style display** ✅ *implemented* — `render_hexdump()` with ANSI per-field highlights, `render_field_tree()` with nested children, `render_frame_header()` one-liner. See `tcpproxy/protocol/display/`.
 
 - **Protobuf / Thrift / Kaitai** — compile existing IDL schemas into `ProtocolDecoder` implementations. The interface (`decode(frame) -> ParsedMessage`) is simple enough to wrap any existing parser.
+
+- **Protocol decoder library** — implement `ProtocolDecoder` subclasses for common protocols (e.g. HTTP/1.1, Redis, DNS) as built-in options alongside the definition-based approach.
 
 ### UI
 
 - **Terminal UI** — use `textual` or `prompt_toolkit` to build a Burp-like intercept queue view, session list, hex viewer, and in-place editor. All UI calls go through `ProxyAPI` — no direct access to internals.
-
-- **Hex + parsed tree view** — combine the raw `frame.raw_bytes` hex dump with the structured `ParsedMessage.fields` tree for a Wireshark-style split view.
 
 ### Advanced features
 
