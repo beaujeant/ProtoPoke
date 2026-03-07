@@ -84,6 +84,185 @@ pytest
 
 ---
 
+## Usage
+
+### Step 1 — Frame the stream
+
+TCP is a stream protocol. The OS delivers bytes in arbitrary chunks: a single `read()` may return half a message, one complete message, or three messages fused together. There is no built-in concept of "packet boundaries".
+
+Before you can do anything meaningful — intercept, decode, replay — you need to cut that stream into discrete, atomic units called **frames**. That is the framer's job.
+
+By default ProtoPoke uses the **raw framer**, which treats every `read()` chunk as one frame. This is fine for a first pass to observe traffic, but if the protocol sends multi-part messages or if the OS coalesces writes, frames will be partial or merged and the dissector will produce garbage.
+
+**Your first task is always to identify the right framing strategy for your target protocol.**
+
+#### Common framing patterns
+
+| Protocol style | Framer | Example |
+|---|---|---|
+| Unknown / quick look | `raw` (default) | Any protocol, first look |
+| Line-based text | `delimiter` with `\r\n` or `\n` | HTTP headers, SMTP, FTP |
+| Null-terminated | `delimiter` with `\x00` | Many C-string protocols |
+| Binary with length header | `length_prefix` | Most game/chat/custom binary protocols |
+| Custom boundary logic | Custom `Framer` subclass | Anything else |
+
+#### How to pick and configure a framer
+
+**Raw (default — no configuration needed):**
+```python
+config = ProxyConfig(
+    listen_port=8080,
+    upstream_host="10.0.0.1",
+    upstream_port=9090,
+    # framer_name defaults to "raw"
+)
+```
+Every `read()` chunk becomes one frame immediately. Good enough to observe raw bytes; not reliable for parsing.
+
+**Delimiter (line-based protocols):**
+```python
+config = ProxyConfig(
+    listen_port=8080,
+    upstream_host="10.0.0.1",
+    upstream_port=9090,
+    framer_name="delimiter",
+    framer_kwargs={"delimiter": b"\r\n"},
+)
+```
+The framer accumulates bytes until it sees `\r\n`, then emits everything before it as one frame. A Redis client sending `PING\r\n` always produces exactly one frame.
+
+**Length-prefix (binary protocols):**
+```python
+config = ProxyConfig(
+    listen_port=8080,
+    upstream_host="10.0.0.1",
+    upstream_port=9090,
+    framer_name="length_prefix",
+    framer_kwargs={"prefix_length": 4, "byte_order": "big"},
+)
+```
+The framer reads the first 4 bytes as a big-endian integer `N`, then buffers until it has exactly `N` more bytes, and emits the full `header + payload` as one frame. Even if the OS splits a 1 000-byte message across five `read()` calls, the frame is only emitted once it is complete.
+
+**Custom framer (protocol-specific logic):**
+```python
+from protopoke.framing.base import Framer
+from protopoke.framing import FRAMER_REGISTRY
+from protopoke.models import Frame
+
+class MyFramer(Framer):
+    def feed(self, data: bytes) -> list[Frame]:
+        self._buffer += data
+        frames = []
+        # emit frames whenever you detect a complete message in self._buffer
+        return frames
+
+    def flush(self) -> list[Frame]:
+        # called on connection close — emit whatever is left
+        return []
+
+    def reset(self) -> None:
+        self._buffer = b""
+
+FRAMER_REGISTRY["myproto"] = MyFramer
+config = ProxyConfig(framer_name="myproto", ...)
+```
+
+> **How to find the right framer:** capture a few raw frames first (`framer_name="raw"`), open them in a hex editor, and look for repeating patterns at fixed offsets. A 2- or 4-byte integer right at the start whose value matches the remaining byte count is a length prefix. Repeated `\x00` or `\r\n` terminations mean a delimiter framer. No obvious pattern — read the protocol spec or reverse-engineer further before writing a custom framer.
+
+---
+
+### Step 2 — Dissect the protocol
+
+Once frames are correct (each frame = one complete, atomic message), you can teach ProtoPoke what the bytes *mean* by writing a protocol definition.
+
+A **dissector** maps raw bytes to named, typed fields: opcode, username, payload length, flags. Once loaded, every captured frame is automatically decoded, and you can intercept by field name rather than raw offset.
+
+#### Write a YAML definition
+
+Create a file `myproto.yaml` describing each message type:
+
+```yaml
+protocol:
+  name: "MyProto"
+  endianness: big
+
+  messages:
+
+    # Client login — identified by opcode 0x01 at byte 0
+    - name: "LoginRequest"
+      direction: client_to_server
+      match:
+        type: magic
+        offset: 0
+        value: "0x01"
+      fields:
+        - { name: opcode,        type: uint8  }
+        - { name: username_len,  type: uint16 }
+        - { name: username,      type: string, length: "{username_len}", encoding: utf8 }
+        - { name: password_len,  type: uint16 }
+        - { name: password,      type: bytes,  length: "{password_len}", display: hex }
+
+    # Server response — identified by opcode 0x02 at byte 0
+    - name: "LoginResponse"
+      direction: server_to_client
+      match:
+        type: magic
+        offset: 0
+        value: "0x02"
+      fields:
+        - { name: opcode,  type: uint8 }
+        - name: status
+          type: uint8
+          enum:
+            0x00: "Success"
+            0x01: "Invalid credentials"
+            0x02: "Account locked"
+        - { name: session_token, type: bytes, length: 16, display: hex }
+
+    # First packet from server has no magic bytes — identify by position
+    - name: "ServerBanner"
+      match:
+        type: sequence
+        direction: server_to_client
+        index: 0          # 0-based: the very first server→client frame
+      fields:
+        - { name: banner, type: string, length: -1, encoding: ascii }
+
+    # Anything not matched above
+    - name: "Unknown"
+      match:
+        type: always
+      fields:
+        - { name: raw, type: bytes, length: -1, display: hex }
+```
+
+#### Load it and decode frames
+
+```python
+config = ProxyConfig(
+    listen_port=8080,
+    upstream_host="10.0.0.1",
+    upstream_port=9090,
+    framer_name="length_prefix",
+    framer_kwargs={"prefix_length": 2, "byte_order": "big"},
+    protocol_definition_path="myproto.yaml",
+)
+api = ProxyAPI(config)
+await api.start()
+
+# Intercept and inspect by field name
+unit, msg = await api.get_next_intercepted_parsed()
+print(msg.message_type)                             # "LoginRequest"
+print(msg.field_by_name("username").value)          # "admin"
+
+# Edit one field — length fields are auto-recomputed on re-encode
+api.modify_field_and_forward(unit.id, {"username": "hacker"})
+```
+
+The two steps are independent: you can swap framers without touching your YAML definition, and you can iterate on the definition without ever changing framing configuration. Get Step 1 right first — a wrong framer makes every dissector output wrong — then iterate on Step 2.
+
+---
+
 ## start() vs serve_forever()
 
 `ProxyAPI` has two ways to run:
