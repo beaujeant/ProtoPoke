@@ -11,14 +11,14 @@ This is a personal security research tool. It prioritises **readability, extensi
 ## Features
 
 - **Transparent TCP proxy** — listens locally, forwards to any upstream host/port
+- **TLS/SSL MITM** — auto-generates a root CA and per-session certificates (Burp-style); clients trust the CA once, proxy decrypts all sessions transparently
 - **Multi-session** — handles many concurrent connections on one listener
 - **Bidirectional capture** — every frame logged with direction, timestamp, sequence number
 - **Interception queue** — pause frames mid-stream, inspect, modify, forward, or drop
 - **Three built-in framers** — raw (passthrough), delimiter (`\n`, `\r\n`, …), length-prefix (1/2/4/8 byte)
-- **Replay engine** — re-send captured sessions with optional per-frame modifications
+- **Replay engine** — re-send captured sessions with optional per-frame modifications, direction filter, and frame selector syntax
 - **Event bus** — subscribe async handlers to session open/close and frame events
 - **Pluggable storage** — interface ready for SQLite or any backend
-- **No mandatory third-party dependencies** — stdlib only for the core
 
 ---
 
@@ -26,7 +26,11 @@ This is a personal security research tool. It prioritises **readability, extensi
 
 ### Runtime
 
-Pure Python standard library. No third-party packages required.
+| Package | Purpose |
+|---|---|
+| `cryptography >= 41` | TLS MITM: root CA generation, per-session certificate signing |
+
+The proxy core (relay, framing, intercept, replay) uses only the standard library. `cryptography` is only imported when `tls_listen=True` or `tls_upstream=True`.
 
 ### Development / testing
 
@@ -334,6 +338,70 @@ config = ProxyConfig(
 
 ---
 
+### 9 — TLS MITM (Burp-style)
+
+On first run the proxy auto-generates a root CA at `~/.tcpproxy/ca.crt`. Install that file as a trusted root in your client (browser, OS, curl, etc.) once. Every subsequent session gets a fresh CA-signed leaf certificate transparently.
+
+```python
+config = ProxyConfig(
+    listen_port=8443,
+    upstream_host="api.example.com",
+    upstream_port=443,
+    tls_listen=True,         # present CA-signed cert to clients
+    tls_upstream=True,       # connect to the real server over TLS
+    # tls_upstream_verify=False,  # uncomment to accept self-signed server certs
+)
+api = ProxyAPI(config)
+await api.start()
+
+# Export the CA cert so the client can trust it
+with open("tcpproxy-ca.crt", "wb") as f:
+    f.write(api.ca.cert_pem)
+print("Install tcpproxy-ca.crt as a trusted root, then connect to localhost:8443")
+```
+
+TLS-only client side (proxy connects to a plain upstream):
+
+```python
+config = ProxyConfig(
+    listen_port=8443,
+    upstream_host="10.0.0.1",
+    upstream_port=9090,
+    tls_listen=True,         # clients connect over TLS
+    tls_upstream=False,      # upstream is plain TCP (default)
+)
+```
+
+Supply your own certificate instead of using the auto-CA (e.g. a wildcard cert your clients already trust):
+
+```python
+config = ProxyConfig(
+    listen_port=8443,
+    upstream_host="api.example.com",
+    upstream_port=443,
+    tls_listen=True,
+    tls_cert_path="/path/to/wildcard.crt",
+    tls_key_path="/path/to/wildcard.key",
+    tls_upstream=True,
+    tls_upstream_verify=False,
+)
+```
+
+Use a custom CA location (e.g. a corporate CA that machines already trust):
+
+```python
+config = ProxyConfig(
+    tls_listen=True,
+    tls_upstream=True,
+    ca_cert_path="/etc/corporate-ca/ca.crt",
+    ca_key_path="/etc/corporate-ca/ca.key",
+    upstream_host="internal.corp",
+    upstream_port=443,
+)
+```
+
+---
+
 ## Repository Layout
 
 ```
@@ -341,12 +409,15 @@ tcpproxy/
 ├── pyproject.toml
 ├── tcpproxy/
 │   ├── models.py           # Core data: Frame, SessionInfo, InterceptedUnit, ParsedMessage
-│   ├── config.py           # ProxyConfig dataclass
+│   ├── config.py           # ProxyConfig dataclass (incl. TLS fields)
 │   ├── api.py              # ProxyAPI — the unified control facade
 │   ├── core/
-│   │   ├── proxy.py        # ProxyEngine: listen, connect upstream, wire relay
+│   │   ├── proxy.py        # ProxyEngine: listen, connect upstream, wire relay + TLS
 │   │   ├── relay.py        # DirectionalRelay + BidirectionalRelay
 │   │   └── session.py      # Session + SessionRegistry
+│   ├── tls/
+│   │   ├── ca.py           # CertificateAuthority: generate, persist, issue leaf certs
+│   │   └── handler.py      # TLSHandler: build SSLContext for listen + upstream sides
 │   ├── framing/
 │   │   ├── base.py         # Framer abstract base class
 │   │   ├── raw.py          # Passthrough: each read() chunk = one frame
@@ -357,12 +428,12 @@ tcpproxy/
 │   ├── intercept/
 │   │   └── controller.py   # PassthroughController + QueuedInterceptController
 │   ├── replay/
-│   │   └── engine.py       # ReplayEngine + ReplayResult
+│   │   └── engine.py       # ReplayEngine + ReplayResult (direction filter, frame selector)
 │   ├── events/
 │   │   └── bus.py          # EventBus (pub/sub, async handlers)
 │   └── storage/
 │       └── base.py         # StorageBackend ABC, NullStorage, MemoryStorage
-├── tests/                  # 100 tests (unit + integration with real TCP)
+├── tests/                  # 153 tests (unit + integration with real TCP and TLS)
 └── examples/
     ├── simple_proxy.py     # Passthrough with frame printing
     ├── intercept_demo.py   # Interactive CLI intercept / hex edit
@@ -411,6 +482,17 @@ Frames are kept in `Session.frames` (a plain list) during the session. The `Stor
 
 **Tradeoff:** Unbounded memory for long sessions with high traffic. Mitigated by a future SQLite backend that flushes frames on `FrameCapturedEvent`.
 
+### TLS MITM: certificate-per-session, not ssl= on a socket
+
+Passing `ssl=SSLContext` to asyncio is enough for TLS *forwarding* (encrypted tunnel, contents opaque). For TLS *interception* the proxy must terminate TLS on both sides independently so the relay operates on plaintext bytes. That requires the proxy to present a certificate the client trusts. Two-stage design:
+
+1. **`tcpproxy/tls/ca.py`** — `CertificateAuthority` generates an RSA-2048 root CA on first run and persists it at `~/.tcpproxy/ca.crt`. For each target hostname it issues a short-lived leaf cert (RSA-2048, correct SAN for DNS or IP, signed by the CA, cached in-memory).
+2. **`tcpproxy/tls/handler.py`** — `TLSHandler` builds `ssl.SSLContext` objects from those certs and exposes `get_listen_ssl_context()` / `get_upstream_ssl_context()` which are passed directly to `asyncio.start_server()` and `asyncio.open_connection()`. The relay, framing, and intercept layers are untouched — they see plaintext `StreamReader`/`StreamWriter` regardless of whether TLS is in use.
+
+The `cryptography` library is used specifically for cert generation because Python's built-in `ssl` module has no API for creating X.509 certificates programmatically. See [why `cryptography`](#) for a full comparison of alternatives.
+
+**Tradeoff:** TLS does not support TCP half-close (`write_eof()` raises `NotImplementedError` on `SSLTransport`). The relay's `_send_eof_to_dest()` already guards with `can_write_eof()` before calling `write_eof()`, so the relay code is unchanged. For TLS sessions, the connection closes fully rather than half-closes when one side finishes sending.
+
 ---
 
 ## Roadmap
@@ -419,7 +501,9 @@ Frames are kept in `Session.frames` (a plain list) during the session. The `Stor
 
 - **SQLite persistence** — implement `SqliteStorageBackend` using `aiosqlite`. Subscribe to `FrameCapturedEvent` and write frames as they arrive. The `Frame` and `SessionInfo` dataclasses map directly to table rows with no schema redesign needed.
 
-- **TLS MITM** — wrap `asyncio.open_connection()` and `asyncio.start_server()` with `ssl.SSLContext`. The relay, framing, and intercept layers do not change at all; TLS is purely a transport concern in `core/proxy.py`.
+- **TLS MITM** ✅ *implemented* — auto-CA generation, per-session leaf certs, configurable upstream verify, manual cert override. See `tcpproxy/tls/` and [TLS MITM design decision](#tls-mitm-certificate-per-session-not-ssl-on-a-socket).
+
+- **SNI-aware cert dispatch** — currently the proxy issues one leaf cert for `upstream_host` at startup. A full SNI callback (`ssl.SSLContext.set_servername_callback`) would let the proxy issue a correctly-named cert for each unique `server_name` presented during the TLS handshake, which matters when the same listener proxies multiple hostnames (e.g. a wildcard CONNECT proxy).
 
 - **HTTP/REST control API** — wrap `ProxyAPI` in an `aiohttp` or `FastAPI` server to expose session listing, intercept queue, and replay over HTTP/WebSocket. This enables a browser-based UI without any changes to the proxy core.
 
