@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import pytest
 
-from tcpproxy.models import Direction, Frame, ParsedField, ParsedMessage
-from tcpproxy.protocol.display.hexdump import Highlight, highlights_from_message, render_hexdump
-from tcpproxy.protocol.display.tree import render_field_tree, render_frame_header
+from protopoke.models import Direction, Frame, ParsedField, ParsedMessage
+from protopoke.protocol.display.hexdump import Highlight, highlights_from_message, render_hexdump
+from protopoke.protocol.display.tree import render_field_tree, render_frame_header
 
 
 # ---------------------------------------------------------------------------

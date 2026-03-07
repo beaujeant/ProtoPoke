@@ -27,9 +27,9 @@ import asyncio
 import logging
 import sys
 
-from tcpproxy.api import ProxyAPI
-from tcpproxy.config import ProxyConfig
-from tcpproxy.models import InterceptedUnit
+from protopoke.api import ProxyAPI
+from protopoke.config import ProxyConfig
+from protopoke.models import InterceptedUnit
 
 logging.basicConfig(
     level=logging.WARNING,  # Quieter for interactive use

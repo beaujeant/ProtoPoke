@@ -6,11 +6,11 @@ import asyncio
 
 import pytest
 
-from tcpproxy.config import ProxyConfig
-from tcpproxy.api import ProxyAPI
-from tcpproxy.models import Direction
-from tcpproxy.replay.engine import parse_frame_selector, ReplayEngine
-from tcpproxy.core.session import SessionRegistry
+from protopoke.config import ProxyConfig
+from protopoke.api import ProxyAPI
+from protopoke.models import Direction
+from protopoke.replay.engine import parse_frame_selector, ReplayEngine
+from protopoke.core.session import SessionRegistry
 from tests.conftest import echo_server_ctx, free_port
 
 
@@ -389,13 +389,13 @@ class TestDirectionFilter:
     @pytest.mark.asyncio
     async def test_no_frames_in_direction_returns_failure(self):
         """Asking for SERVER_TO_CLIENT on a session with no server frames fails cleanly."""
-        from tcpproxy.core.session import Session, SessionRegistry
-        from tcpproxy.models import SessionInfo, Frame
-        from tcpproxy.replay.engine import ReplayEngine
+        from protopoke.core.session import Session, SessionRegistry
+        from protopoke.models import SessionInfo, Frame
+        from protopoke.replay.engine import ReplayEngine
 
         reg = SessionRegistry()
         info = SessionInfo.create("127.0.0.1", 1, "127.0.0.1", 2)
-        info.state = __import__("tcpproxy.models", fromlist=["SessionState"]).SessionState.CLOSED
+        info.state = __import__("protopoke.models", fromlist=["SessionState"]).SessionState.CLOSED
         sess = Session(info)
         # Only add a client→server frame; no server→client frames
         sess.add_frame(Frame.create(sess.id, Direction.CLIENT_TO_SERVER, b"data", 0))

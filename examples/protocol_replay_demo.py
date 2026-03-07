@@ -19,10 +19,10 @@ import asyncio
 import logging
 import sys
 
-from tcpproxy.api import ProxyAPI
-from tcpproxy.config import ProxyConfig
-from tcpproxy.models import Direction
-from tcpproxy.protocol.display import render_field_tree, render_frame_header
+from protopoke.api import ProxyAPI
+from protopoke.config import ProxyConfig
+from protopoke.models import Direction
+from protopoke.protocol.display import render_field_tree, render_frame_header
 
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 

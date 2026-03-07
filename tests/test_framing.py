@@ -6,10 +6,10 @@ import struct
 
 import pytest
 
-from tcpproxy.models import Direction
-from tcpproxy.framing.raw import RawFramer
-from tcpproxy.framing.delimiter import DelimiterFramer
-from tcpproxy.framing.length_prefix import LengthPrefixFramer
+from protopoke.models import Direction
+from protopoke.framing.raw import RawFramer
+from protopoke.framing.delimiter import DelimiterFramer
+from protopoke.framing.length_prefix import LengthPrefixFramer
 
 SESS = "test-session"
 DIR  = Direction.CLIENT_TO_SERVER

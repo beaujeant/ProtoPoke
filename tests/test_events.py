@@ -6,8 +6,8 @@ import asyncio
 
 import pytest
 
-from tcpproxy.events.bus import EventBus, SessionOpenedEvent, FrameCapturedEvent
-from tcpproxy.models import SessionInfo, Frame, Direction
+from protopoke.events.bus import EventBus, SessionOpenedEvent, FrameCapturedEvent
+from protopoke.models import SessionInfo, Frame, Direction
 
 
 def make_session_info() -> SessionInfo:

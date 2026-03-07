@@ -8,9 +8,9 @@ from __future__ import annotations
 import struct
 import pytest
 
-from tcpproxy.models import Direction, Frame, ParsedField
-from tcpproxy.protocol.definition.loader import load_protocol
-from tcpproxy.protocol.definition.schema import (
+from protopoke.models import Direction, Frame, ParsedField
+from protopoke.protocol.definition.loader import load_protocol
+from protopoke.protocol.definition.schema import (
     ArrayConfig,
     BitfieldConfig,
     DirectionFilter,
@@ -24,10 +24,10 @@ from tcpproxy.protocol.definition.schema import (
     TLVConfig,
     TLVTagDefinition,
 )
-from tcpproxy.protocol.parser.engine import DefinitionBasedDecoder, DefinitionBasedEncoder
-from tcpproxy.protocol.parser.expression import evaluate
-from tcpproxy.protocol.parser.fields import ParseError, parse_field
-from tcpproxy.protocol.parser.matcher import MessageMatcher
+from protopoke.protocol.parser.engine import DefinitionBasedDecoder, DefinitionBasedEncoder
+from protopoke.protocol.parser.expression import evaluate
+from protopoke.protocol.parser.fields import ParseError, parse_field
+from protopoke.protocol.parser.matcher import MessageMatcher
 
 
 # ---------------------------------------------------------------------------

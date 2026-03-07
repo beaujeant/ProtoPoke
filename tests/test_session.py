@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from tcpproxy.models import Direction, Frame, SessionState
-from tcpproxy.core.session import Session, SessionRegistry
+from protopoke.models import Direction, Frame, SessionState
+from protopoke.core.session import Session, SessionRegistry
 
 
 def make_registry() -> SessionRegistry:

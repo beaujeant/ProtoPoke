@@ -1,4 +1,4 @@
-# tcpproxy
+# ProtoPoke
 
 A personal TCP interception and replay tool — think Burp Suite for arbitrary binary protocols.
 
@@ -56,8 +56,8 @@ The proxy core (relay, framing, intercept, replay, protocol parser) uses only th
 
 ```bash
 # Clone the repo
-git clone https://github.com/beaujeant/tcpproxy.git
-cd tcpproxy
+git clone https://github.com/beaujeant/protopoke.git
+cd protopoke
 
 # Create venv and install with dev extras
 uv venv
@@ -70,8 +70,8 @@ uv run pytest
 ### venv + pip
 
 ```bash
-git clone https://github.com/beaujeant/tcpproxy.git
-cd tcpproxy
+git clone https://github.com/beaujeant/protopoke.git
+cd protopoke
 
 python3 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
@@ -117,8 +117,8 @@ async def main():
 
 ```python
 import asyncio
-from tcpproxy.api import ProxyAPI
-from tcpproxy.config import ProxyConfig
+from protopoke.api import ProxyAPI
+from protopoke.config import ProxyConfig
 
 async def main():
     config = ProxyConfig(
@@ -143,9 +143,9 @@ Connect anything to `127.0.0.1:8080` and traffic is transparently forwarded to `
 
 ```python
 import asyncio
-from tcpproxy.api import ProxyAPI
-from tcpproxy.config import ProxyConfig
-from tcpproxy.events.bus import FrameCapturedEvent
+from protopoke.api import ProxyAPI
+from protopoke.config import ProxyConfig
+from protopoke.events.bus import FrameCapturedEvent
 
 async def main():
     config = ProxyConfig(listen_port=8080, upstream_host="10.0.0.1", upstream_port=9090)
@@ -171,8 +171,8 @@ Enable interception in the config, then process the queue:
 
 ```python
 import asyncio
-from tcpproxy.api import ProxyAPI
-from tcpproxy.config import ProxyConfig
+from protopoke.api import ProxyAPI
+from protopoke.config import ProxyConfig
 
 async def main():
     config = ProxyConfig(
@@ -272,8 +272,8 @@ config = ProxyConfig(
 To implement a custom framer for your protocol:
 
 ```python
-from tcpproxy.framing.base import Framer
-from tcpproxy.framing import FRAMER_REGISTRY
+from protopoke.framing.base import Framer
+from protopoke.framing import FRAMER_REGISTRY
 
 class MyProtocolFramer(Framer):
     def feed(self, data: bytes) -> list[Frame]:
@@ -292,7 +292,7 @@ config = ProxyConfig(framer_name="myproto", ...)
 ### 6 — Inspect captured sessions
 
 ```python
-from tcpproxy.models import Direction
+from protopoke.models import Direction
 
 sessions = api.list_sessions()
 for session in sessions:
@@ -309,7 +309,7 @@ for frame in frames:
 ### 7 — Event subscriptions
 
 ```python
-from tcpproxy.events.bus import SessionOpenedEvent, SessionClosedEvent
+from protopoke.events.bus import SessionOpenedEvent, SessionClosedEvent
 
 async def on_open(event: SessionOpenedEvent):
     print(f"Session opened: {event.session.id}")
@@ -338,7 +338,7 @@ config = ProxyConfig(
 
 ### 9 — TLS MITM (Burp-style)
 
-On first run the proxy auto-generates a root CA at `~/.tcpproxy/ca.crt`. Install that file as a trusted root in your client (browser, OS, curl, etc.) once. Every subsequent session gets a fresh CA-signed leaf certificate transparently.
+On first run the proxy auto-generates a root CA at `~/.protopoke/ca.crt`. Install that file as a trusted root in your client (browser, OS, curl, etc.) once. Every subsequent session gets a fresh CA-signed leaf certificate transparently.
 
 ```python
 config = ProxyConfig(
@@ -353,9 +353,9 @@ api = ProxyAPI(config)
 await api.start()
 
 # Export the CA cert so the client can trust it
-with open("tcpproxy-ca.crt", "wb") as f:
+with open("protopoke-ca.crt", "wb") as f:
     f.write(api.ca.cert_pem)
-print("Install tcpproxy-ca.crt as a trusted root, then connect to localhost:8443")
+print("Install protopoke-ca.crt as a trusted root, then connect to localhost:8443")
 ```
 
 TLS-only client side (proxy connects to a plain upstream):
@@ -625,7 +625,7 @@ result = await api.replay_session(
 ### 13 — Wireshark-style display
 
 ```python
-from tcpproxy.protocol.display import (
+from protopoke.protocol.display import (
     render_hexdump,
     render_field_tree,
     render_frame_header,
@@ -662,9 +662,9 @@ Colour highlights are auto-disabled when stdout is not a TTY, or set `NO_COLOR=1
 ## Repository Layout
 
 ```
-tcpproxy/
+protopoke/
 ├── pyproject.toml
-├── tcpproxy/
+├── protopoke/
 │   ├── models.py           # Core data: Frame, ParsedField, ParsedMessage, SessionInfo, InterceptedUnit
 │   ├── config.py           # ProxyConfig dataclass (networking, TLS, framing, protocol)
 │   ├── api.py              # ProxyAPI — the unified control facade
@@ -776,8 +776,8 @@ Frames are kept in `Session.frames` (a plain list) during the session. The `Stor
 
 Passing `ssl=SSLContext` to asyncio is enough for TLS *forwarding* (encrypted tunnel, contents opaque). For TLS *interception* the proxy must terminate TLS on both sides independently so the relay operates on plaintext bytes. That requires the proxy to present a certificate the client trusts. Two-stage design:
 
-1. **`tcpproxy/tls/ca.py`** — `CertificateAuthority` generates an RSA-2048 root CA on first run and persists it at `~/.tcpproxy/ca.crt`. For each target hostname it issues a short-lived leaf cert (RSA-2048, correct SAN for DNS or IP, signed by the CA, cached in-memory).
-2. **`tcpproxy/tls/handler.py`** — `TLSHandler` builds `ssl.SSLContext` objects from those certs and exposes `get_listen_ssl_context()` / `get_upstream_ssl_context()` which are passed directly to `asyncio.start_server()` and `asyncio.open_connection()`. The relay, framing, and intercept layers are untouched — they see plaintext `StreamReader`/`StreamWriter` regardless of whether TLS is in use.
+1. **`protopoke/tls/ca.py`** — `CertificateAuthority` generates an RSA-2048 root CA on first run and persists it at `~/.protopoke/ca.crt`. For each target hostname it issues a short-lived leaf cert (RSA-2048, correct SAN for DNS or IP, signed by the CA, cached in-memory).
+2. **`protopoke/tls/handler.py`** — `TLSHandler` builds `ssl.SSLContext` objects from those certs and exposes `get_listen_ssl_context()` / `get_upstream_ssl_context()` which are passed directly to `asyncio.start_server()` and `asyncio.open_connection()`. The relay, framing, and intercept layers are untouched — they see plaintext `StreamReader`/`StreamWriter` regardless of whether TLS is in use.
 
 The `cryptography` library is used specifically for cert generation because Python's built-in `ssl` module has no API for creating X.509 certificates programmatically.
 
@@ -791,7 +791,7 @@ The `cryptography` library is used specifically for cert generation because Pyth
 
 - **SQLite persistence** — implement `SqliteStorageBackend` using `aiosqlite`. Subscribe to `FrameCapturedEvent` and write frames as they arrive. The `Frame` and `SessionInfo` dataclasses map directly to table rows with no schema redesign needed.
 
-- **TLS MITM** ✅ *implemented* — auto-CA generation, per-session leaf certs, configurable upstream verify, manual cert override. See `tcpproxy/tls/` and [TLS MITM design decision](#tls-mitm-certificate-per-session-not-ssl-on-a-socket).
+- **TLS MITM** ✅ *implemented* — auto-CA generation, per-session leaf certs, configurable upstream verify, manual cert override. See `protopoke/tls/` and [TLS MITM design decision](#tls-mitm-certificate-per-session-not-ssl-on-a-socket).
 
 - **SNI-aware cert dispatch** — currently the proxy issues one leaf cert for `upstream_host` at startup. A full SNI callback (`ssl.SSLContext.set_servername_callback`) would let the proxy issue a correctly-named cert for each unique `server_name` presented during the TLS handshake, which matters when the same listener proxies multiple hostnames (e.g. a wildcard CONNECT proxy).
 
@@ -799,13 +799,13 @@ The `cryptography` library is used specifically for cert generation because Pyth
 
 ### Protocol layer
 
-- **Protocol definition DSL** ✅ *implemented* — define field layouts in YAML or JSON; the `DefinitionBasedDecoder` decodes frames automatically. Supports magic-byte, sequence, and always match rules; integers, bytes, strings, bitfields, arrays, TLV sequences; variable-length `{expression}` references; enum value labels; and display hints. See `tcpproxy/protocol/`.
+- **Protocol definition DSL** ✅ *implemented* — define field layouts in YAML or JSON; the `DefinitionBasedDecoder` decodes frames automatically. Supports magic-byte, sequence, and always match rules; integers, bytes, strings, bitfields, arrays, TLV sequences; variable-length `{expression}` references; enum value labels; and display hints. See `protopoke/protocol/`.
 
 - **Field-level intercept editing** ✅ *implemented* — `modify_field_and_forward()` re-encodes with a field name → value dict; length fields are auto-recomputed.
 
 - **Field-level replay** ✅ *implemented* — `replay_session_with_field_edits()` applies per-message-type field edits across all matching frames in a replay.
 
-- **Wireshark-style display** ✅ *implemented* — `render_hexdump()` with ANSI per-field highlights, `render_field_tree()` with nested children, `render_frame_header()` one-liner. See `tcpproxy/protocol/display/`.
+- **Wireshark-style display** ✅ *implemented* — `render_hexdump()` with ANSI per-field highlights, `render_field_tree()` with nested children, `render_frame_header()` one-liner. See `protopoke/protocol/display/`.
 
 - **Protobuf / Thrift / Kaitai** — compile existing IDL schemas into `ProtocolDecoder` implementations. The interface (`decode(frame) -> ParsedMessage`) is simple enough to wrap any existing parser.
 

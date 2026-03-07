@@ -1,5 +1,5 @@
 """
-Shared pytest fixtures for tcpproxy tests.
+Shared pytest fixtures for ProtoPoke tests.
 
 Provides:
     echo_server(host, port) — async context manager that starts/stops a TCP echo server
