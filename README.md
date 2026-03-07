@@ -82,6 +82,35 @@ pytest
 
 ---
 
+## start() vs serve_forever()
+
+`ProxyAPI` has two ways to run:
+
+| Method | Behaviour | When to use |
+|---|---|---|
+| `await api.start()` | Binds the port and returns immediately | When you need to do other work concurrently (intercept loop, test assertions, second server, …). You must call `await api.stop()` yourself. |
+| `await api.serve_forever()` | Calls `start()` then blocks until the process is killed | Standalone scripts where the proxy is the only thing running. No need to call `stop()`. |
+
+```python
+# Standalone script — serve_forever() is simplest
+async def main():
+    api = ProxyAPI(config)
+    await api.serve_forever()          # blocks here; Ctrl-C to exit
+
+# Proxy + intercept loop — use start() so both can run concurrently
+async def main():
+    api = ProxyAPI(config)
+    await api.start()
+    try:
+        while True:
+            unit = await api.get_next_intercepted()
+            api.forward(unit.id)
+    finally:
+        await api.stop()               # always clean up
+```
+
+---
+
 ## Quick Start
 
 ```python
@@ -97,7 +126,7 @@ async def main():
         upstream_port=9090,
     )
     api = ProxyAPI(config)
-    await api.serve_forever()   # Ctrl-C to stop
+    await api.serve_forever()   # standalone script: blocks until Ctrl-C
 
 asyncio.run(main())
 ```
@@ -125,7 +154,7 @@ async def main():
         print(f"[{event.session.id[:8]}] {arrow} {event.frame.raw_bytes!r}")
 
     api.on_frame_captured(on_frame)
-    await api.serve_forever()
+    await api.serve_forever()   # standalone: blocks until Ctrl-C, no stop() needed
 
 asyncio.run(main())
 ```
@@ -142,7 +171,6 @@ Enable interception in the config, then process the queue:
 import asyncio
 from tcpproxy.api import ProxyAPI
 from tcpproxy.config import ProxyConfig
-from tcpproxy.models import Direction
 
 async def main():
     config = ProxyConfig(
@@ -152,18 +180,20 @@ async def main():
         intercept_enabled=True,          # pause frames for operator decision
     )
     api = ProxyAPI(config)
-    await api.start()
+    await api.start()                    # start() returns immediately
+    try:
+        while True:
+            unit = await api.get_next_intercepted()   # blocks until a frame arrives
+            frame = unit.frame
 
-    while True:
-        unit = await api.get_next_intercepted()       # blocks until a frame arrives
-        frame = unit.frame
+            print(f"Intercepted [{frame.direction.value}]: {frame.raw_bytes!r}")
 
-        print(f"Intercepted [{frame.direction.value}]: {frame.raw_bytes!r}")
-
-        # Choose one:
-        api.forward(unit.id)                          # forward as-is
-        # api.drop(unit.id)                           # discard
-        # api.modify_and_forward(unit.id, b"new data") # replace bytes
+            # Choose one:
+            api.forward(unit.id)                      # forward as-is
+            # api.drop(unit.id)                       # discard
+            # api.modify_and_forward(unit.id, b"new data") # replace bytes
+    finally:
+        await api.stop()                 # always clean up after start()
 
 asyncio.run(main())
 ```
