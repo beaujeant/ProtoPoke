@@ -273,6 +273,8 @@ class ProxyAPI:
         server_port:     Optional[int]              = None,
         frame_delay:     float                      = 0.0,
         modified_frames: Optional[dict[str, bytes]] = None,
+        direction:       Direction                  = Direction.CLIENT_TO_SERVER,
+        frame_selector:  Optional[str]              = None,
     ) -> ReplayResult:
         """
         Replay a captured session.
@@ -284,9 +286,19 @@ class ProxyAPI:
             frame_delay:     Seconds to wait between sending each frame.
             modified_frames: Dict of frame_id → replacement bytes.
                              Frames not in the dict use original bytes.
+            direction:       Which direction's frames to source for replay.
+                             Default: CLIENT_TO_SERVER (replay what the client sent).
+                             Use SERVER_TO_CLIENT to replay server-side frames.
+            frame_selector:  Selector string to pick specific frames by sequence
+                             number within the chosen direction. Examples:
+                               "5"          — only sequence 5
+                               "3-13"       — sequences 3 through 13 inclusive
+                               "3,4,7"      — sequences 3, 4 and 7
+                               "3,5,7-9,11" — sequences 3, 5, 7, 8, 9 and 11
+                             None (default) means all frames in that direction.
 
         Returns:
-            ReplayResult with the new replayed session and result metadata.
+            ReplayResult with the new replayed session and metadata.
         """
         return await self.replay_engine.replay_session(
             session_id=session_id,
@@ -294,6 +306,8 @@ class ProxyAPI:
             server_port=server_port,
             frame_delay=frame_delay,
             modified_frames=modified_frames,
+            direction=direction,
+            frame_selector=frame_selector,
         )
 
     # ------------------------------------------------------------------
