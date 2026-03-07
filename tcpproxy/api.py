@@ -50,10 +50,11 @@ Usage example:
 from __future__ import annotations
 
 import logging
-from typing import Callable, Optional
+from pathlib import Path
+from typing import Any, Callable, Optional
 
 from .config import ProxyConfig
-from .models import Direction, Frame, InterceptedUnit
+from .models import Direction, Frame, InterceptedUnit, ParsedMessage
 from .core.proxy import ProxyEngine
 from .core.session import Session, SessionRegistry
 from .tls.ca import CertificateAuthority
@@ -71,6 +72,7 @@ from .intercept.controller import (
 )
 from .replay.engine import ReplayEngine, ReplayResult
 from .storage.base import StorageBackend, NullStorageBackend
+from .protocol.base import ProtocolDecoder, ProtocolEncoder, PassthroughDecoder
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +120,10 @@ class ProxyAPI:
             framer_kwargs=config.framer_kwargs,
         )
 
+        # Protocol decoder/encoder (lazy-loaded)
+        self._decoder: ProtocolDecoder = PassthroughDecoder()
+        self._encoder: Optional[ProtocolEncoder] = None
+
     # ------------------------------------------------------------------
     # TLS helpers
     # ------------------------------------------------------------------
@@ -146,6 +152,10 @@ class ProxyAPI:
 
     async def start(self) -> None:
         """Start listening for connections (non-blocking)."""
+        # Auto-load protocol definition if configured
+        if self.config.protocol_definition_path:
+            self.set_protocol_file(self.config.protocol_definition_path)
+
         await self.engine.start()
         logger.info(
             "ProxyAPI started: %s:%d → %s:%d",
@@ -330,6 +340,240 @@ class ProxyAPI:
             server_port=server_port,
             frame_delay=frame_delay,
             modified_frames=modified_frames,
+            direction=direction,
+            frame_selector=frame_selector,
+        )
+
+    # ------------------------------------------------------------------
+    # Protocol decoder/encoder
+    # ------------------------------------------------------------------
+
+    def set_protocol(
+        self,
+        decoder: ProtocolDecoder,
+        encoder: Optional[ProtocolEncoder] = None,
+    ) -> None:
+        """
+        Attach a protocol decoder (and optionally encoder) to this API instance.
+
+        The decoder is used by decode_frame() and get_next_intercepted_parsed().
+        The encoder is used by modify_field_and_forward() and replay with field edits.
+
+        Args:
+            decoder: A ProtocolDecoder instance (e.g. DefinitionBasedDecoder).
+            encoder: Optional matching ProtocolEncoder.  Required for field-level
+                     editing.  If not provided, raw-bytes editing still works.
+        """
+        self._decoder = decoder
+        self._encoder = encoder
+        logger.info("Protocol set: %s", decoder.protocol_name)
+
+    def set_protocol_file(self, path: str) -> None:
+        """
+        Load a protocol definition from a YAML or JSON file and attach it.
+
+        Convenience wrapper around set_protocol() that handles loading.
+
+        Args:
+            path: Path to a .yaml, .yml, or .json protocol definition file.
+
+        Raises:
+            FileNotFoundError: File not found.
+            ImportError:       YAML file but PyYAML not installed.
+            ValueError:        File is malformed.
+        """
+        from .protocol.definition import load_protocol_file
+        from .protocol.parser import DefinitionBasedDecoder, DefinitionBasedEncoder
+
+        defn = load_protocol_file(path)
+        decoder = DefinitionBasedDecoder(defn)
+        encoder = DefinitionBasedEncoder(defn)
+        self.set_protocol(decoder, encoder)
+        logger.info("Protocol definition loaded from %s: %s", path, defn.name)
+
+    def set_protocol_dict(self, raw: dict) -> None:
+        """
+        Load a protocol definition from a raw dict and attach it.
+
+        Useful when building definitions programmatically in tests or scripts.
+
+        Args:
+            raw: Protocol definition as a dict (same structure as the YAML).
+        """
+        from .protocol.definition import load_protocol
+        from .protocol.parser import DefinitionBasedDecoder, DefinitionBasedEncoder
+
+        defn = load_protocol(raw)
+        self.set_protocol(DefinitionBasedDecoder(defn), DefinitionBasedEncoder(defn))
+
+    def decode_frame(self, frame: Frame) -> ParsedMessage:
+        """
+        Decode a captured frame using the currently attached protocol decoder.
+
+        Args:
+            frame: Any Frame object (from get_frames() or an intercepted unit).
+
+        Returns:
+            ParsedMessage with structured fields, offset metadata, and display values.
+            Always returns successfully — partial results with error set on failure.
+        """
+        return self._decoder.decode(frame)
+
+    def decode_session_frames(
+        self,
+        session_id: str,
+        direction:  Optional[Direction] = None,
+    ) -> list[ParsedMessage]:
+        """
+        Decode all frames in a session and return them as ParsedMessages.
+
+        Args:
+            session_id: The session to query.
+            direction:  If set, filter to one direction only.
+
+        Returns:
+            List of ParsedMessage in capture order.
+        """
+        frames = self.get_frames(session_id, direction)
+        return [self._decoder.decode(f) for f in frames]
+
+    async def get_next_intercepted_parsed(self) -> tuple[InterceptedUnit, ParsedMessage]:
+        """
+        Wait for and return the next intercepted frame, with its parsed view.
+
+        Like get_next_intercepted() but also decodes the frame using the
+        attached protocol decoder.
+
+        Returns:
+            (InterceptedUnit, ParsedMessage) tuple.
+
+        Raises:
+            RuntimeError: if interception is not enabled.
+        """
+        unit = await self.get_next_intercepted()
+        msg  = self._decoder.decode(unit.frame)
+        return unit, msg
+
+    def modify_field_and_forward(
+        self,
+        unit_id:    str,
+        field_edits: dict[str, Any],
+    ) -> bool:
+        """
+        Re-encode an intercepted frame with field-level edits, then forward it.
+
+        Requires an encoder to be set (via set_protocol() or set_protocol_file()).
+        Falls back to raw-byte forwarding if no encoder is available.
+
+        Args:
+            unit_id:     ID of the intercepted unit to act on.
+            field_edits: Dict of field_name → new value.
+                         Values can be int, str, or bytes depending on the field type.
+
+        Returns:
+            True if the verdict was applied, False if unit_id not found.
+        """
+        if not isinstance(self._intercept_controller, QueuedInterceptController):
+            return False
+
+        unit = self._intercept_controller.get_by_id(unit_id)
+        if unit is None:
+            return False
+
+        if self._encoder is None:
+            logger.warning(
+                "modify_field_and_forward: no encoder set, falling back to raw-bytes edit. "
+                "Call set_protocol_file() to enable field-level encoding."
+            )
+            return False
+
+        try:
+            from .protocol.parser.engine import DefinitionBasedEncoder
+            if not isinstance(self._encoder, DefinitionBasedEncoder):
+                logger.warning("modify_field_and_forward: encoder does not support field edits")
+                return False
+
+            msg = self._decoder.decode(unit.frame)
+            new_bytes = self._encoder.encode_with_edits(msg, field_edits)
+            return self._intercept_controller.modify_and_forward(unit_id, new_bytes)
+        except Exception as exc:
+            logger.error("modify_field_and_forward failed: %s", exc, exc_info=True)
+            return False
+
+    async def replay_session_with_field_edits(
+        self,
+        session_id:  str,
+        field_edits: dict[str, dict[str, Any]],
+        server_host: Optional[str]  = None,
+        server_port: Optional[int]  = None,
+        frame_delay: float          = 0.0,
+        direction:   Direction      = Direction.CLIENT_TO_SERVER,
+        frame_selector: Optional[str] = None,
+    ) -> ReplayResult:
+        """
+        Replay a session with field-level edits applied per message type.
+
+        Instead of specifying raw replacement bytes per frame ID, you specify
+        field values per message type.  The encoder decodes each frame,
+        applies the matching edit dict, re-encodes, and sends.
+
+        Args:
+            session_id:   Session to replay.
+            field_edits:  Dict of message_type_name → {field_name → new_value}.
+                          Example::
+
+                              {
+                                  "LoginRequest": {
+                                      "username": "admin2",
+                                      "password": b"newpass!",
+                                  }
+                              }
+
+            server_host:    Override target host.
+            server_port:    Override target port.
+            frame_delay:    Seconds between frames.
+            direction:      Which direction's frames to replay.
+            frame_selector: Selector string for specific frames.
+
+        Returns:
+            ReplayResult.
+
+        Raises:
+            RuntimeError: If no encoder is set.
+        """
+        from .protocol.parser.engine import DefinitionBasedEncoder
+
+        if self._encoder is None or not isinstance(self._encoder, DefinitionBasedEncoder):
+            raise RuntimeError(
+                "replay_session_with_field_edits requires a DefinitionBasedEncoder. "
+                "Call set_protocol_file() first."
+            )
+
+        decoder = self._decoder
+        encoder = self._encoder
+
+        # Pre-compute modified_frames: decode each frame, apply edits, re-encode
+        frames = self.get_frames(session_id, direction)
+        modified_frames: dict[str, bytes] = {}
+
+        for frame in frames:
+            msg = decoder.decode(frame)
+            if msg.message_type in field_edits:
+                try:
+                    new_bytes = encoder.encode_with_edits(msg, field_edits[msg.message_type])
+                    modified_frames[frame.id] = new_bytes
+                except Exception as exc:
+                    logger.warning(
+                        "Could not encode frame %s (%s): %s — sending original",
+                        frame.id[:8], msg.message_type, exc,
+                    )
+
+        return await self.replay_session(
+            session_id=session_id,
+            server_host=server_host,
+            server_port=server_port,
+            frame_delay=frame_delay,
+            modified_frames=modified_frames or None,
             direction=direction,
             frame_selector=frame_selector,
         )

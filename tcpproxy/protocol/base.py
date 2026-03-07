@@ -35,7 +35,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from ..models import Frame, ParsedMessage
+from ..models import Frame, ParsedField, ParsedMessage
 
 
 class ProtocolDecoder(ABC):
@@ -144,12 +144,22 @@ class PassthroughDecoder(ProtocolDecoder):
         return "raw"
 
     def decode(self, frame: Frame) -> ParsedMessage:
+        raw = frame.raw_bytes
+        fields = [
+            ParsedField(
+                name="raw",
+                value=raw,
+                raw_bytes=raw,
+                offset=0,
+                size=len(raw),
+                display_hint="hex",
+                display_value=raw.hex(" ") if raw else "",
+            ),
+        ]
         return ParsedMessage.from_frame(
             frame=frame,
             protocol_name=self.protocol_name,
-            fields={
-                "hex":    frame.raw_bytes.hex(),
-                "length": len(frame.raw_bytes),
-            },
-            display_name=f"[{len(frame.raw_bytes)} bytes]",
+            message_type="raw",
+            fields=fields,
+            display_name=f"[{len(raw)} bytes]",
         )
