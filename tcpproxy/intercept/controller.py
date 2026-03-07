@@ -214,6 +214,11 @@ class QueuedInterceptController(InterceptController):
         """All frames currently waiting for a verdict (snapshot)."""
         return [unit for unit, _ in self._pending.values()]
 
+    def get_by_id(self, unit_id: str) -> Optional[InterceptedUnit]:
+        """Return the pending InterceptedUnit with the given ID, or None."""
+        entry = self._pending.get(unit_id)
+        return entry[0] if entry else None
+
     def set_verdict(
         self,
         unit_id:       str,

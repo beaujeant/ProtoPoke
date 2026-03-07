@@ -112,3 +112,13 @@ class ProxyConfig:
     # certs or certs that clients trust unconditionally.
     tls_cert_path: Optional[str] = None
     tls_key_path:  Optional[str] = None
+
+    # ------------------------------------------------------------------
+    # Protocol definition
+    # ------------------------------------------------------------------
+
+    # Path to a .yaml or .json protocol definition file.
+    # When set, ProxyAPI auto-loads the definition on start() and attaches
+    # a DefinitionBasedDecoder so that frames are automatically parsed.
+    # The definition can also be loaded manually via api.set_protocol_file().
+    protocol_definition_path: Optional[str] = None

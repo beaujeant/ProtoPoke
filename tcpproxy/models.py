@@ -23,7 +23,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +219,43 @@ class InterceptedUnit:
 
 
 @dataclass
+class ParsedField:
+    """
+    One parsed field within a protocol message.
+
+    Carries both the decoded Python value AND the byte-level metadata
+    (offset, size, raw_bytes) so that:
+      - The hex-dump renderer can highlight exactly which bytes belong to this field.
+      - The encoder can re-assemble bytes field-by-field for intercept+modify / replay.
+      - Nested structures (TLV children, array items) are expressed as children.
+
+    Attributes:
+        name:          Field name from the protocol definition.
+        value:         Decoded Python value: int, str, bytes, list[ParsedField], etc.
+        raw_bytes:     Exact bytes consumed by this field in the original frame.
+        offset:        Byte offset within the frame where this field starts.
+        size:          Number of bytes consumed (== len(raw_bytes)).
+        display_hint:  How to format the value: "hex", "ascii", "decimal", "enum", "auto".
+        display_value: Pre-rendered string shown in the UI (enum label, decoded str, …).
+        children:      Nested ParsedField list for TLV sequences, arrays, bitfields.
+    """
+    name:          str
+    value:         Any
+    raw_bytes:     bytes
+    offset:        int
+    size:          int
+    display_hint:  str                = "auto"
+    display_value: str                = ""
+    children:      list[ParsedField]  = field(default_factory=list)
+
+    def __repr__(self) -> str:
+        return (
+            f"ParsedField(name={self.name!r} offset={self.offset} "
+            f"size={self.size} value={self.value!r})"
+        )
+
+
+@dataclass
 class ParsedMessage:
     """
     A protocol-decoded view of a Frame.
@@ -231,34 +268,55 @@ class ParsedMessage:
         id:            Unique ID for this parsed view.
         frame:         The source frame (raw bytes always available via frame.raw_bytes).
         protocol_name: Human-readable protocol identifier (e.g. 'HTTP/1.1', 'Redis').
-        fields:        Protocol-specific parsed data — shape is protocol-defined.
+        message_type:  The matched message type name (e.g. "LoginRequest"), or "" if
+                       no definition matched / passthrough decoding.
+        fields:        Ordered list of parsed fields. Each entry carries offset, size,
+                       and raw bytes for hex-dump highlighting and re-encoding.
         display_name:  Short human-readable summary for UI lists.
+        error:         Non-empty if parsing failed or was partial; explains why.
     """
     id:            str
     frame:         Frame
     protocol_name: str
-    fields:        dict
-    display_name:  str = ""
+    message_type:  str               = ""
+    fields:        list[ParsedField] = field(default_factory=list)
+    display_name:  str               = ""
+    error:         Optional[str]     = None
 
     @classmethod
     def from_frame(
         cls,
         frame:         Frame,
         protocol_name: str,
-        fields:        dict,
-        display_name:  str = "",
+        message_type:  str               = "",
+        fields:        list[ParsedField] = None,
+        display_name:  str               = "",
+        error:         Optional[str]     = None,
     ) -> "ParsedMessage":
         return cls(
             id=new_id(),
             frame=frame,
             protocol_name=protocol_name,
-            fields=fields,
+            message_type=message_type,
+            fields=fields or [],
             display_name=display_name,
+            error=error,
         )
+
+    def field_by_name(self, name: str) -> Optional[ParsedField]:
+        """Return the first top-level field with the given name, or None."""
+        for f in self.fields:
+            if f.name == name:
+                return f
+        return None
+
+    def as_dict(self) -> dict:
+        """Flat dict of field name → value (top-level only). Useful for quick access."""
+        return {f.name: f.value for f in self.fields}
 
     def __repr__(self) -> str:
         return (
-            f"ParsedMessage(protocol={self.protocol_name} "
-            f"display={self.display_name!r} "
-            f"fields={list(self.fields.keys())})"
+            f"ParsedMessage(protocol={self.protocol_name!r} "
+            f"type={self.message_type!r} "
+            f"fields={[f.name for f in self.fields]})"
         )
