@@ -1,8 +1,90 @@
+# Python bytecode
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
+
+# Distribution / packaging
+*.egg
 *.egg-info/
-.pytest_cache/
 dist/
 build/
+wheels/
+sdist/
+.eggs/
+MANIFEST
+
+# Virtual environments (venv / uv)
 .venv/
 venv/
+env/
+ENV/
+.env/
+.uv/
+uv.lock
+
+# uv cache
+.uv_cache/
+
+# Pytest / testing
+.pytest_cache/
+.tox/
+.nox/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# Type checkers
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+.pyre/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.fuse_hidden*
+.Trash-*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+.spyderproject.db
+.spyproject/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
