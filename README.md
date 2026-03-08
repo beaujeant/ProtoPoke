@@ -177,7 +177,61 @@ Available MCP tools:
 | Intercept rules | `list_intercept_rules`, `add_intercept_rule`, `remove_intercept_rule` |
 | Repeater | `send_frame` |
 | Replay | `replay_session` |
+| Fuzzing | `fuzz_start`, `fuzz_status`, `fuzz_results`, `fuzz_stop`, `list_campaigns` |
 | Config | `get_config`, `set_config` |
+
+#### Fuzzing via MCP
+
+Campaigns run as asyncio background tasks so the AI can start one and poll for results without blocking the MCP transport.
+
+Mutators are specified as JSON objects — no Python objects needed:
+
+```python
+# The AI (or any MCP client) would call these tools in sequence:
+
+# 1. Start a campaign
+result = await mcp_client.call("fuzz_start", {
+    "session_id": "<uuid>",
+    "mutators": [
+        {"name": "bit_flip"},
+        {"name": "known_bad"},
+        {"name": "field_overflow", "lengths": [256, 1024]},  # needs a protocol definition
+    ],
+    "iterations": 100,
+    "stop_on_crash": True,
+})
+campaign_id = result["campaign_id"]   # e.g. "a3f9..."
+
+# 2. Poll status
+status = await mcp_client.call("fuzz_status", {"campaign_id": campaign_id})
+# {"status": "running", "completed_iterations": 42, "crash_count": 0, ...}
+
+# 3. Fetch interesting results only
+findings = await mcp_client.call("fuzz_results", {
+    "campaign_id": campaign_id,
+    "interesting_only": True,
+})
+
+# 4. Stop early if needed
+await mcp_client.call("fuzz_stop", {"campaign_id": campaign_id})
+
+# 5. List all campaigns across the session
+all_campaigns = await mcp_client.call("list_campaigns", {})
+```
+
+Available mutator names for `fuzz_start`:
+
+| `name` | Parameters | Requires protocol definition |
+|---|---|---|
+| `bit_flip` | `count` (default 1) | No |
+| `byte_insert` | `count` (default 4) | No |
+| `byte_delete` | `max_count` (default 4) | No |
+| `known_bad` | — | No |
+| `radamsa` | `radamsa_path` (default `"radamsa"`), `timeout` (default 5.0) | No |
+| `field_boundary` | — | Yes |
+| `field_overflow` | `lengths` (default `[256, 1024, 4096]`) | Yes |
+| `null_byte` | — | Yes |
+| `length_mangle` | — | Yes |
 
 ---
 

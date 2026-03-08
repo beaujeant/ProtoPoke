@@ -12,11 +12,13 @@ Tools are grouped by concern:
     Intercept rules         : list_intercept_rules, add_intercept_rule, remove_intercept_rule
     Repeater / send         : send_frame
     Replay                  : replay_session
+    Fuzzing                 : fuzz_start, fuzz_status, fuzz_results, fuzz_stop, list_campaigns
     Config                  : get_config, set_config
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Optional
 
@@ -488,6 +490,268 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
             frame_selector=frame_selector,
         )
         return result.to_dict()
+
+    # ------------------------------------------------------------------ #
+    # Fuzzing                                                               #
+    # ------------------------------------------------------------------ #
+
+    # In-process campaign registry: campaign_id -> (FuzzCampaign, asyncio.Task | None)
+    _campaigns: dict[str, tuple] = {}
+
+    def _build_mutators(mutator_specs: list[dict]) -> tuple[list, Optional[str]]:
+        """
+        Instantiate FrameMutator objects from JSON-friendly spec dicts.
+
+        Each spec must have a ``"name"`` key.  Additional keys are optional
+        per-mutator parameters (see fuzz_start docstring for the full list).
+
+        Returns ``(mutators, None)`` on success or ``([], error_message)`` on failure.
+        """
+        from protopoke.fuzzing.mutators import (
+            BitFlipMutator,
+            ByteDeleteMutator,
+            ByteInsertMutator,
+            ChainMutator,
+            FieldBoundaryMutator,
+            FieldOverflowMutator,
+            KnownBadMutator,
+            LengthMangleMutator,
+            NullByteMutator,
+            RadamsaMutator,
+        )
+
+        encoder = api._encoder
+        mutators = []
+
+        for spec in mutator_specs:
+            name = spec.get("name", "")
+            if name == "bit_flip":
+                mutators.append(BitFlipMutator(count=spec.get("count", 1)))
+            elif name == "byte_insert":
+                mutators.append(ByteInsertMutator(count=spec.get("count", 4)))
+            elif name == "byte_delete":
+                mutators.append(ByteDeleteMutator(max_count=spec.get("max_count", 4)))
+            elif name == "known_bad":
+                mutators.append(KnownBadMutator())
+            elif name == "radamsa":
+                mutators.append(
+                    RadamsaMutator(
+                        radamsa_path=spec.get("radamsa_path", "radamsa"),
+                        timeout=spec.get("timeout", 5.0),
+                    )
+                )
+            elif name == "field_boundary":
+                if encoder is None:
+                    return [], "field_boundary requires a protocol definition to be loaded (set protocol_definition_path in config)"
+                mutators.append(FieldBoundaryMutator(encoder))
+            elif name == "field_overflow":
+                if encoder is None:
+                    return [], "field_overflow requires a protocol definition to be loaded"
+                mutators.append(FieldOverflowMutator(encoder, lengths=spec.get("lengths", [256, 1024, 4096])))
+            elif name == "null_byte":
+                if encoder is None:
+                    return [], "null_byte requires a protocol definition to be loaded"
+                mutators.append(NullByteMutator(encoder))
+            elif name == "length_mangle":
+                if encoder is None:
+                    return [], "length_mangle requires a protocol definition to be loaded"
+                mutators.append(LengthMangleMutator(encoder))
+            else:
+                valid = "bit_flip, byte_insert, byte_delete, known_bad, radamsa, field_boundary, field_overflow, null_byte, length_mangle"
+                return [], f"Unknown mutator '{name}'. Valid names: {valid}"
+
+        return mutators, None
+
+    @mcp.tool()
+    async def fuzz_start(
+        session_id:       str,
+        mutators:         list[dict],
+        iterations:       int           = 50,
+        frame_selector:   Optional[str] = None,
+        stop_on_crash:    bool          = True,
+        server_host:      Optional[str] = None,
+        server_port:      Optional[int] = None,
+        response_timeout: float         = 10.0,
+    ) -> dict:
+        """
+        Start a fuzzing campaign in the background and return immediately.
+
+        Mutators are specified as a list of objects, each with a ``"name"`` field
+        and optional parameters:
+
+        - ``{"name": "bit_flip"}``                          — flip random bits
+        - ``{"name": "bit_flip", "count": 4}``             — flip 4 bits per frame
+        - ``{"name": "byte_insert"}``                       — insert random bytes
+        - ``{"name": "byte_delete"}``                       — delete random bytes
+        - ``{"name": "known_bad"}``                         — known-bad payloads (overflows, SQL, fmt strings)
+        - ``{"name": "radamsa"}``                           — radamsa (must be on PATH)
+        - ``{"name": "radamsa", "radamsa_path": "/path"}``  — radamsa at a custom path
+        - ``{"name": "field_boundary"}``                    — integer boundary values (protocol-aware)
+        - ``{"name": "field_overflow", "lengths": [256]}``  — string/bytes overflow (protocol-aware)
+        - ``{"name": "null_byte"}``                         — null-byte injection (protocol-aware)
+        - ``{"name": "length_mangle"}``                     — corrupt length fields (protocol-aware)
+
+        Protocol-aware mutators (field_*) require a protocol definition to be loaded.
+
+        The campaign runs as an asyncio background task.  Poll with
+        ``fuzz_status`` and retrieve results with ``fuzz_results``.
+
+        Args:
+            session_id:       Template session UUID (must be a captured session).
+            mutators:         List of mutator spec objects (see above).
+            iterations:       Total number of mutations to send (default: 50).
+            frame_selector:   Comma/range spec, e.g. ``"0,2-4"``. None = all frames.
+            stop_on_crash:    Stop on first TCP connection reset.
+            server_host:      Override target host (default: session's original server).
+            server_port:      Override target port.
+            response_timeout: Per-iteration read timeout in seconds.
+
+        Returns:
+            ``{"ok": true, "campaign_id": "<uuid>", "status": "running"}``
+        """
+        from protopoke.fuzzing.models import FuzzCampaign
+
+        built, err = _build_mutators(mutators)
+        if err:
+            return {"ok": False, "error": err}
+        if not built:
+            return {"ok": False, "error": "No mutators specified."}
+
+        campaign = FuzzCampaign.create(
+            session_id=session_id,
+            mutators=built,
+            iterations=iterations,
+            frame_selector=frame_selector,
+            stop_on_crash=stop_on_crash,
+        )
+
+        engine = api._get_fuzzer_engine()
+        engine._decoder = api._decoder
+
+        task = asyncio.get_event_loop().create_task(
+            engine.run_campaign(
+                campaign=campaign,
+                mutators=built,
+                server_host=server_host,
+                server_port=server_port,
+                response_timeout=response_timeout,
+            )
+        )
+        _campaigns[campaign.id] = (campaign, task)
+        return {"ok": True, "campaign_id": campaign.id, "status": campaign.status.value}
+
+    @mcp.tool()
+    def fuzz_status(campaign_id: str) -> dict:
+        """
+        Return the current status and summary of a fuzzing campaign.
+
+        Useful for polling a running campaign started with ``fuzz_start``.
+
+        Args:
+            campaign_id: Campaign UUID returned by ``fuzz_start``.
+
+        Returns:
+            Campaign summary dict (no per-result details; use ``fuzz_results`` for those).
+        """
+        entry = _campaigns.get(campaign_id)
+        if entry is None:
+            return {"ok": False, "error": f"Campaign '{campaign_id}' not found."}
+        campaign, task = entry
+        return {
+            "ok":                     True,
+            "id":                     campaign.id,
+            "session_id":             campaign.session_id,
+            "status":                 campaign.status.value,
+            "mutator_names":          campaign.mutator_names,
+            "iterations":             campaign.iterations,
+            "completed_iterations":   campaign.completed_iterations,
+            "interesting_count":      len(campaign.interesting_results),
+            "crash_count":            len(campaign.crash_results),
+            "baseline_response_size": campaign.baseline_response_size,
+            "started_at":             campaign.started_at,
+            "completed_at":           campaign.completed_at,
+            "task_done":              task.done() if task else None,
+        }
+
+    @mcp.tool()
+    def fuzz_results(campaign_id: str, interesting_only: bool = False) -> dict:
+        """
+        Return per-iteration results for a fuzzing campaign.
+
+        Each result includes the mutated bytes (hex), response bytes (hex),
+        response time, connection reset flag, timeout flag, and the
+        ``interesting`` heuristic flag.
+
+        Args:
+            campaign_id:     Campaign UUID returned by ``fuzz_start``.
+            interesting_only: If True, return only results flagged as interesting
+                              (connection reset, timeout, or response size anomaly).
+
+        Returns:
+            ``{"ok": true, "id": "...", "status": "...", "results": [...]}``
+        """
+        entry = _campaigns.get(campaign_id)
+        if entry is None:
+            return {"ok": False, "error": f"Campaign '{campaign_id}' not found."}
+        campaign, _ = entry
+        results = campaign.interesting_results if interesting_only else campaign.results
+        return {
+            "ok":     True,
+            "id":     campaign.id,
+            "status": campaign.status.value,
+            "results": [r.to_dict() for r in results],
+        }
+
+    @mcp.tool()
+    def fuzz_stop(campaign_id: str) -> dict:
+        """
+        Request early termination of a running campaign.
+
+        Sets the campaign's status to ``"stopped"``; the engine will finish
+        the current iteration and then exit gracefully.  Has no effect if the
+        campaign is already done or stopped.
+
+        Args:
+            campaign_id: Campaign UUID returned by ``fuzz_start``.
+
+        Returns:
+            ``{"ok": true, "status": "stopped"}``
+        """
+        entry = _campaigns.get(campaign_id)
+        if entry is None:
+            return {"ok": False, "error": f"Campaign '{campaign_id}' not found."}
+        campaign, _ = entry
+        from protopoke.fuzzing.models import CampaignStatus
+        if campaign.status is CampaignStatus.RUNNING:
+            campaign.status = CampaignStatus.STOPPED
+        return {"ok": True, "status": campaign.status.value}
+
+    @mcp.tool()
+    def list_campaigns() -> list[dict]:
+        """
+        List all fuzzing campaigns (running and completed) with summary info.
+
+        To retrieve per-iteration details call ``fuzz_results`` with the
+        campaign ID.
+
+        Returns:
+            List of campaign summary dicts ordered by insertion time (oldest first).
+        """
+        return [
+            {
+                "id":                   c.id,
+                "session_id":           c.session_id,
+                "status":               c.status.value,
+                "mutator_names":        c.mutator_names,
+                "iterations":           c.iterations,
+                "completed_iterations": c.completed_iterations,
+                "interesting_count":    len(c.interesting_results),
+                "crash_count":          len(c.crash_results),
+                "started_at":           c.started_at,
+                "completed_at":         c.completed_at,
+            }
+            for c, _ in _campaigns.values()
+        ]
 
     # ------------------------------------------------------------------ #
     # Config                                                                #
