@@ -55,8 +55,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Optional, TYPE_CHECKING
 
-from ..models import Direction, InterceptAction
+from ..models import Direction, Frame, InterceptAction
 from ..framing.base import Framer
 from ..intercept.controller import InterceptController
 from ..events.bus import (
@@ -65,6 +66,9 @@ from ..events.bus import (
     InterceptCompletedEvent,
 )
 from .session import Session
+
+if TYPE_CHECKING:
+    from ..rules.engine import RulesEngine
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +91,7 @@ class DirectionalRelay:
         intercept_controller: InterceptController,
         event_bus:            EventBus,
         read_buffer_size:     int = 4096,
+        rules_engine:         "Optional[RulesEngine]" = None,
     ) -> None:
         self._session              = session
         self._direction            = direction
@@ -96,6 +101,7 @@ class DirectionalRelay:
         self._intercept_controller = intercept_controller
         self._event_bus            = event_bus
         self._read_buffer_size     = read_buffer_size
+        self._rules_engine         = rules_engine
         self._running              = False
 
     async def run(self) -> None:
@@ -149,15 +155,41 @@ class DirectionalRelay:
             self._running = False
             await self._send_eof_to_dest()
 
-    async def _process_frame(self, frame) -> None:
-        """Run one frame through interception then write to destination."""
+    async def _process_frame(self, frame: Frame) -> None:
+        """
+        Run one frame through replace rules, interception, then write.
+
+        Pipeline:
+          1. Add *frame* (original capture) to session and emit FrameCapturedEvent.
+          2. Apply replace rules to get effective bytes (may equal original).
+          3. If bytes changed, create a synthetic frame carrying the modified bytes.
+          4. Pass the effective frame to the intercept controller.
+          5. Write to destination unless the verdict is DROP.
+        """
+        # Always store the raw-capture frame so the session log shows what
+        # was actually on the wire.
         self._session.add_frame(frame)
 
         await self._event_bus.publish(
             FrameCapturedEvent(frame=frame, session=self._session.info)
         )
 
-        unit = await self._intercept_controller.process(frame)
+        # Apply replace rules (no-op when no engine is set)
+        effective_frame = frame
+        if self._rules_engine is not None:
+            modified_bytes = self._rules_engine.apply(frame)
+            if modified_bytes != frame.raw_bytes:
+                # Create a new Frame for interception/forwarding so the
+                # original capture is preserved in the session unchanged.
+                effective_frame = Frame.create(
+                    session_id=frame.session_id,
+                    direction=frame.direction,
+                    raw_bytes=modified_bytes,
+                    sequence_number=frame.sequence_number,
+                    framer_name=frame.framer_name,
+                )
+
+        unit = await self._intercept_controller.process(effective_frame)
 
         await self._event_bus.publish(
             InterceptCompletedEvent(unit=unit, session=self._session.info)
@@ -219,6 +251,7 @@ class BidirectionalRelay:
         intercept_controller: InterceptController,
         event_bus:            EventBus,
         read_buffer_size:     int = 4096,
+        rules_engine:         "Optional[RulesEngine]" = None,
     ) -> None:
         self._session       = session
         self._client_writer = client_writer
@@ -233,6 +266,7 @@ class BidirectionalRelay:
             intercept_controller=intercept_controller,
             event_bus=event_bus,
             read_buffer_size=read_buffer_size,
+            rules_engine=rules_engine,
         )
 
         self._downstream = DirectionalRelay(
@@ -244,6 +278,7 @@ class BidirectionalRelay:
             intercept_controller=intercept_controller,
             event_bus=event_bus,
             read_buffer_size=read_buffer_size,
+            rules_engine=rules_engine,
         )
 
     async def run(self) -> None:

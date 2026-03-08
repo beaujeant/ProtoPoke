@@ -13,7 +13,9 @@ an explicit ProxyConfig.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 
@@ -122,3 +124,67 @@ class ProxyConfig:
     # a DefinitionBasedDecoder so that frames are automatically parsed.
     # The definition can also be loaded manually via api.set_protocol_file().
     protocol_definition_path: Optional[str] = None
+
+    # ------------------------------------------------------------------
+    # Custom framer
+    # ------------------------------------------------------------------
+
+    # Path to a Python file containing a custom Framer subclass.
+    # When set together with custom_framer_class, the framer is loaded
+    # dynamically from this file at proxy start.
+    custom_framer_path: Optional[str] = None
+
+    # Class name of the custom Framer subclass inside custom_framer_path.
+    custom_framer_class: Optional[str] = None
+
+    # ------------------------------------------------------------------
+    # Serialisation
+    # ------------------------------------------------------------------
+
+    def to_dict(self) -> dict:
+        """Serialise to a JSON-compatible dict."""
+        d: dict = {}
+        for f in self.__dataclass_fields__:
+            val = getattr(self, f)
+            if isinstance(val, dict):
+                # framer_kwargs may contain bytes values (e.g. delimiter).
+                # Encode bytes as hex strings for JSON compatibility.
+                val = {
+                    k: (v.hex() if isinstance(v, (bytes, bytearray)) else v)
+                    for k, v in val.items()
+                }
+            d[f] = val
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ProxyConfig":
+        """Deserialise from a dict (as produced by to_dict())."""
+        kwargs = {}
+        for f_name, f_obj in cls.__dataclass_fields__.items():
+            if f_name not in d:
+                continue
+            val = d[f_name]
+            # framer_kwargs: re-decode any hex-encoded bytes values
+            if f_name == "framer_kwargs" and isinstance(val, dict):
+                decoded: dict = {}
+                for k, v in val.items():
+                    if isinstance(v, str):
+                        try:
+                            decoded[k] = bytes.fromhex(v)
+                        except ValueError:
+                            decoded[k] = v
+                    else:
+                        decoded[k] = v
+                val = decoded
+            kwargs[f_name] = val
+        return cls(**kwargs)
+
+    def save(self, path: str | Path) -> None:
+        """Write config as JSON to *path*."""
+        Path(path).write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+
+    @classmethod
+    def load(cls, path: str | Path) -> "ProxyConfig":
+        """Load config from a JSON file written by save()."""
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        return cls.from_dict(data)

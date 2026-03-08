@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from ..config import ProxyConfig
 from ..models import Direction
@@ -43,6 +43,9 @@ from ..intercept.controller import InterceptController, PassthroughController
 from ..tls.handler import TLSHandler
 from .session import SessionRegistry, Session
 from .relay import BidirectionalRelay
+
+if TYPE_CHECKING:
+    from ..rules.engine import RulesEngine
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +74,7 @@ class ProxyEngine:
         intercept_controller: Optional[InterceptController] = None,
         event_bus:            Optional[EventBus]            = None,
         session_registry:     Optional[SessionRegistry]     = None,
+        rules_engine:         "Optional[RulesEngine]"       = None,
     ) -> None:
         self.config               = config
         # Use explicit is-None checks rather than truthiness (`or`) because
@@ -79,6 +83,7 @@ class ProxyEngine:
         self.intercept_controller = intercept_controller if intercept_controller is not None else PassthroughController()
         self.event_bus            = event_bus            if event_bus            is not None else EventBus()
         self.session_registry     = session_registry     if session_registry     is not None else SessionRegistry()
+        self.rules_engine         = rules_engine
 
         # TLS handler — generates/loads the CA and builds SSL contexts.
         # setup() is called in start() so cert generation happens lazily.
@@ -255,6 +260,7 @@ class ProxyEngine:
             intercept_controller=self.intercept_controller,
             event_bus=self.event_bus,
             read_buffer_size=self.config.read_buffer_size,
+            rules_engine=self.rules_engine,
         )
 
         # Run the relay as a tracked background task

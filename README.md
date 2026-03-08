@@ -15,8 +15,11 @@ This is a personal security research tool. It prioritises **readability, extensi
 - **Multi-session** — handles many concurrent connections on one listener
 - **Bidirectional capture** — every frame logged with direction, timestamp, sequence number
 - **Interception queue** — pause frames mid-stream, inspect, modify, forward, or drop
+- **Intercept rules** — filter which frames get intercepted (by pattern, direction); first-match-wins ordered list
+- **Replace rules** — auto-rewrite byte patterns before frames reach the intercept queue
 - **Three built-in framers** — raw (passthrough), delimiter (`\n`, `\r\n`, …), length-prefix (1/2/4/8 byte)
-- **Replay engine** — re-send captured sessions with optional per-frame modifications, direction filter, and frame selector syntax
+- **Repeater** — hand-craft or modify frames and send them directly to the target; full send history
+- **Project system** — save/load proxy config, intercept/replace rules, and repeater requests to a JSON file
 - **Protocol definition DSL** — describe any binary protocol in a YAML or JSON file; no code required
 - **Protocol parser** — automatically decode frames into named, typed fields with offset and size metadata
 - **Three match strategies** — identify packet types by magic bytes, by stream sequence position, or with a catch-all
@@ -24,8 +27,10 @@ This is a personal security research tool. It prioritises **readability, extensi
 - **Field-level intercept editing** — modify a single field by name, length fields auto-recomputed on encode
 - **Field-level replay** — replay with per-message-type field edits, no manual frame ID tracking needed
 - **Wireshark-style display** — hex dump with per-field ANSI colour highlights + nested field tree panel
+- **Terminal UI (TUI)** — full Textual-based GUI: Config, Logs, Intercept, and Repeater tabs
+- **MCP server** — expose all proxy operations as AI tools via the Model Context Protocol (optional)
 - **Event bus** — subscribe async handlers to session open/close and frame events
-- **Pluggable storage** — interface ready for SQLite or any backend
+- **Pluggable storage** — in-memory default; SQLite backend interface ready for persistence
 
 ---
 
@@ -36,9 +41,11 @@ This is a personal security research tool. It prioritises **readability, extensi
 | Package | Purpose |
 |---|---|
 | `cryptography >= 41` | TLS MITM: root CA generation, per-session certificate signing |
+| `textual >= 0.80` | Terminal UI framework |
 | `pyyaml` *(optional)* | Load protocol definitions from `.yaml` / `.yml` files. JSON files work without it. |
+| `mcp >= 1.0` *(optional)* | MCP server (`pip install "protopoke[mcp]"`) |
 
-The proxy core (relay, framing, intercept, replay, protocol parser) uses only the standard library. `cryptography` is only imported when `tls_listen=True` or `tls_upstream=True`. `pyyaml` is only imported when loading a YAML definition file.
+The proxy core uses only the standard library. `cryptography` is only imported when `tls_listen=True` or `tls_upstream=True`. `pyyaml` is only imported when loading a YAML definition file.
 
 ### Development / testing
 
@@ -80,11 +87,99 @@ pip install -e ".[dev]"
 pytest
 ```
 
+To install with MCP support:
+
+```bash
+pip install -e ".[mcp]"
+# or install everything:
+pip install -e ".[all]"
+```
+
 > **Python 3.11+ required.**
 
 ---
 
-## Usage
+## Running the TUI
+
+After installation the `protopoke` command is available on your PATH:
+
+```bash
+protopoke
+```
+
+Or run directly:
+
+```bash
+python -m protopoke.ui.app
+```
+
+The TUI opens with four tabs:
+
+| Tab | Key | Description |
+|---|---|---|
+| **Config** | F1 | Configure the listener, upstream server, TLS, framing, and protocol definition. Start/Stop the proxy. |
+| **Logs** | F2 | Live session list → frame list → hex/parsed detail view. Send any frame to the Repeater. |
+| **Intercept** | F3 | View the interception queue; forward, drop, or modify-and-forward individual frames. Manage ordered intercept and replace rules. |
+| **Repeater** | F4 | Hand-craft frames in a hex editor and send them to the target; review the full send history. |
+
+### Keyboard shortcuts
+
+| Key | Action |
+|---|---|
+| F1–F4 | Switch tabs |
+| Ctrl+N | New project |
+| Ctrl+O | Open project |
+| Ctrl+S | Save project |
+| Ctrl+Shift+S | Save project as… |
+| Ctrl+Q | Quit |
+
+### Project files
+
+Projects save your proxy config, intercept/replace rules, and repeater requests to a JSON file. Use **Ctrl+N** to start fresh, **Ctrl+O** to open an existing project, and **Ctrl+S** to save.
+
+---
+
+## MCP Server
+
+ProtoPoke exposes all `ProxyAPI` operations as [Model Context Protocol](https://modelcontextprotocol.io/) tools so an AI assistant (Claude, etc.) can drive the proxy programmatically.
+
+Install the optional dependency:
+
+```bash
+pip install "protopoke[mcp]"
+```
+
+Use in code:
+
+```python
+from protopoke.api import ProxyAPI
+from protopoke.config import ProxyConfig
+from protopoke.mcp.server import build_mcp_server
+
+config = ProxyConfig(listen_port=8080, upstream_host="10.0.0.1", upstream_port=9090)
+api = ProxyAPI(config)
+mcp = build_mcp_server(api)
+
+# Run as a standalone MCP server (STDIO transport — for Claude Desktop etc.)
+mcp.run()
+```
+
+Available MCP tools:
+
+| Tool group | Tools |
+|---|---|
+| Proxy lifecycle | `proxy_status`, `proxy_start`, `proxy_stop` |
+| Sessions | `list_sessions`, `get_session`, `get_frames`, `decode_frames` |
+| Interception | `intercept_status`, `intercept_toggle`, `list_intercepted`, `intercept_forward`, `intercept_drop`, `intercept_modify_and_forward` |
+| Replace rules | `list_replace_rules`, `add_replace_rule`, `remove_replace_rule` |
+| Intercept rules | `list_intercept_rules`, `add_intercept_rule`, `remove_intercept_rule` |
+| Repeater | `send_frame` |
+| Replay | `replay_session` |
+| Config | `get_config`, `set_config` |
+
+---
+
+## Usage (Python API)
 
 ### Step 1 — Frame the stream
 
@@ -129,7 +224,7 @@ config = ProxyConfig(
     framer_kwargs={"delimiter": b"\r\n"},
 )
 ```
-The framer accumulates bytes until it sees `\r\n`, then emits everything before it as one frame. A Redis client sending `PING\r\n` always produces exactly one frame.
+The framer accumulates bytes until it sees `\r\n`, then emits everything before it as one frame.
 
 **Length-prefix (binary protocols):**
 ```python
@@ -141,9 +236,9 @@ config = ProxyConfig(
     framer_kwargs={"prefix_length": 4, "byte_order": "big"},
 )
 ```
-The framer reads the first 4 bytes as a big-endian integer `N`, then buffers until it has exactly `N` more bytes, and emits the full `header + payload` as one frame. Even if the OS splits a 1 000-byte message across five `read()` calls, the frame is only emitted once it is complete.
+The framer reads the first 4 bytes as a big-endian integer `N`, then buffers until it has exactly `N` more bytes, and emits the full `header + payload` as one frame.
 
-**Custom framer (protocol-specific logic):**
+**Custom framer:**
 ```python
 from protopoke.framing.base import Framer
 from protopoke.framing import FRAMER_REGISTRY
@@ -157,7 +252,6 @@ class MyFramer(Framer):
         return frames
 
     def flush(self) -> list[Frame]:
-        # called on connection close — emit whatever is left
         return []
 
     def reset(self) -> None:
@@ -167,7 +261,7 @@ FRAMER_REGISTRY["myproto"] = MyFramer
 config = ProxyConfig(framer_name="myproto", ...)
 ```
 
-> **How to find the right framer:** capture a few raw frames first (`framer_name="raw"`), open them in a hex editor, and look for repeating patterns at fixed offsets. A 2- or 4-byte integer right at the start whose value matches the remaining byte count is a length prefix. Repeated `\x00` or `\r\n` terminations mean a delimiter framer. No obvious pattern — read the protocol spec or reverse-engineer further before writing a custom framer.
+> **How to find the right framer:** capture a few raw frames first (`framer_name="raw"`), open them in a hex editor, and look for repeating patterns at fixed offsets. A 2- or 4-byte integer right at the start whose value matches the remaining byte count is a length prefix. Repeated `\x00` or `\r\n` terminations mean a delimiter framer.
 
 ---
 
@@ -259,8 +353,6 @@ print(msg.field_by_name("username").value)          # "admin"
 api.modify_field_and_forward(unit.id, {"username": "hacker"})
 ```
 
-The two steps are independent: you can swap framers without touching your YAML definition, and you can iterate on the definition without ever changing framing configuration. Get Step 1 right first — a wrong framer makes every dissector output wrong — then iterate on Step 2.
-
 ---
 
 ## start() vs serve_forever()
@@ -335,7 +427,7 @@ async def main():
         print(f"[{event.session.id[:8]}] {arrow} {event.frame.raw_bytes!r}")
 
     api.on_frame_captured(on_frame)
-    await api.serve_forever()   # standalone: blocks until Ctrl-C, no stop() needed
+    await api.serve_forever()
 
 asyncio.run(main())
 ```
@@ -345,8 +437,6 @@ asyncio.run(main())
 ---
 
 ### 2 — Intercept, inspect, and modify frames
-
-Enable interception in the config, then process the queue:
 
 ```python
 import asyncio
@@ -358,23 +448,22 @@ async def main():
         listen_port=8080,
         upstream_host="10.0.0.1",
         upstream_port=9090,
-        intercept_enabled=True,          # pause frames for operator decision
+        intercept_enabled=True,
     )
     api = ProxyAPI(config)
-    await api.start()                    # start() returns immediately
+    await api.start()
     try:
         while True:
-            unit = await api.get_next_intercepted()   # blocks until a frame arrives
+            unit = await api.get_next_intercepted()
             frame = unit.frame
 
             print(f"Intercepted [{frame.direction.value}]: {frame.raw_bytes!r}")
 
-            # Choose one:
             api.forward(unit.id)                      # forward as-is
             # api.drop(unit.id)                       # discard
-            # api.modify_and_forward(unit.id, b"new data") # replace bytes
+            # api.modify_and_forward(unit.id, b"new data")
     finally:
-        await api.stop()                 # always clean up after start()
+        await api.stop()
 
 asyncio.run(main())
 ```
@@ -412,7 +501,6 @@ for frame in result.server_frames_received():
 Replay to a different server, or with modified frames:
 
 ```python
-# Replace one frame's bytes in the replay
 result = await api.replay_session(
     session_id,
     server_host="staging.internal",
@@ -435,7 +523,7 @@ config = ProxyConfig(
     upstream_host="10.0.0.1",
     upstream_port=9090,
     framer_name="delimiter",
-    framer_kwargs={"delimiter": b"\r\n"},   # one frame per CRLF-terminated line
+    framer_kwargs={"delimiter": b"\r\n"},
 )
 ```
 
@@ -444,26 +532,8 @@ For length-prefix binary protocols:
 ```python
 config = ProxyConfig(
     framer_name="length_prefix",
-    framer_kwargs={"prefix_length": 4, "byte_order": "big"},  # 4-byte big-endian header
+    framer_kwargs={"prefix_length": 4, "byte_order": "big"},
 )
-```
-
-To implement a custom framer for your protocol:
-
-```python
-from protopoke.framing.base import Framer
-from protopoke.framing import FRAMER_REGISTRY
-
-class MyProtocolFramer(Framer):
-    def feed(self, data: bytes) -> list[Frame]:
-        # accumulate bytes in self._buffer, return complete frames
-        ...
-    def flush(self) -> list[Frame]: ...
-    def reset(self) -> None: ...
-
-FRAMER_REGISTRY["myproto"] = MyProtocolFramer
-
-config = ProxyConfig(framer_name="myproto", ...)
 ```
 
 ---
@@ -502,20 +572,7 @@ api.on_session_closed(on_close)
 
 ---
 
-### 8 — Limit concurrent sessions
-
-```python
-config = ProxyConfig(
-    listen_port=8080,
-    upstream_host="10.0.0.1",
-    upstream_port=9090,
-    max_sessions=10,    # reject connections beyond this limit
-)
-```
-
----
-
-### 9 — TLS MITM (Burp-style)
+### 8 — TLS MITM (Burp-style)
 
 On first run the proxy auto-generates a root CA at `~/.protopoke/ca.crt`. Install that file as a trusted root in your client (browser, OS, curl, etc.) once. Every subsequent session gets a fresh CA-signed leaf certificate transparently.
 
@@ -537,19 +594,7 @@ with open("protopoke-ca.crt", "wb") as f:
 print("Install protopoke-ca.crt as a trusted root, then connect to localhost:8443")
 ```
 
-TLS-only client side (proxy connects to a plain upstream):
-
-```python
-config = ProxyConfig(
-    listen_port=8443,
-    upstream_host="10.0.0.1",
-    upstream_port=9090,
-    tls_listen=True,         # clients connect over TLS
-    tls_upstream=False,      # upstream is plain TCP (default)
-)
-```
-
-Supply your own certificate instead of using the auto-CA (e.g. a wildcard cert your clients already trust):
+Supply your own certificate instead of using the auto-CA:
 
 ```python
 config = ProxyConfig(
@@ -564,22 +609,9 @@ config = ProxyConfig(
 )
 ```
 
-Use a custom CA location (e.g. a corporate CA that machines already trust):
-
-```python
-config = ProxyConfig(
-    tls_listen=True,
-    tls_upstream=True,
-    ca_cert_path="/etc/corporate-ca/ca.crt",
-    ca_key_path="/etc/corporate-ca/ca.key",
-    upstream_host="internal.corp",
-    upstream_port=443,
-)
-```
-
 ---
 
-### 10 — Protocol definitions
+### 9 — Protocol definitions
 
 Define your protocol in a YAML file. Point the proxy at it and every captured frame is automatically decoded into named fields.
 
@@ -596,11 +628,11 @@ protocol:
 
     # Magic bytes at a fixed offset
     - name: "LoginRequest"
-      direction: client_to_server   # optional direction filter
+      direction: client_to_server
       match:
         type: magic
         offset: 0
-        value: "0x01"              # or [0x01, 0x02] for multi-byte magic
+        value: "0x01"
       fields:
         - { name: opcode,        type: uint8  }
         - { name: username_len,  type: uint16 }
@@ -608,12 +640,12 @@ protocol:
         - { name: password_len,  type: uint16 }
         - { name: password,      type: bytes,  length: "{password_len}", display: hex }
 
-    # Stream sequence position (no magic bytes — first packet from server)
+    # Stream sequence position
     - name: "ServerBanner"
       match:
         type: sequence
         direction: server_to_client
-        index: 0          # 0-based: 0 = first packet in this direction
+        index: 0
       fields:
         - { name: banner, type: string, length: -1, encoding: ascii }
 
@@ -661,24 +693,7 @@ protocol:
                   1: away
                   2: admin
 
-    # Status codes with human-readable labels
-    - name: "LoginResponse"
-      direction: server_to_client
-      match:
-        type: magic
-        offset: 0
-        value: "0x02"
-      fields:
-        - { name: opcode,  type: uint8 }
-        - name: status
-          type: uint8
-          enum:
-            0x00: "Success"
-            0x01: "Invalid credentials"
-            0x02: "Account locked"
-        - { name: token, type: bytes, length: 16, display: hex }
-
-    # Catch-all — matches anything not identified above
+    # Catch-all
     - name: "Unknown"
       match:
         type: always
@@ -719,42 +734,31 @@ config = ProxyConfig(
     upstream_port=9090,
     protocol_definition_path="myproto.yaml",  # .yaml, .yml, or .json
 )
-api = ProxyAPI(config)
-await api.start()
 
 # Or at runtime
 api.set_protocol_file("myproto.yaml")
 
 # Or from a dict (useful in tests / scripts)
-api.set_protocol_dict({
-    "name": "MyProto",
-    "messages": [...],
-})
+api.set_protocol_dict({"name": "MyProto", "messages": [...]})
 ```
 
 #### Decoding frames
 
 ```python
-# Decode one frame
 msg = api.decode_frame(frame)
 print(msg.message_type)   # e.g. "LoginRequest"
 for field in msg.fields:
     print(f"  {field.name}: {field.display_value}  (offset={field.offset}, size={field.size})")
 
-# Decode all frames in a session
-messages = api.decode_session_frames(session_id)
-
-# Access a field by name
 msg.field_by_name("username").value    # Python value (str, int, bytes, …)
 msg.as_dict()                          # {field_name: value, …}
 ```
 
 ---
 
-### 11 — Protocol-aware interception
+### 10 — Protocol-aware interception
 
 ```python
-# get_next_intercepted_parsed() returns both the raw unit and the decoded view
 unit, msg = await api.get_next_intercepted_parsed()
 
 print(msg.message_type)               # "LoginRequest"
@@ -767,13 +771,9 @@ api.modify_field_and_forward(unit.id, {"username": "hacker"})
 api.modify_and_forward(unit.id, b"\x01\x00\x06hacker...")
 ```
 
-> See `examples/protocol_intercept_demo.py` for a full interactive CLI with field editing, hex editing, and the Wireshark-style display.
-
 ---
 
-### 12 — Protocol-aware replay
-
-Replay with per-message-type field edits. The encoder decodes each frame, applies your edits, and re-encodes — no manual frame ID tracking needed:
+### 11 — Protocol-aware replay
 
 ```python
 result = await api.replay_session_with_field_edits(
@@ -781,27 +781,15 @@ result = await api.replay_session_with_field_edits(
     field_edits={
         "LoginRequest": {
             "username": "admin2",
-            "password": b"newpassword",   # password_len is auto-updated
+            "password": b"newpassword",
         },
     },
 )
 ```
 
-Mix with the existing `modified_frames` raw-bytes override for frames you want to control at the byte level:
-
-```python
-result = await api.replay_session(
-    session_id,
-    frame_selector="1-5",                    # only the first five frames
-    modified_frames={frame_id: b"..."},       # raw override for specific frames
-)
-```
-
-> See `examples/protocol_replay_demo.py` for a full interactive demo.
-
 ---
 
-### 13 — Wireshark-style display
+### 12 — Wireshark-style display
 
 ```python
 from protopoke.protocol.display import (
@@ -817,24 +805,18 @@ msg = api.decode_frame(frame)
 print(render_frame_header(frame, msg))
 # Frame #3  C→S  10:23:45.123  48 bytes  [ChatProtocol] LoginRequest
 
-# Field detail panel with box-drawing chrome
+# Field detail panel
 print(render_field_tree(msg))
 # ┌─ ChatProtocol / LoginRequest ─────────────────────────────────────┐
 # │  opcode       [0x0000,  1B]   0x01                                │
 # │  username_len [0x0001,  2B]   5                                   │
 # │  username     [0x0003,  5B]   admin                               │
-# │  password_len [0x0008,  2B]   6                                   │
-# │  password     [0x000A,  6B]   73 65 63 72 65 74                   │
 # └────────────────────────────────────────────────────────────────────┘
 
 # Hex dump with per-field colour highlights
 highlights = highlights_from_message(msg)
 print(render_hexdump(frame.raw_bytes, highlights=highlights))
-# Offset    00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F    ASCII
-# 00000000  01 00 05 61 64 6D 69 6E  00 06 73 65 63 72 65 74    ...admin..secret
 ```
-
-Colour highlights are auto-disabled when stdout is not a TTY, or set `NO_COLOR=1` to force plain output.
 
 ---
 
@@ -874,13 +856,36 @@ protopoke/
 │   │       └── tree.py     # Box-drawing field detail panel with nested TLV/array children
 │   ├── intercept/
 │   │   └── controller.py   # PassthroughController + QueuedInterceptController
+│   ├── rules/
+│   │   ├── rule.py         # InterceptRule, ReplaceRule dataclasses + RuleAction enum
+│   │   ├── engine.py       # RulesEngine: ordered replace-rule pipeline
+│   │   └── filter.py       # InterceptFilter: ordered intercept-rule evaluation
 │   ├── replay/
-│   │   └── engine.py       # ReplayEngine + ReplayResult (direction filter, frame selector)
+│   │   ├── engine.py       # ReplayEngine + ReplayResult (direction filter, frame selector)
+│   │   └── models.py       # RepeaterRequest + SendRecord (for the UI repeater tab)
+│   ├── project/
+│   │   └── manager.py      # ProjectManager: new/open/save project files (JSON)
+│   ├── storage/
+│   │   └── base.py         # StorageBackend ABC, NullStorage, MemoryStorage
 │   ├── events/
 │   │   └── bus.py          # EventBus (pub/sub, async handlers)
-│   └── storage/
-│       └── base.py         # StorageBackend ABC, NullStorage, MemoryStorage
-├── tests/                  # 176 tests (unit + integration)
+│   ├── mcp/
+│   │   └── server.py       # FastMCP server exposing all ProxyAPI operations as tools
+│   └── ui/
+│       ├── app.py          # ProtoPoke(App) — main Textual application, event bridge
+│       ├── tabs/
+│       │   ├── config.py   # ConfigTab — proxy configuration form
+│       │   ├── logs.py     # LogsTab — sessions, frames, hex/parsed detail
+│       │   ├── intercept.py # InterceptTab — queue, hex editor, intercept/replace rules
+│       │   └── repeater.py # RepeaterTab — hand-craft and replay frames
+│       ├── modals/
+│       │   ├── project.py  # NewProjectModal, OpenProjectModal, SaveAsModal
+│       │   ├── new_request.py # NewRequestModal — create a repeater request
+│       │   └── add_rule.py # AddInterceptRuleModal, AddReplaceRuleModal
+│       └── widgets/
+│           ├── rule_table.py # RuleTable — DataTable + Add/Remove/Move toolbar
+│           └── parsed_view.py # ParsedView — hex ↔ field-tree toggle pane
+├── tests/                  # Unit + integration tests
 └── examples/
     ├── simple_proxy.py                 # Passthrough with frame printing
     ├── intercept_demo.py               # Interactive CLI intercept / hex edit
@@ -909,99 +914,80 @@ The five layers (transport, framing, protocol, intercept, replay) are in separat
 
 **Tradeoff:** More files than a monolith. The payoff is that you can swap any layer (e.g. add a new framer, a new intercept backend, a SQLite storage layer) without touching unrelated code.
 
-### TCP half-close on EOF
-
-When one side of the connection closes, the relay sends a TCP FIN (`write_eof()`) to the other side rather than immediately calling `close()`. This lets the remote peer finish sending its in-flight response before the connection tears down — essential for request/response protocols over TCP.
-
-**Tradeoff:** Slightly more complex cleanup logic. `BidirectionalRelay` owns all four stream objects and closes them after both relay tasks have finished.
-
 ### Framing separated from protocol decoding
 
 A framer finds *message boundaries* in the byte stream. A protocol decoder interprets *message content*. These are independent: you can frame without decoding (capture with an unknown protocol), swap framers without changing decoders, and add decoders later without touching the relay.
-
-**Tradeoff:** Two abstraction layers instead of one. For a known, simple protocol you could merge them, but doing so would prevent reuse and make the intercept UI harder to build.
 
 ### ParsedField carries offset + size + raw bytes
 
 Every `ParsedField` knows exactly where it lives in the original frame (`offset`, `size`, `raw_bytes`). This serves three purposes simultaneously: the hex-dump renderer can highlight each field's byte range in a distinct colour; the encoder can re-assemble bytes field-by-field when the operator edits a value; and nested structures (TLV entries, array items) are expressed as `children` on a parent field, matching the Wireshark tree model exactly.
 
-**Tradeoff:** Slightly heavier objects than storing only the decoded value. The overhead is negligible at the frame sizes a research tool handles.
-
 ### Encoder auto-recomputes length fields
 
-When a variable-length field (e.g. `username`) is edited and re-encoded, the encoder walks the message definition looking for any other field whose `length` expression is `{username_len}` and recalculates that field's value from the encoded byte count. The operator edits `username`, not `username_len`. This mirrors what Burp's repeater does transparently.
-
-**Tradeoff:** The heuristic (`length == "{field_name}"`) covers the common case of a simple scalar length field. Complex interdependencies (e.g. a length field covering multiple downstream fields) may still need a manual override.
+When a variable-length field (e.g. `username`) is edited and re-encoded, the encoder walks the message definition looking for any other field whose `length` expression is `{username_len}` and recalculates that field's value from the encoded byte count. The operator edits `username`, not `username_len`.
 
 ### Safe expression evaluator
 
 Length and count expressions (`"{total_length - 5}"`) are evaluated with Python's `eval()` on an AST that has been pre-validated to allow only arithmetic operators, name references, and a fixed whitelist of builtins (`min`, `max`, `abs`, `int`). Any other node type — attribute access, subscript, import, arbitrary call — raises `ValueError` before `eval()` runs.
 
-Protocol definitions are authored by the tool operator themselves from local files they control, so this is defence-in-depth against typos and accidental complexity rather than a security sandbox.
+### Textual TUI — container base for compose-only widgets
+
+In Textual 8, custom widgets that use only `compose()` (no `render()`) must inherit from a container type (`Vertical`, `Horizontal`) rather than bare `Widget`. `Widget._render()` is part of Textual's visual pipeline and must not be overridden with application logic.
+
+### EventBus → Textual message bridge
+
+The proxy event callbacks run on asyncio and post internal `Message` subclasses onto Textual's message queue via `app.post_message()`. Textual processes these on the UI thread. This keeps the proxy core free of any Textual dependency while still delivering real-time updates to the UI.
 
 ### `is None` checks instead of `or` for optional parameters
 
-`empty_registry or SessionRegistry()` silently created a second registry because `SessionRegistry.__len__` returns `0` when empty, making an empty instance falsy. All optional dependency injection uses explicit `if x is not None else default` guards.
-
-**Tradeoff:** More verbose than `or`. The verbosity is worth it — the `or` bug caused frames to be captured in a registry that the API never queried, a failure mode that is silent and very hard to debug.
+`empty_registry or SessionRegistry()` silently creates a second registry because `SessionRegistry.__len__` returns `0` when empty, making an empty instance falsy. All optional dependency injection uses explicit `if x is not None else default` guards.
 
 ### In-memory frame storage by default
 
 Frames are kept in `Session.frames` (a plain list) during the session. The `StorageBackend` interface exists for persistence but defaults to a no-op. This keeps the core simple and dependency-free.
 
-**Tradeoff:** Unbounded memory for long sessions with high traffic. Mitigated by a future SQLite backend that flushes frames on `FrameCapturedEvent`.
-
 ### TLS MITM: certificate-per-session, not ssl= on a socket
 
-Passing `ssl=SSLContext` to asyncio is enough for TLS *forwarding* (encrypted tunnel, contents opaque). For TLS *interception* the proxy must terminate TLS on both sides independently so the relay operates on plaintext bytes. That requires the proxy to present a certificate the client trusts. Two-stage design:
+For TLS interception the proxy must terminate TLS on both sides independently so the relay operates on plaintext bytes. Two-stage design:
 
 1. **`protopoke/tls/ca.py`** — `CertificateAuthority` generates an RSA-2048 root CA on first run and persists it at `~/.protopoke/ca.crt`. For each target hostname it issues a short-lived leaf cert (RSA-2048, correct SAN for DNS or IP, signed by the CA, cached in-memory).
-2. **`protopoke/tls/handler.py`** — `TLSHandler` builds `ssl.SSLContext` objects from those certs and exposes `get_listen_ssl_context()` / `get_upstream_ssl_context()` which are passed directly to `asyncio.start_server()` and `asyncio.open_connection()`. The relay, framing, and intercept layers are untouched — they see plaintext `StreamReader`/`StreamWriter` regardless of whether TLS is in use.
+2. **`protopoke/tls/handler.py`** — `TLSHandler` builds `ssl.SSLContext` objects from those certs and passes them to `asyncio.start_server()` and `asyncio.open_connection()`. The relay, framing, and intercept layers see plaintext regardless of whether TLS is in use.
 
-The `cryptography` library is used specifically for cert generation because Python's built-in `ssl` module has no API for creating X.509 certificates programmatically.
-
-**Tradeoff:** TLS does not support TCP half-close (`write_eof()` raises `NotImplementedError` on `SSLTransport`). The relay's `_send_eof_to_dest()` already guards with `can_write_eof()` before calling `write_eof()`, so the relay code is unchanged. For TLS sessions, the connection closes fully rather than half-closes when one side finishes sending.
+**Tradeoff:** TLS does not support TCP half-close (`write_eof()` raises `NotImplementedError` on `SSLTransport`). The relay's `_send_eof_to_dest()` guards with `can_write_eof()` before calling `write_eof()`.
 
 ---
 
 ## Roadmap
 
+### Completed
+
+- **TLS MITM** ✅ — auto-CA generation, per-session leaf certs, configurable upstream verify, manual cert override
+- **Protocol definition DSL** ✅ — YAML/JSON; magic, sequence, and always match rules; rich field types; enum labels
+- **Field-level intercept editing** ✅ — `modify_field_and_forward()` re-encodes with field name → value dict; length fields auto-recomputed
+- **Field-level replay** ✅ — `replay_session_with_field_edits()` applies per-message-type field edits
+- **Wireshark-style display** ✅ — `render_hexdump()` with ANSI highlights, `render_field_tree()`, `render_frame_header()`
+- **Intercept / replace rules** ✅ — ordered, filterable, first-match-wins intercept rules; byte-pattern replace rules
+- **Terminal UI** ✅ — Textual TUI with Config, Logs, Intercept, and Repeater tabs; project save/load
+- **MCP server** ✅ — FastMCP wrapper exposing all ProxyAPI operations as AI tools
+
 ### Near term
 
-- **SQLite persistence** — implement `SqliteStorageBackend` using `aiosqlite`. Subscribe to `FrameCapturedEvent` and write frames as they arrive. The `Frame` and `SessionInfo` dataclasses map directly to table rows with no schema redesign needed.
+- **SQLite persistence** — implement `SqliteStorageBackend` using `aiosqlite`. The `Frame` and `SessionInfo` dataclasses map directly to table rows with no schema redesign needed.
 
-- **TLS MITM** ✅ *implemented* — auto-CA generation, per-session leaf certs, configurable upstream verify, manual cert override. See `protopoke/tls/` and [TLS MITM design decision](#tls-mitm-certificate-per-session-not-ssl-on-a-socket).
-
-- **SNI-aware cert dispatch** — currently the proxy issues one leaf cert for `upstream_host` at startup. A full SNI callback (`ssl.SSLContext.set_servername_callback`) would let the proxy issue a correctly-named cert for each unique `server_name` presented during the TLS handshake, which matters when the same listener proxies multiple hostnames (e.g. a wildcard CONNECT proxy).
-
-- **HTTP/REST control API** — wrap `ProxyAPI` in an `aiohttp` or `FastAPI` server to expose session listing, intercept queue, and replay over HTTP/WebSocket. This enables a browser-based UI without any changes to the proxy core.
+- **SNI-aware cert dispatch** — currently the proxy issues one leaf cert for `upstream_host` at startup. A full SNI callback would let the proxy issue a correctly-named cert for each unique `server_name` presented during the TLS handshake.
 
 ### Protocol layer
-
-- **Protocol definition DSL** ✅ *implemented* — define field layouts in YAML or JSON; the `DefinitionBasedDecoder` decodes frames automatically. Supports magic-byte, sequence, and always match rules; integers, bytes, strings, bitfields, arrays, TLV sequences; variable-length `{expression}` references; enum value labels; and display hints. See `protopoke/protocol/`.
-
-- **Field-level intercept editing** ✅ *implemented* — `modify_field_and_forward()` re-encodes with a field name → value dict; length fields are auto-recomputed.
-
-- **Field-level replay** ✅ *implemented* — `replay_session_with_field_edits()` applies per-message-type field edits across all matching frames in a replay.
-
-- **Wireshark-style display** ✅ *implemented* — `render_hexdump()` with ANSI per-field highlights, `render_field_tree()` with nested children, `render_frame_header()` one-liner. See `protopoke/protocol/display/`.
 
 - **Protobuf / Thrift / Kaitai** — compile existing IDL schemas into `ProtocolDecoder` implementations. The interface (`decode(frame) -> ParsedMessage`) is simple enough to wrap any existing parser.
 
 - **Protocol decoder library** — implement `ProtocolDecoder` subclasses for common protocols (e.g. HTTP/1.1, Redis, DNS) as built-in options alongside the definition-based approach.
 
-### UI
-
-- **Terminal UI** — use `textual` or `prompt_toolkit` to build a Burp-like intercept queue view, session list, hex viewer, and in-place editor. All UI calls go through `ProxyAPI` — no direct access to internals.
-
 ### Advanced features
 
-- **Fuzzing hooks** — add a `FrameMutator` interface that sits between the intercept controller and the relay. `ReplayEngine.replay_session(modified_frames=...)` already supports targeted replacement; a mutator layer can automate this for coverage-guided or random fuzzing.
+- **Fuzzing hooks** — add a `FrameMutator` interface between the intercept controller and the relay. `ReplayEngine` already supports targeted replacement; a mutator layer can automate this for coverage-guided or random fuzzing.
 
-- **Differential replay** — replay the same session against two servers and compare responses frame-by-frame. Useful for regression testing after a fix.
+- **Differential replay** — replay the same session against two servers and compare responses frame-by-frame.
 
-- **Timed replay** — honour original inter-frame delays from the captured session, or inject custom delays, to reproduce timing-sensitive bugs.
-
-- **Per-session / per-direction intercept rules** — filter expressions (e.g. "only intercept frames matching this regex") to reduce noise when analysing high-volume protocols.
+- **Timed replay** — honour original inter-frame delays from the captured session, or inject custom delays.
 
 - **Plugin / dissector system** — load custom `Framer` or `ProtocolDecoder` subclasses from external Python modules at startup, without modifying the core package.

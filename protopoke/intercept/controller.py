@@ -39,9 +39,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
-from ..models import Frame, InterceptedUnit, InterceptAction
+from ..models import Direction, Frame, InterceptedUnit, InterceptAction
+
+if TYPE_CHECKING:
+    # Avoid a circular import at runtime; only used for type hints.
+    from ..rules.engine import InterceptFilter
 
 logger = logging.getLogger(__name__)
 
@@ -122,8 +126,28 @@ class QueuedInterceptController(InterceptController):
         that run on the same event loop, so no locks are needed.
     """
 
-    def __init__(self, intercept_enabled: bool = True) -> None:
+    def __init__(
+        self,
+        intercept_enabled: bool = True,
+        direction_filter:  Optional[Direction] = None,
+        session_filter:    Optional[set[str]] = None,
+        intercept_filter:  Optional["InterceptFilter"] = None,
+    ) -> None:
+        """
+        Args:
+            intercept_enabled:  Master on/off switch.
+            direction_filter:   When set, only frames in this direction are
+                                queued; the other direction passes through.
+            session_filter:     When set, only frames from these session IDs
+                                are queued; others pass through.
+            intercept_filter:   When set, each frame is evaluated against the
+                                InterceptFilter's rules before queuing.
+                                See InterceptFilter.should_intercept().
+        """
         self._intercept_enabled = intercept_enabled
+        self._direction_filter  = direction_filter
+        self._session_filter    = session_filter
+        self._intercept_filter  = intercept_filter
 
         # Live futures: unit_id → (unit, Future[InterceptedUnit])
         # The Future is resolved when set_verdict() is called.
@@ -153,6 +177,33 @@ class QueuedInterceptController(InterceptController):
         if not value:
             self._forward_all_pending()
 
+    @property
+    def direction_filter(self) -> Optional[Direction]:
+        """Only intercept frames in this direction; ``None`` = both."""
+        return self._direction_filter
+
+    @direction_filter.setter
+    def direction_filter(self, value: Optional[Direction]) -> None:
+        self._direction_filter = value
+
+    @property
+    def session_filter(self) -> Optional[set[str]]:
+        """Only intercept frames from these session IDs; ``None`` = all."""
+        return self._session_filter
+
+    @session_filter.setter
+    def session_filter(self, value: Optional[set[str]]) -> None:
+        self._session_filter = value
+
+    @property
+    def intercept_filter(self) -> "Optional[InterceptFilter]":
+        """Rule-based intercept filter (``None`` = no rules, intercept all)."""
+        return self._intercept_filter
+
+    @intercept_filter.setter
+    def intercept_filter(self, value: "Optional[InterceptFilter]") -> None:
+        self._intercept_filter = value
+
     # ------------------------------------------------------------------
     # InterceptController interface
     # ------------------------------------------------------------------
@@ -160,13 +211,41 @@ class QueuedInterceptController(InterceptController):
     async def process(self, frame: Frame) -> InterceptedUnit:
         """
         If intercept is on: hold frame and wait for operator verdict.
-        If intercept is off: forward immediately.
+        If intercept is off (or frame is filtered out): forward immediately.
+
+        Filtering order:
+          1. Master ``intercept_enabled`` switch.
+          2. ``direction_filter`` — pass through wrong-direction frames.
+          3. ``session_filter``   — pass through out-of-scope sessions.
+          4. ``intercept_filter`` — rule-based decision (INTERCEPT/FORWARD).
         """
         unit = InterceptedUnit.from_frame(frame)
 
         if not self._intercept_enabled:
             unit.action = InterceptAction.FORWARD
             return unit
+
+        # Direction filter
+        if (
+            self._direction_filter is not None
+            and frame.direction is not self._direction_filter
+        ):
+            unit.action = InterceptAction.FORWARD
+            return unit
+
+        # Session filter
+        if (
+            self._session_filter is not None
+            and frame.session_id not in self._session_filter
+        ):
+            unit.action = InterceptAction.FORWARD
+            return unit
+
+        # Rule-based intercept filter
+        if self._intercept_filter is not None:
+            if not self._intercept_filter.should_intercept(frame):
+                unit.action = InterceptAction.FORWARD
+                return unit
 
         # Create a future this coroutine will await
         loop = asyncio.get_running_loop()
