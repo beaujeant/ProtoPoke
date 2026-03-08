@@ -71,6 +71,9 @@ from .intercept.controller import (
     QueuedInterceptController,
 )
 from .replay.engine import ReplayEngine, ReplayResult
+from .replay.models import SendRecord, RepeaterRequest
+from .rules.engine import RulesEngine, InterceptFilter
+from .rules.rule import ReplaceRule, InterceptRule
 from .storage.base import StorageBackend, NullStorageBackend
 from .protocol.base import ProtocolDecoder, ProtocolEncoder, PassthroughDecoder
 
@@ -87,8 +90,10 @@ class ProxyAPI:
 
     def __init__(
         self,
-        config:  ProxyConfig,
-        storage: Optional[StorageBackend] = None,
+        config:           ProxyConfig,
+        storage:          Optional[StorageBackend] = None,
+        rules_engine:     Optional[RulesEngine]    = None,
+        intercept_filter: Optional[InterceptFilter] = None,
     ) -> None:
         self.config = config
 
@@ -97,19 +102,27 @@ class ProxyAPI:
         self.session_registry = SessionRegistry()
         self.storage          = storage or NullStorageBackend()
 
+        # Rules engines (replace rules + intercept rules)
+        self.rules_engine     = rules_engine     or RulesEngine()
+        self.intercept_filter = intercept_filter or InterceptFilter()
+
         # Select intercept controller based on config
         self._intercept_controller: InterceptController
         if config.intercept_enabled:
-            self._intercept_controller = QueuedInterceptController(intercept_enabled=True)
+            self._intercept_controller = QueuedInterceptController(
+                intercept_enabled=True,
+                intercept_filter=self.intercept_filter,
+            )
         else:
             self._intercept_controller = PassthroughController()
 
-        # Core engine
+        # Core engine (passes rules_engine to relay)
         self.engine = ProxyEngine(
             config=config,
             intercept_controller=self._intercept_controller,
             event_bus=self.event_bus,
             session_registry=self.session_registry,
+            rules_engine=self.rules_engine,
         )
 
         # Replay engine
@@ -577,6 +590,102 @@ class ProxyAPI:
             direction=direction,
             frame_selector=frame_selector,
         )
+
+    # ------------------------------------------------------------------
+    # Repeater: single-frame direct send
+    # ------------------------------------------------------------------
+
+    async def send_frame(
+        self,
+        data:            bytes,
+        host:            str,
+        port:            int,
+        tls:             bool  = False,
+        connect_timeout: Optional[float] = None,
+    ) -> SendRecord:
+        """
+        Send raw bytes to *host*:*port* and return a :class:`SendRecord`.
+
+        Opens a direct TCP connection (bypassing the proxy listener),
+        sends *data*, signals EOF, reads all response bytes, then closes
+        the connection.  Suitable for the Repeater tab's one-shot send.
+
+        Args:
+            data:            Bytes to send.
+            host:            Target hostname or IP address.
+            port:            Target TCP port.
+            tls:             Wrap the connection in TLS (no cert verification).
+            connect_timeout: Override the default connect timeout.
+
+        Returns:
+            :class:`~protopoke.replay.models.SendRecord` with sent bytes,
+            response bytes, success flag, and any error message.
+        """
+        return await self.replay_engine.send_frame(
+            data=data,
+            host=host,
+            port=port,
+            tls=tls,
+            connect_timeout=connect_timeout,
+        )
+
+    # ------------------------------------------------------------------
+    # Replace rules management
+    # ------------------------------------------------------------------
+
+    def add_replace_rule(self, rule: ReplaceRule) -> None:
+        """Append a replace rule to the active RulesEngine."""
+        self.rules_engine.add_rule(rule)
+
+    def remove_replace_rule(self, rule_id: str) -> bool:
+        """Remove a replace rule by ID. Returns ``True`` if found."""
+        return self.rules_engine.remove_rule(rule_id)
+
+    def list_replace_rules(self) -> list[ReplaceRule]:
+        """Snapshot of active replace rules (ordered)."""
+        return self.rules_engine.rules
+
+    # ------------------------------------------------------------------
+    # Intercept rules management
+    # ------------------------------------------------------------------
+
+    def add_intercept_rule(self, rule: InterceptRule) -> None:
+        """Append an intercept rule to the active InterceptFilter."""
+        self.intercept_filter.add_rule(rule)
+
+    def remove_intercept_rule(self, rule_id: str) -> bool:
+        """Remove an intercept rule by ID. Returns ``True`` if found."""
+        return self.intercept_filter.remove_rule(rule_id)
+
+    def list_intercept_rules(self) -> list[InterceptRule]:
+        """Snapshot of active intercept rules (ordered)."""
+        return self.intercept_filter.rules
+
+    @property
+    def intercept_direction_filter(self) -> "Optional[Direction]":
+        """Direction filter on the QueuedInterceptController, or ``None``."""
+        if isinstance(self._intercept_controller, QueuedInterceptController):
+            return self._intercept_controller.direction_filter
+        return None
+
+    @intercept_direction_filter.setter
+    def intercept_direction_filter(self, value: "Optional[Direction]") -> None:
+        """Set the direction filter on the QueuedInterceptController."""
+        if isinstance(self._intercept_controller, QueuedInterceptController):
+            self._intercept_controller.direction_filter = value
+
+    @property
+    def intercept_session_filter(self) -> "Optional[set[str]]":
+        """Session ID filter on the QueuedInterceptController, or ``None``."""
+        if isinstance(self._intercept_controller, QueuedInterceptController):
+            return self._intercept_controller.session_filter
+        return None
+
+    @intercept_session_filter.setter
+    def intercept_session_filter(self, value: "Optional[set[str]]") -> None:
+        """Set the session ID filter on the QueuedInterceptController."""
+        if isinstance(self._intercept_controller, QueuedInterceptController):
+            self._intercept_controller.session_filter = value
 
     # ------------------------------------------------------------------
     # Event subscriptions

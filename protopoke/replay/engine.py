@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import ssl
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -66,6 +67,7 @@ from typing import Optional
 from ..models import Direction, Frame, SessionInfo
 from ..core.session import Session, SessionRegistry
 from ..framing import create_framer
+from .models import RepeaterRequest, SendRecord
 
 logger = logging.getLogger(__name__)
 
@@ -433,3 +435,109 @@ class ReplayEngine:
                 await writer.wait_closed()
             except Exception:
                 pass
+
+    async def send_frame(
+        self,
+        data:            bytes,
+        host:            str,
+        port:            int,
+        tls:             bool  = False,
+        connect_timeout: Optional[float] = None,
+    ) -> SendRecord:
+        """
+        Send raw bytes to *host*:*port* and read all response bytes.
+
+        Opens a new direct TCP connection (bypassing the proxy listener),
+        sends *data*, signals EOF, reads the full response, then closes
+        the connection.  Suitable for the Repeater's one-shot send action.
+
+        Args:
+            data:            Bytes to send.
+            host:            Target hostname or IP address.
+            port:            Target TCP port.
+            tls:             Wrap the connection in TLS (no cert verification).
+            connect_timeout: Override the engine's default connect timeout.
+
+        Returns:
+            A ``SendRecord`` capturing the sent bytes, response bytes,
+            success flag, and error message (if any).
+        """
+        timeout = connect_timeout if connect_timeout is not None else self._connect_timeout
+        ssl_ctx: Optional[ssl.SSLContext] = None
+        if tls:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode = ssl.CERT_NONE
+
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(
+                    host, port,
+                    ssl=ssl_ctx,
+                    server_hostname=host if ssl_ctx else None,
+                ),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            return SendRecord.create(
+                sent_bytes=data,
+                received_bytes=b"",
+                host=host,
+                port=port,
+                tls=tls,
+                success=False,
+                error=f"Connection timeout ({timeout}s)",
+            )
+        except OSError as exc:
+            return SendRecord.create(
+                sent_bytes=data,
+                received_bytes=b"",
+                host=host,
+                port=port,
+                tls=tls,
+                success=False,
+                error=f"Connection failed: {exc}",
+            )
+
+        received = bytearray()
+        try:
+            writer.write(data)
+            if writer.can_write_eof():
+                writer.write_eof()
+            await writer.drain()
+
+            while True:
+                chunk = await reader.read(4096)
+                if not chunk:
+                    break
+                received.extend(chunk)
+
+        except (ConnectionResetError, BrokenPipeError, OSError) as exc:
+            return SendRecord.create(
+                sent_bytes=data,
+                received_bytes=bytes(received),
+                host=host,
+                port=port,
+                tls=tls,
+                success=False,
+                error=f"I/O error: {exc}",
+            )
+        finally:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+
+        logger.info(
+            "send_frame: sent=%d bytes, received=%d bytes to %s:%d",
+            len(data), len(received), host, port,
+        )
+        return SendRecord.create(
+            sent_bytes=data,
+            received_bytes=bytes(received),
+            host=host,
+            port=port,
+            tls=tls,
+            success=True,
+        )
