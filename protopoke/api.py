@@ -76,6 +76,9 @@ from .rules.engine import RulesEngine, InterceptFilter
 from .rules.rule import ReplaceRule, InterceptRule
 from .storage.base import StorageBackend, NullStorageBackend
 from .protocol.base import ProtocolDecoder, ProtocolEncoder, PassthroughDecoder
+from .fuzzing.models import FuzzCampaign, FuzzResult
+from .fuzzing.engine import FuzzerEngine
+from .fuzzing.mutators.base import FrameMutator
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +139,9 @@ class ProxyAPI:
         # Protocol decoder/encoder (lazy-loaded)
         self._decoder: ProtocolDecoder = PassthroughDecoder()
         self._encoder: Optional[ProtocolEncoder] = None
+
+        # Fuzzer engine (lazy-constructed on first use)
+        self._fuzzer_engine: Optional[FuzzerEngine] = None
 
     # ------------------------------------------------------------------
     # TLS helpers
@@ -712,3 +718,74 @@ class ProxyAPI:
             api.on_frame_captured(my_handler)
         """
         self.event_bus.subscribe(FrameCapturedEvent, handler)
+
+    # ------------------------------------------------------------------
+    # Fuzzing
+    # ------------------------------------------------------------------
+
+    def _get_fuzzer_engine(self) -> FuzzerEngine:
+        """Return (lazily constructing) the FuzzerEngine for this API instance."""
+        if self._fuzzer_engine is None:
+            self._fuzzer_engine = FuzzerEngine(
+                replay_engine=self.replay_engine,
+                session_registry=self.session_registry,
+                decoder=self._decoder,
+            )
+        return self._fuzzer_engine
+
+    async def fuzz_session(
+        self,
+        session_id:       str,
+        mutators:         list[FrameMutator],
+        iterations:       int            = 50,
+        frame_selector:   Optional[str]  = None,
+        stop_on_crash:    bool           = True,
+        server_host:      Optional[str]  = None,
+        server_port:      Optional[int]  = None,
+        response_timeout: float          = 10.0,
+        on_result:        Optional[Callable[[FuzzResult], None]] = None,
+    ) -> FuzzCampaign:
+        """
+        Fuzz a captured session by replaying it with mutations applied.
+
+        For each iteration, one frame from the session is selected and
+        mutated by one of the provided mutators before being sent.  The
+        engine cycles through frames and mutators round-robin, so each
+        mutator gets an equal number of turns.
+
+        A baseline replay is performed first so that response size anomalies
+        can be detected automatically.
+
+        Args:
+            session_id:       Session to use as the template (must be captured).
+            mutators:         List of FrameMutator instances to use.
+            iterations:       Number of mutations to send (default: 50).
+            frame_selector:   Which frames to fuzz — same syntax as replay_session().
+                              None = all client-to-server frames.
+            stop_on_crash:    Stop the campaign on first connection reset.
+            server_host:      Override target host (default: original session server).
+            server_port:      Override target port.
+            response_timeout: Seconds to wait for a server response per iteration.
+            on_result:        Optional callback called after each FuzzResult.
+
+        Returns:
+            FuzzCampaign with all results populated.
+        """
+        campaign = FuzzCampaign.create(
+            session_id=session_id,
+            mutators=mutators,
+            iterations=iterations,
+            frame_selector=frame_selector,
+            stop_on_crash=stop_on_crash,
+        )
+        engine = self._get_fuzzer_engine()
+        # Sync the decoder in case set_protocol was called after construction
+        engine._decoder = self._decoder
+        return await engine.run_campaign(
+            campaign=campaign,
+            mutators=mutators,
+            server_host=server_host,
+            server_port=server_port,
+            response_timeout=response_timeout,
+            on_result=on_result,
+        )
