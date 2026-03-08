@@ -1,33 +1,29 @@
-"""LogsTab — session list, frame list, and hex/parsed detail pane."""
+"""LogsTab — session list, frame list, and hex / parsed detail pane."""
 
 from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.widget import Widget
-from textual.widgets import DataTable, Static, Button, Label
+from textual.widgets import DataTable, Static, Button
 from textual.containers import Horizontal, Vertical
-from textual.message import Message
 
 from ...models import Frame, Direction
 from ...core.session import Session
-from ..widgets.hex_view import HexView
+from ..widgets.parsed_view import ParsedView
 
 
 class LogsTab(Widget):
     """
     Tab 2 — Live capture log.
 
-    Layout (vertical split):
-      ┌─────────────────────────────────────┐
-      │ Sessions (DataTable)                │  top ~40%
-      ├─────────────────────────────────────┤
-      │ Frames for selected session         │  middle ~30%
-      ├─────────────────────────────────────┤
-      │ Hex / parsed view for selected frame│  bottom ~30%
-      └─────────────────────────────────────┘
-
-    Both DataTables are updated via ``add_session()`` / ``add_frame()``
-    which are called from the main app in response to EventBus events.
+    Layout (vertical):
+      ┌─────────────────────────────────────────┐
+      │ Sessions (DataTable)              ~35%  │
+      ├─────────────────────────────────────────┤
+      │ Frames for selected session       ~30%  │
+      ├─────────────────────────────────────────┤
+      │ ParsedView (hex ↔ field tree)     ~35%  │
+      └─────────────────────────────────────────┘
     """
 
     DEFAULT_CSS = """
@@ -57,17 +53,27 @@ class LogsTab(Widget):
     }
     LogsTab .toolbar {
         height: 3;
-        align: right middle;
+        background: $surface-darken-1;
+        align: left middle;
         padding: 0 1;
     }
-    LogsTab Button {
-        margin-left: 1;
+    LogsTab .toolbar Button {
+        margin-right: 1;
     }
-    LogsTab HexView {
+    LogsTab .toolbar Static {
+        width: 1fr;
+        color: $text;
+        text-style: bold;
+    }
+    LogsTab ParsedView {
         height: 1fr;
-        overflow-y: auto;
     }
     """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._current_session_id: str | None = None
+        self._current_frame_id: str | None = None
 
     def compose(self) -> ComposeResult:
         # Sessions pane
@@ -78,44 +84,42 @@ class LogsTab(Widget):
         # Frames pane
         with Vertical(id="frames-pane"):
             with Horizontal(classes="toolbar"):
-                yield Static("  Frames", classes="pane-header")
-                yield Button("Send to Repeater", id="btn-to-repeater", variant="default")
-                yield Button("Send to Intercept", id="btn-to-intercept", variant="default")
+                yield Static("  Frames")
+                yield Button("→ Repeater", id="btn-to-repeater", variant="default")
             yield DataTable(id="frames-table", cursor_type="row")
 
-        # Detail pane
+        # Detail pane with hex↔parsed toggle
         with Vertical(id="detail-pane"):
-            yield Static("  Frame Detail (hex dump)", classes="pane-header")
-            yield HexView(id="hex-view")
+            yield ParsedView(title="  Frame Detail", id="parsed-view")
 
     def on_mount(self) -> None:
-        # Sessions table columns
-        sessions_dt = self.query_one("#sessions-table", DataTable)
-        sessions_dt.add_column("ID", key="id")
-        sessions_dt.add_column("Client", key="client")
-        sessions_dt.add_column("Server", key="server")
-        sessions_dt.add_column("State", key="state")
-        sessions_dt.add_column("Frames", key="frames")
-        sessions_dt.add_column("Started", key="started")
+        # Sessions table
+        sdt = self.query_one("#sessions-table", DataTable)
+        sdt.add_column("ID",      key="id")
+        sdt.add_column("Client",  key="client")
+        sdt.add_column("Server",  key="server")
+        sdt.add_column("State",   key="state")
+        sdt.add_column("Frames",  key="frames")
+        sdt.add_column("Started", key="started")
 
-        # Frames table columns
-        frames_dt = self.query_one("#frames-table", DataTable)
-        frames_dt.add_column("#", key="seq")
-        frames_dt.add_column("Dir", key="dir")
-        frames_dt.add_column("Len", key="len")
-        frames_dt.add_column("Framer", key="framer")
-        frames_dt.add_column("Preview", key="preview")
+        # Frames table
+        fdt = self.query_one("#frames-table", DataTable)
+        fdt.add_column("#",       key="seq")
+        fdt.add_column("Dir",     key="dir")
+        fdt.add_column("Len",     key="len")
+        fdt.add_column("Framer",  key="framer")
+        fdt.add_column("Preview", key="preview")
 
     # ------------------------------------------------------------------
-    # Public API — called by the app in response to proxy events
+    # Public API — driven by app event bridge
     # ------------------------------------------------------------------
 
     def add_session(self, session: Session) -> None:
         """Append a newly opened session row."""
+        import time as _time
+        info    = session.info
+        started = _time.strftime("%H:%M:%S", _time.localtime(info.created_at))
         dt = self.query_one("#sessions-table", DataTable)
-        info = session.info
-        import time
-        started = time.strftime("%H:%M:%S", time.localtime(info.created_at))
         dt.add_row(
             info.id[:8],
             f"{info.client_host}:{info.client_port}",
@@ -123,19 +127,18 @@ class LogsTab(Widget):
             info.state.value,
             "0",
             started,
-            key=info.id,
+            key=info.id,       # full UUID as row key
         )
 
     def update_session(self, session: Session) -> None:
-        """Refresh a session row (state change, frame count, etc.)."""
+        """Refresh a session row (state, frame count)."""
         info = session.info
-        dt = self.query_one("#sessions-table", DataTable)
+        dt   = self.query_one("#sessions-table", DataTable)
         try:
-            row_key = info.id
-            dt.update_cell(row_key, "state", info.state.value)
-            dt.update_cell(row_key, "frames", str(len(session.frames)))
+            dt.update_cell(info.id, "state",  info.state.value,        update_width=False)
+            dt.update_cell(info.id, "frames", str(len(session.frames)), update_width=False)
         except Exception:
-            pass  # Row may not exist yet
+            pass
 
     def show_frames(self, session: Session) -> None:
         """Populate the frames pane with all frames from *session*."""
@@ -143,21 +146,19 @@ class LogsTab(Widget):
         dt.clear()
         for frame in session.frames:
             self._add_frame_row(dt, frame)
-        # Clear detail pane
-        self.query_one("#hex-view", HexView).clear()
-        # Store session ref for later updates
         self._current_session_id = session.id
+        self._current_frame_id   = None
+        self.query_one("#parsed-view", ParsedView).clear()
 
     def add_frame_to_current(self, frame: Frame) -> None:
-        """Append a new frame to the frames pane (if it belongs to the current session)."""
-        if getattr(self, "_current_session_id", None) != frame.session_id:
+        """Append a new frame if it belongs to the currently displayed session."""
+        if self._current_session_id != frame.session_id:
             return
-        dt = self.query_one("#frames-table", DataTable)
-        self._add_frame_row(dt, frame)
+        self._add_frame_row(self.query_one("#frames-table", DataTable), frame)
 
     def _add_frame_row(self, dt: DataTable, frame: Frame) -> None:
         direction = "→" if frame.direction is Direction.CLIENT_TO_SERVER else "←"
-        preview = frame.raw_bytes[:24].hex()
+        preview   = frame.raw_bytes[:24].hex()
         if len(frame.raw_bytes) > 24:
             preview += "…"
         dt.add_row(
@@ -166,7 +167,7 @@ class LogsTab(Widget):
             str(len(frame.raw_bytes)),
             frame.framer_name,
             preview,
-            key=frame.id,
+            key=frame.id,      # full UUID as row key
         )
 
     # ------------------------------------------------------------------
@@ -174,45 +175,40 @@ class LogsTab(Widget):
     # ------------------------------------------------------------------
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        dt = event.data_table
-        if dt.id == "sessions-table":
-            # User selected a session — show its frames
-            app = self.app
-            session = None
-            for s in app.api.list_sessions():
-                if s.id.startswith(str(event.row_key.value)):
-                    session = s
-                    break
-                if s.id == event.row_key.value:
-                    session = s
-                    break
+        row_id = str(event.row_key.value)
+
+        if event.data_table.id == "sessions-table":
+            # row_key is the full session UUID
+            session = self.app.api.get_session(row_id)
             if session:
                 self.show_frames(session)
-        elif dt.id == "frames-table":
-            # User selected a frame — show hex dump
-            frame_id = str(event.row_key.value)
-            sid = getattr(self, "_current_session_id", None)
-            if sid:
-                session = self.app.api.get_session(sid)
+
+        elif event.data_table.id == "frames-table":
+            # row_key is the full frame UUID
+            self._current_frame_id = row_id
+            if self._current_session_id:
+                session = self.app.api.get_session(self._current_session_id)
                 if session:
                     for frame in session.frames:
-                        if frame.id == frame_id:
-                            self.query_one("#hex-view", HexView).show_frame(frame)
-                            self._current_frame_id = frame_id
+                        if frame.id == row_id:
+                            # Try to get a parsed message if a decoder is loaded
+                            message = None
+                            try:
+                                message = self.app.api.decode_frame(frame)
+                                # PassthroughDecoder returns a message with no fields
+                                if not message.fields and not message.message_type:
+                                    message = None
+                            except Exception:
+                                pass
+                            self.query_one("#parsed-view", ParsedView).show_frame(frame, message)
                             break
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-to-repeater":
             event.stop()
-            self._send_to_repeater()
-        elif event.button.id == "btn-to-intercept":
-            event.stop()
-
-    def _send_to_repeater(self) -> None:
-        frame_id = getattr(self, "_current_frame_id", None)
-        sid = getattr(self, "_current_session_id", None)
-        if not frame_id or not sid:
-            self.notify("Select a frame first.", severity="warning")
-            return
-        # Delegate to the app — it will handle the repeater tab
-        self.app.send_frame_to_repeater(sid, frame_id)
+            if self._current_frame_id and self._current_session_id:
+                self.app.send_frame_to_repeater(
+                    self._current_session_id, self._current_frame_id
+                )
+            else:
+                self.notify("Select a frame first.", severity="warning")

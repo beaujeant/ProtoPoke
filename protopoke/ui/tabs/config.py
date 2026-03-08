@@ -182,6 +182,14 @@ class ConfigTab(Widget):
                 yield Label("Custom framer class:", classes="field-label")
                 yield Input(value=cfg.custom_framer_class or "", id="custom-framer-class",
                             placeholder="MyFramer", classes="field-input")
+            with Horizontal(classes="field-row"):
+                yield Label("Framer kwargs (JSON):", classes="field-label")
+                yield Input(
+                    value=self._framer_kwargs_to_str(cfg.framer_kwargs),
+                    id="framer-kwargs",
+                    placeholder='e.g. {"delimiter": "0d0a"} or {"header_size": 4}',
+                    classes="field-input",
+                )
 
             # ---- Protocol ----
             yield Static("  Protocol Definition", classes="section-header")
@@ -213,6 +221,40 @@ class ConfigTab(Widget):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _framer_kwargs_to_str(kwargs: dict) -> str:
+        """Serialise framer_kwargs to a JSON string for display in the Input."""
+        import json
+        if not kwargs:
+            return ""
+        # bytes values are stored as hex strings in to_dict(); show them as-is
+        display: dict = {}
+        for k, v in kwargs.items():
+            display[k] = v.hex() if isinstance(v, (bytes, bytearray)) else v
+        return json.dumps(display)
+
+    @staticmethod
+    def _parse_framer_kwargs(text: str) -> dict:
+        """Parse the framer_kwargs JSON input back to a dict (bytes values as hex → bytes)."""
+        import json
+        text = text.strip()
+        if not text:
+            return {}
+        try:
+            raw = json.loads(text)
+        except json.JSONDecodeError:
+            return {}
+        result: dict = {}
+        for k, v in raw.items():
+            if isinstance(v, str):
+                try:
+                    result[k] = bytes.fromhex(v)
+                except ValueError:
+                    result[k] = v
+            else:
+                result[k] = v
+        return result
 
     def _read_form(self) -> None:
         """Write all form values back into self.config."""
@@ -252,7 +294,8 @@ class ConfigTab(Widget):
         cfg.ca_key_path        = _str("ca-key") or None
         cfg.tls_cert_path      = _str("tls-cert") or None
         cfg.tls_key_path       = _str("tls-key") or None
-        cfg.framer_name        = _sel("framer-name") or "raw"
+        cfg.framer_name         = _sel("framer-name") or "raw"
+        cfg.framer_kwargs       = self._parse_framer_kwargs(_str("framer-kwargs"))
         cfg.custom_framer_path  = _str("custom-framer-path") or None
         cfg.custom_framer_class = _str("custom-framer-class") or None
         cfg.protocol_definition_path = _str("proto-def") or None
@@ -305,6 +348,7 @@ class ConfigTab(Widget):
         _set("tls-cert", cfg.tls_cert_path or "")
         _set("tls-key", cfg.tls_key_path or "")
         _sel("framer-name", cfg.framer_name)
+        _set("framer-kwargs", self._framer_kwargs_to_str(cfg.framer_kwargs))
         _set("custom-framer-path", cfg.custom_framer_path or "")
         _set("custom-framer-class", cfg.custom_framer_class or "")
         _set("proto-def", cfg.protocol_definition_path or "")

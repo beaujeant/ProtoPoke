@@ -1,34 +1,37 @@
-"""InterceptTab — Burp-style frame interception queue + auto-forward rules."""
+"""InterceptTab — Burp-style frame interception queue + rules."""
 
 from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import DataTable, TextArea, Button, Label, Static, Switch
-from textual.containers import Horizontal, Vertical, ScrollableContainer
+from textual.containers import Horizontal, Vertical
 from textual.message import Message
 
 from ...models import InterceptedUnit, Direction
-from ...rules.rule import InterceptRule, RuleAction
+from ...rules.rule import InterceptRule, ReplaceRule, RuleAction
 from ..widgets.rule_table import RuleTable
+from ..modals.add_rule import AddInterceptRuleModal, AddReplaceRuleModal
 
 
 class InterceptTab(Widget):
     """
-    Tab 3 — Interception queue and auto-forward rules.
+    Tab 3 — Interception queue, hex editor, and auto-forward / replace rules.
 
     Layout:
-      ┌──────────────────────────────────────────┐
-      │ Controls: Enable/Disable, direction filter│  top bar
-      ├──────────────────────────────────────────┤
-      │ Queue (DataTable of pending units)        │  ~40%
-      ├──────────────────────────────────────────┤
-      │ [Forward] [Drop] [Modify+Forward]         │  action bar
-      ├──────────────────────────────────────────┤
-      │ Hex editor (TextArea — editable)          │  ~30%
-      ├──────────────────────────────────────────┤
-      │ Auto-forward rules (RuleTable)            │  ~30%
-      └──────────────────────────────────────────┘
+      ┌──────────────────────────────────────────────────┐
+      │ Top bar: Enable toggle, direction filter, count  │
+      ├──────────────────────────────────────────────────┤
+      │ Queue (DataTable of pending intercepted units)   │  ~30%
+      ├──────────────────────────────────────────────────┤
+      │ [Forward] [Drop] [Modify+Forward] [Forward All]  │
+      ├──────────────────────────────────────────────────┤
+      │ Hex editor (editable TextArea)                   │  ~20%
+      ├──────────────────────────────────────────────────┤
+      │ Intercept Rules header + RuleTable               │  ~25%
+      ├──────────────────────────────────────────────────┤
+      │ Replace Rules header + RuleTable                 │  ~25%
+      └──────────────────────────────────────────────────┘
     """
 
     DEFAULT_CSS = """
@@ -48,7 +51,7 @@ class InterceptTab(Widget):
         margin-right: 2;
     }
     InterceptTab #queue-pane {
-        height: 35%;
+        height: 30%;
         border-bottom: solid $primary-darken-2;
     }
     InterceptTab .pane-header {
@@ -71,13 +74,17 @@ class InterceptTab(Widget):
         margin-right: 1;
     }
     InterceptTab #hex-editor-pane {
-        height: 25%;
+        height: 20%;
         border-bottom: solid $primary-darken-2;
     }
     InterceptTab TextArea {
         height: 1fr;
     }
-    InterceptTab #rules-pane {
+    InterceptTab #intercept-rules-pane {
+        height: 1fr;
+        border-bottom: solid $primary-darken-2;
+    }
+    InterceptTab #replace-rules-pane {
         height: 1fr;
     }
     InterceptTab RuleTable {
@@ -87,7 +94,7 @@ class InterceptTab(Widget):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self._units: dict[str, InterceptedUnit] = {}  # unit_id → unit
+        self._units: dict[str, InterceptedUnit] = {}
         self._selected_unit_id: str | None = None
 
     def compose(self) -> ComposeResult:
@@ -96,83 +103,106 @@ class InterceptTab(Widget):
             yield Label("Intercept:")
             yield Switch(id="intercept-toggle", value=False)
             yield Label("Direction:")
-            yield Button("Both", id="dir-both", variant="default")
-            yield Button("→ C→S", id="dir-c2s", variant="default")
-            yield Button("← S→C", id="dir-s2c", variant="default")
+            yield Button("Both",  id="dir-both", variant="default")
+            yield Button("→ C→S", id="dir-c2s",  variant="default")
+            yield Button("← S→C", id="dir-s2c",  variant="default")
             yield Label("", id="pending-label")
 
-        # Queue pane
+        # Queue
         with Vertical(id="queue-pane"):
             yield Static("  Intercept Queue", classes="pane-header")
             yield DataTable(id="queue-table", cursor_type="row")
 
         # Action bar
         with Horizontal(classes="action-bar"):
-            yield Button("▶ Forward", variant="success", id="btn-forward")
-            yield Button("✖ Drop", variant="error", id="btn-drop")
-            yield Button("✎ Modify+Forward", variant="warning", id="btn-modify")
-            yield Button("▶▶ Forward All", id="btn-forward-all")
+            yield Button("▶ Forward",         variant="success", id="btn-forward")
+            yield Button("✖ Drop",            variant="error",   id="btn-drop")
+            yield Button("✎ Modify+Forward",  variant="warning", id="btn-modify")
+            yield Button("▶▶ Forward All",                       id="btn-forward-all")
 
         # Hex editor
         with Vertical(id="hex-editor-pane"):
-            yield Static("  Edit Frame (hex — modify before forwarding)", classes="pane-header")
-            yield TextArea(
-                id="hex-editor",
-                language=None,
-                theme="monokai",
+            yield Static(
+                "  Edit (hex pairs, space-separated) — modify before forwarding",
+                classes="pane-header",
             )
+            yield TextArea(id="hex-editor", language=None, theme="monokai")
 
-        # Auto-forward rules
-        with Vertical(id="rules-pane"):
-            yield Static("  Auto-Forward Rules  (first match wins; no rules → intercept all)", classes="pane-header")
+        # Intercept rules
+        with Vertical(id="intercept-rules-pane"):
+            yield Static(
+                "  Intercept Rules  [first match wins · no rules → intercept all]",
+                classes="pane-header",
+            )
             yield RuleTable(
                 columns=[
                     ("enabled", "On"),
-                    ("label", "Label"),
-                    ("action", "Action"),
+                    ("label",   "Label"),
+                    ("action",  "Action"),
                     ("pattern", "Pattern"),
-                    ("direction", "Direction"),
+                    ("dir",     "Direction"),
                 ],
-                row_factory=self._rule_row,
-                on_add=self._add_rule,
-                on_remove=self._remove_rule,
-                on_move_up=self._move_rule_up,
-                on_move_down=self._move_rule_down,
+                row_factory=self._intercept_rule_row,
+                on_add=self._add_intercept_rule,
+                on_remove=self._remove_intercept_rule,
+                on_move_up=self._move_intercept_rule_up,
+                on_move_down=self._move_intercept_rule_down,
                 id="intercept-rules",
+            )
+
+        # Replace rules
+        with Vertical(id="replace-rules-pane"):
+            yield Static(
+                "  Replace Rules  [applied in order before intercept/forward]",
+                classes="pane-header",
+            )
+            yield RuleTable(
+                columns=[
+                    ("enabled",  "On"),
+                    ("label",    "Label"),
+                    ("pattern",  "Pattern"),
+                    ("replace",  "→ Replacement"),
+                    ("dir",      "Direction"),
+                ],
+                row_factory=self._replace_rule_row,
+                on_add=self._add_replace_rule,
+                on_remove=self._remove_replace_rule,
+                on_move_up=self._move_replace_rule_up,
+                on_move_down=self._move_replace_rule_down,
+                id="replace-rules",
             )
 
     def on_mount(self) -> None:
         dt = self.query_one("#queue-table", DataTable)
-        dt.add_column("Unit ID", key="id")
-        dt.add_column("Session", key="session")
-        dt.add_column("Dir", key="dir")
-        dt.add_column("Len", key="len")
-        dt.add_column("Preview", key="preview")
+        dt.add_column("Unit ID",  key="id")
+        dt.add_column("Session",  key="session")
+        dt.add_column("Dir",      key="dir")
+        dt.add_column("Len",      key="len")
+        dt.add_column("Preview",  key="preview")
 
     # ------------------------------------------------------------------
-    # Queue management
+    # Queue management (called by the app)
     # ------------------------------------------------------------------
 
     def add_unit(self, unit: InterceptedUnit) -> None:
-        """Add a newly intercepted unit to the queue."""
         self._units[unit.id] = unit
         dt = self.query_one("#queue-table", DataTable)
         direction = "→" if unit.frame.direction is Direction.CLIENT_TO_SERVER else "←"
-        preview = unit.effective_bytes()[:24].hex()
-        if len(unit.effective_bytes()) > 24:
+        data = unit.effective_bytes()
+        preview = data[:24].hex()
+        if len(data) > 24:
             preview += "…"
         dt.add_row(
             unit.id[:8],
             unit.frame.session_id[:8],
             direction,
-            str(len(unit.effective_bytes())),
+            str(len(data)),
             preview,
             key=unit.id,
         )
         self._refresh_pending_label()
 
     def remove_unit(self, unit_id: str) -> None:
-        """Remove a unit from the display queue."""
         self._units.pop(unit_id, None)
         dt = self.query_one("#queue-table", DataTable)
         try:
@@ -181,43 +211,99 @@ class InterceptTab(Widget):
             pass
         if self._selected_unit_id == unit_id:
             self._selected_unit_id = None
-            self.query_one("#hex-editor", TextArea).text = ""
+            self.query_one("#hex-editor", TextArea).load_text("")
         self._refresh_pending_label()
 
     def _refresh_pending_label(self) -> None:
-        count = len(self._units)
-        label = self.query_one("#pending-label", Label)
-        label.update(f"  {count} pending")
+        self.query_one("#pending-label", Label).update(
+            f"  {len(self._units)} pending"
+        )
 
     # ------------------------------------------------------------------
-    # Rules display
+    # Intercept rule helpers
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _rule_row(rule: InterceptRule) -> tuple:
-        enabled = "✓" if rule.enabled else "✗"
-        action  = rule.action.value
+    def _intercept_rule_row(rule: InterceptRule) -> tuple:
+        enabled   = "✓" if rule.enabled else "✗"
+        action    = rule.action.value
         direction = rule.direction.value if rule.direction else "both"
-        return (enabled, rule.label, action, rule.pattern_str or "(any)", direction)
+        pattern   = rule.pattern_str or "(any)"
+        return (enabled, rule.label, action, pattern, direction)
 
-    def refresh_rules(self, rules: list[InterceptRule]) -> None:
+    def refresh_intercept_rules(self, rules: list[InterceptRule]) -> None:
         self.query_one("#intercept-rules", RuleTable).refresh_rules(rules)
 
-    async def _add_rule(self) -> None:
-        """Open a simple inline prompt to add a new intercept rule."""
-        self.notify("Use the rule editor (coming soon). For now, add rules via the API.", severity="information")
+    async def _add_intercept_rule(self) -> None:
+        def on_result(rule: InterceptRule | None) -> None:
+            if rule is None:
+                return
+            self.app.api.add_intercept_rule(rule)
+            self.refresh_intercept_rules(self.app.api.list_intercept_rules())
 
-    def _remove_rule(self, rule_id: str) -> None:
+        await self.app.push_screen_wait(AddInterceptRuleModal(), callback=on_result)
+
+    def _remove_intercept_rule(self, rule_id: str) -> None:
         self.app.api.remove_intercept_rule(rule_id)
-        self.refresh_rules(self.app.api.list_intercept_rules())
+        self.refresh_intercept_rules(self.app.api.list_intercept_rules())
 
-    def _move_rule_up(self, rule_id: str) -> None:
-        self.app.api.intercept_filter.move_rule(rule_id, -1)
-        self.refresh_rules(self.app.api.list_intercept_rules())
+    def _move_intercept_rule_up(self, rule_id: str) -> None:
+        rules = self.app.api.intercept_filter.rules
+        idx = next((i for i, r in enumerate(rules) if r.id == rule_id), -1)
+        if idx > 0:
+            self.app.api.intercept_filter.move_rule(rule_id, idx - 1)
+            self.refresh_intercept_rules(self.app.api.list_intercept_rules())
 
-    def _move_rule_down(self, rule_id: str) -> None:
-        self.app.api.intercept_filter.move_rule(rule_id, 1)
-        self.refresh_rules(self.app.api.list_intercept_rules())
+    def _move_intercept_rule_down(self, rule_id: str) -> None:
+        rules = self.app.api.intercept_filter.rules
+        idx = next((i for i, r in enumerate(rules) if r.id == rule_id), -1)
+        if 0 <= idx < len(rules) - 1:
+            self.app.api.intercept_filter.move_rule(rule_id, idx + 1)
+            self.refresh_intercept_rules(self.app.api.list_intercept_rules())
+
+    # ------------------------------------------------------------------
+    # Replace rule helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _replace_rule_row(rule: ReplaceRule) -> tuple:
+        enabled   = "✓" if rule.enabled else "✗"
+        direction = rule.direction.value if rule.direction else "both"
+        repl_hex  = rule.replacement.hex()
+        if len(repl_hex) > 20:
+            repl_hex = repl_hex[:20] + "…"
+        pattern = rule.pattern_str or "(empty)"
+        return (enabled, rule.label, pattern, repl_hex, direction)
+
+    def refresh_replace_rules(self, rules: list[ReplaceRule]) -> None:
+        self.query_one("#replace-rules", RuleTable).refresh_rules(rules)
+
+    async def _add_replace_rule(self) -> None:
+        def on_result(rule: ReplaceRule | None) -> None:
+            if rule is None:
+                return
+            self.app.api.add_replace_rule(rule)
+            self.refresh_replace_rules(self.app.api.list_replace_rules())
+
+        await self.app.push_screen_wait(AddReplaceRuleModal(), callback=on_result)
+
+    def _remove_replace_rule(self, rule_id: str) -> None:
+        self.app.api.remove_replace_rule(rule_id)
+        self.refresh_replace_rules(self.app.api.list_replace_rules())
+
+    def _move_replace_rule_up(self, rule_id: str) -> None:
+        rules = self.app.api.rules_engine.rules
+        idx = next((i for i, r in enumerate(rules) if r.id == rule_id), -1)
+        if idx > 0:
+            self.app.api.rules_engine.move_rule(rule_id, idx - 1)
+            self.refresh_replace_rules(self.app.api.list_replace_rules())
+
+    def _move_replace_rule_down(self, rule_id: str) -> None:
+        rules = self.app.api.rules_engine.rules
+        idx = next((i for i, r in enumerate(rules) if r.id == rule_id), -1)
+        if 0 <= idx < len(rules) - 1:
+            self.app.api.rules_engine.move_rule(rule_id, idx + 1)
+            self.refresh_replace_rules(self.app.api.list_replace_rules())
 
     # ------------------------------------------------------------------
     # Event handlers
@@ -236,10 +322,8 @@ class InterceptTab(Widget):
         unit = self._units.get(unit_id)
         if unit:
             self._selected_unit_id = unit_id
-            # Populate the hex editor with the effective bytes
-            hex_text = unit.effective_bytes().hex()
-            # Format as spaced pairs for readability
-            pairs = [hex_text[i:i+2] for i in range(0, len(hex_text), 2)]
+            data = unit.effective_bytes()
+            pairs = [data.hex()[i:i+2] for i in range(0, len(data.hex()), 2)]
             self.query_one("#hex-editor", TextArea).load_text(" ".join(pairs))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -251,7 +335,6 @@ class InterceptTab(Widget):
             self.app.api.intercept_direction_filter = Direction.CLIENT_TO_SERVER
         elif bid == "dir-s2c":
             self.app.api.intercept_direction_filter = Direction.SERVER_TO_CLIENT
-
         elif bid == "btn-forward":
             self._do_forward()
         elif bid == "btn-drop":
@@ -260,7 +343,6 @@ class InterceptTab(Widget):
             self._do_modify_and_forward()
         elif bid == "btn-forward-all":
             count = self.app.api.forward_all()
-            # Clear all units from display
             for uid in list(self._units):
                 self.remove_unit(uid)
             self.notify(f"Forwarded {count} frames.")
@@ -270,8 +352,7 @@ class InterceptTab(Widget):
         if not uid:
             self.notify("Select a frame to forward.", severity="warning")
             return
-        ok = self.app.api.forward(uid)
-        if ok:
+        if self.app.api.forward(uid):
             self.remove_unit(uid)
         else:
             self.notify("Forward failed — unit may have already been processed.", severity="error")
@@ -281,8 +362,7 @@ class InterceptTab(Widget):
         if not uid:
             self.notify("Select a frame to drop.", severity="warning")
             return
-        ok = self.app.api.drop(uid)
-        if ok:
+        if self.app.api.drop(uid):
             self.remove_unit(uid)
         else:
             self.notify("Drop failed — unit may have already been processed.", severity="error")
@@ -293,15 +373,13 @@ class InterceptTab(Widget):
             self.notify("Select a frame to modify.", severity="warning")
             return
         hex_text = self.query_one("#hex-editor", TextArea).text
-        # Strip whitespace / newlines
         hex_clean = hex_text.replace(" ", "").replace("\n", "").strip()
         try:
             new_data = bytes.fromhex(hex_clean)
         except ValueError as exc:
             self.notify(f"Invalid hex: {exc}", severity="error")
             return
-        ok = self.app.api.modify_and_forward(uid, new_data)
-        if ok:
+        if self.app.api.modify_and_forward(uid, new_data):
             self.remove_unit(uid)
         else:
             self.notify("Modify failed — unit may have already been processed.", severity="error")

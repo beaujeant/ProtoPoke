@@ -212,11 +212,24 @@ class ProtoPoke(App):
 
     async def _start_proxy(self) -> None:
         try:
+            # Rebuild the ProxyAPI so changes to config (especially
+            # intercept_enabled, framer_name) are picked up fresh.
+            self._rebuild_api()
             await self.api.start()
             self._proxy_running = True
             self._update_title()
+            # Sync the intercept toggle in the Intercept tab to reflect config
+            from .tabs.intercept import InterceptTab as _IT
+            try:
+                from textual.widgets import Switch as _SW
+                self.query_one("#intercept-tab", _IT).query_one(
+                    "#intercept-toggle", _SW
+                ).value = self.api.config.intercept_enabled
+            except Exception:
+                pass
             self.notify(
-                f"Proxy started on {self.api.config.listen_host}:{self.api.config.listen_port}",
+                f"Proxy started on "
+                f"{self.api.config.listen_host}:{self.api.config.listen_port}",
                 severity="information",
             )
         except Exception as exc:
