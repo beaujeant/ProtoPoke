@@ -17,6 +17,12 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-cov>=4.1",
 ]
+mcp = [
+    "mcp>=1.0",
+]
+all = [
+    "mcp>=1.0",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

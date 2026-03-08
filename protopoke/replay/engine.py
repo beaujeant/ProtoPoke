@@ -175,6 +175,21 @@ class ReplayResult:
     def server_frames_received(self) -> list[Frame]:
         return self.frames_received()
 
+    def to_dict(self) -> dict:
+        """Serialise to a JSON-compatible dict for MCP tool responses."""
+        return {
+            "original_session_id":  self.original_session_id,
+            "replayed_session_id":  self.replayed_session.id,
+            "success":              self.success,
+            "error":                self.error,
+            "started_at":           self.started_at,
+            "completed_at":         self.completed_at,
+            "frames_sent":          len(self.frames_sent()),
+            "frames_received":      len(self.frames_received()),
+            "total_bytes_sent":     self.total_bytes_sent(),
+            "total_bytes_received": self.total_bytes_received(),
+        }
+
 
 # ---------------------------------------------------------------------------
 # ReplayEngine

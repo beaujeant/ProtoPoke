@@ -66,6 +66,31 @@ def new_id() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Serialisation helpers
+# ---------------------------------------------------------------------------
+
+def _serialise_field_value(value: Any) -> Any:
+    """
+    Coerce a ParsedField value to a JSON-serialisable type.
+
+    - ``bytes``       → lowercase hex string
+    - ``list``        → each element recursed (handles nested ParsedField lists)
+    - ``int / str / float / bool / None`` → returned as-is
+    - anything else   → ``str(value)`` as a fallback
+    """
+    if isinstance(value, bytes):
+        return value.hex()
+    if isinstance(value, list):
+        return [_serialise_field_value(item) for item in value]
+    if isinstance(value, (int, str, float, bool)) or value is None:
+        return value
+    # Fallback: ParsedField children or unknown types
+    if hasattr(value, "to_dict"):
+        return value.to_dict()
+    return str(value)
+
+
+# ---------------------------------------------------------------------------
 # Core data models
 # ---------------------------------------------------------------------------
 
@@ -117,6 +142,24 @@ class Frame:
             framer_name=framer_name,
         )
 
+    def to_dict(self) -> dict:
+        """
+        Serialise to a JSON-compatible dict.
+
+        ``raw_bytes`` is encoded as a hex string so it survives JSON
+        serialisation.  MCP tool handlers and storage adapters use this.
+        """
+        return {
+            "id":              self.id,
+            "session_id":      self.session_id,
+            "direction":       self.direction.value,
+            "raw_bytes":       self.raw_bytes.hex(),
+            "raw_bytes_len":   len(self.raw_bytes),
+            "timestamp":       self.timestamp,
+            "sequence_number": self.sequence_number,
+            "framer_name":     self.framer_name,
+        }
+
     def __repr__(self) -> str:
         return (
             f"Frame(id={self.id[:8]}... "
@@ -162,6 +205,19 @@ class SessionInfo:
             state=SessionState.CONNECTING,
             created_at=time.time(),
         )
+
+    def to_dict(self) -> dict:
+        """Serialise to a JSON-compatible dict."""
+        return {
+            "id":          self.id,
+            "client_host": self.client_host,
+            "client_port": self.client_port,
+            "server_host": self.server_host,
+            "server_port": self.server_port,
+            "state":       self.state.value,
+            "created_at":  self.created_at,
+            "closed_at":   self.closed_at,
+        }
 
     def __repr__(self) -> str:
         return (
@@ -210,6 +266,21 @@ class InterceptedUnit:
             return self.modified_data
         return self.frame.raw_bytes
 
+    def to_dict(self) -> dict:
+        """
+        Serialise to a JSON-compatible dict.
+
+        Embeds the full ``frame.to_dict()`` so the caller gets all frame
+        metadata in one call.  ``effective_bytes`` is included as a hex
+        string so the MCP tool can show what will actually be forwarded.
+        """
+        return {
+            "id":             self.id,
+            "frame":          self.frame.to_dict(),
+            "action":         self.action.value,
+            "effective_bytes": self.effective_bytes().hex(),
+        }
+
     def __repr__(self) -> str:
         return (
             f"InterceptedUnit(id={self.id[:8]}... "
@@ -247,6 +318,26 @@ class ParsedField:
     display_hint:  str                = "auto"
     display_value: str                = ""
     children:      list[ParsedField]  = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        """
+        Serialise to a JSON-compatible dict, recursing into ``children``.
+
+        ``raw_bytes`` is hex-encoded.  ``value`` is coerced:
+          - ``bytes``  → hex string
+          - ``list``   → recursed if elements are ParsedField, else left as-is
+          - everything else → as-is (int, str, float are already JSON-safe)
+        """
+        return {
+            "name":          self.name,
+            "value":         _serialise_field_value(self.value),
+            "raw_bytes":     self.raw_bytes.hex(),
+            "offset":        self.offset,
+            "size":          self.size,
+            "display_hint":  self.display_hint,
+            "display_value": self.display_value,
+            "children":      [c.to_dict() for c in self.children],
+        }
 
     def __repr__(self) -> str:
         return (
@@ -309,6 +400,23 @@ class ParsedMessage:
             if f.name == name:
                 return f
         return None
+
+    def to_dict(self) -> dict:
+        """
+        Serialise to a JSON-compatible dict.
+
+        Embeds ``frame_id`` (not the full frame — callers can fetch that
+        separately) and the full recursive field tree.
+        """
+        return {
+            "id":            self.id,
+            "frame_id":      self.frame.id,
+            "protocol_name": self.protocol_name,
+            "message_type":  self.message_type,
+            "fields":        [f.to_dict() for f in self.fields],
+            "display_name":  self.display_name,
+            "error":         self.error,
+        }
 
     def as_dict(self) -> dict:
         """Flat dict of field name → value (top-level only). Useful for quick access."""
