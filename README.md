@@ -27,7 +27,8 @@ This is a personal security research tool. It prioritises **readability, extensi
 - **Field-level intercept editing** — modify a single field by name, length fields auto-recomputed on encode
 - **Field-level replay** — replay with per-message-type field edits, no manual frame ID tracking needed
 - **Wireshark-style display** — hex dump with per-field ANSI colour highlights + nested field tree panel
-- **Terminal UI (TUI)** — full Textual-based GUI: Config, Logs, Intercept, and Repeater tabs
+- **Fuzzing** — replay-based fuzzing with a round-robin mutator pipeline; built-in raw mutators (bit-flip, byte insert/delete, known-bad payloads, radamsa) and protocol-aware mutators (field boundary values, overflow, null-byte injection, length mangling); automatic baseline capture and anomaly detection (crash, timeout, response size delta); extensible via a single-method `FrameMutator` ABC
+- **Terminal UI (TUI)** — full Textual-based GUI: Config, Logs, Intercept, Repeater, and Fuzzer tabs
 - **MCP server** — expose all proxy operations as AI tools via the Model Context Protocol (optional)
 - **Event bus** — subscribe async handlers to session open/close and frame events
 - **Pluggable storage** — in-memory default; SQLite backend interface ready for persistence
@@ -113,7 +114,7 @@ Or run directly:
 python -m protopoke.ui.app
 ```
 
-The TUI opens with four tabs:
+The TUI opens with five tabs:
 
 | Tab | Key | Description |
 |---|---|---|
@@ -121,12 +122,13 @@ The TUI opens with four tabs:
 | **Logs** | F2 | Live session list → frame list → hex/parsed detail view. Send any frame to the Repeater. |
 | **Intercept** | F3 | View the interception queue; forward, drop, or modify-and-forward individual frames. Manage ordered intercept and replace rules. |
 | **Repeater** | F4 | Hand-craft frames in a hex editor and send them to the target; review the full send history. |
+| **Fuzzer** | F5 | Select a captured session, pick mutators, run a campaign, and review results with crash/anomaly flags. |
 
 ### Keyboard shortcuts
 
 | Key | Action |
 |---|---|
-| F1–F4 | Switch tabs |
+| F1–F5 | Switch tabs |
 | Ctrl+N | New project |
 | Ctrl+O | Open project |
 | Ctrl+S | Save project |
@@ -820,6 +822,258 @@ print(render_hexdump(frame.raw_bytes, highlights=highlights))
 
 ---
 
+### 13 — Fuzzing a captured session
+
+Fuzzing works in three steps: **capture** a normal session through the proxy, **run** a campaign with one or more mutators, **review** the results.
+
+```python
+import asyncio
+from protopoke.api import ProxyAPI
+from protopoke.config import ProxyConfig
+from protopoke.fuzzing.mutators import BitFlipMutator, KnownBadMutator
+
+async def main():
+    config = ProxyConfig(
+        listen_port=8080,
+        upstream_host="10.0.0.1",
+        upstream_port=9090,
+        framer_name="length_prefix",
+        framer_kwargs={"prefix_length": 4, "byte_order": "big"},
+        protocol_definition_path="myproto.yaml",   # optional but unlocks field mutators
+    )
+    api = ProxyAPI(config)
+    await api.start()
+
+    # --- Step 1: capture a real session ---
+    # Connect your client through the proxy; when it disconnects the session is complete.
+    input("Connect your client, then press Enter…")
+    session_id = api.list_sessions()[-1].id
+    print(f"Template session: {session_id}")
+
+    # --- Step 2: fuzz ---
+    campaign = await api.fuzz_session(
+        session_id=session_id,
+        mutators=[BitFlipMutator(), KnownBadMutator()],
+        iterations=100,
+        stop_on_crash=True,                      # stop on TCP RST
+        on_result=lambda r: print(
+            f"  [{r.iteration:3d}] {r.mutator_name:<14} "
+            f"resp={r.response_size:5d}B  Δ={r.response_size_delta:+d}  "
+            f"{'★ INTERESTING' if r.interesting else ''}"
+        ),
+    )
+
+    # --- Step 3: review ---
+    print(f"\nDone — {campaign.completed_iterations} iterations")
+    print(f"Interesting: {len(campaign.interesting_results)}")
+    print(f"Crashes:     {len(campaign.crash_results)}")
+
+    await api.stop()
+
+asyncio.run(main())
+```
+
+#### Targeting specific frames
+
+Use `frame_selector` to restrict mutations to particular frames — same syntax as `replay_session()`:
+
+```python
+campaign = await api.fuzz_session(
+    session_id=session_id,
+    mutators=[BitFlipMutator()],
+    iterations=50,
+    frame_selector="2",      # only fuzz frame with sequence_number=2
+    # frame_selector="0,2-4" # frames 0, 2, 3, 4
+)
+```
+
+#### Protocol-aware mutators
+
+When a protocol definition is loaded (`api._encoder is not None`), field-aware mutators can target individual fields while keeping the rest of the packet structurally valid. The encoder auto-recomputes length fields, so mutations reach deeper into the application parser.
+
+```python
+from protopoke.fuzzing.mutators import (
+    FieldBoundaryMutator,   # set integer fields to 0, -1, MAX, MAX+1, …
+    FieldOverflowMutator,   # replace string/bytes fields with A×256, A×1024, …
+    NullByteMutator,        # inject \x00 mid-string
+    LengthMangleMutator,    # corrupt length-named fields (data_len, size, …)
+)
+
+encoder = api._encoder     # set after api.set_protocol_file() / api.start()
+
+campaign = await api.fuzz_session(
+    session_id=session_id,
+    mutators=[
+        FieldBoundaryMutator(encoder),
+        FieldOverflowMutator(encoder, lengths=[256, 1024, 4096]),
+        NullByteMutator(encoder),
+        LengthMangleMutator(encoder),
+    ],
+    iterations=200,
+)
+```
+
+`FieldOverflowMutator` will, for example, replace the `username` field with 1 024 `A` bytes and let the encoder update `username_len` automatically — producing a structurally valid but content-overflowing packet.
+
+#### Chaining mutators
+
+Apply multiple mutations in sequence with `ChainMutator`. Each mutator in the chain receives the output of the previous one:
+
+```python
+from protopoke.fuzzing.mutators import ChainMutator, FieldOverflowMutator, BitFlipMutator
+
+chain = ChainMutator([
+    FieldOverflowMutator(encoder, lengths=[256]),  # extend a field
+    BitFlipMutator(count=3),                       # then flip 3 bits anywhere
+])
+
+campaign = await api.fuzz_session(
+    session_id=session_id,
+    mutators=[chain],
+    iterations=50,
+)
+```
+
+#### Using radamsa
+
+[radamsa](https://gitlab.com/akihe/radamsa) is a battle-tested mutation fuzzer. If it is on your `PATH`, `RadamsaMutator` pipes each frame through it. If radamsa is not installed, it falls back to `BitFlipMutator` automatically — no error, no crash.
+
+```python
+from protopoke.fuzzing.mutators import RadamsaMutator
+
+campaign = await api.fuzz_session(
+    session_id=session_id,
+    mutators=[RadamsaMutator()],     # uses "radamsa" on PATH
+    iterations=100,
+)
+
+# Or point at a non-standard binary:
+campaign = await api.fuzz_session(
+    session_id=session_id,
+    mutators=[RadamsaMutator(radamsa_path="/opt/radamsa/bin/radamsa")],
+    iterations=100,
+)
+```
+
+---
+
+### 14 — Writing a custom mutator
+
+Subclass `FrameMutator` and implement one async method. The method receives the raw `Frame` and, if a protocol definition is loaded, the decoded `ParsedMessage`. Return mutated bytes, or `None` to skip this iteration.
+
+#### Minimal example — raw mutation (no protocol knowledge)
+
+```python
+from protopoke.fuzzing.mutators.base import FrameMutator
+
+class XorMutator(FrameMutator):
+    """XOR every byte with a fixed key."""
+
+    def __init__(self, key: bytes = b"\xde\xad"):
+        self._key = key
+
+    @property
+    def name(self) -> str:
+        return f"XOR({self._key.hex()})"
+
+    async def mutate(self, frame, parsed):
+        return bytes(
+            b ^ self._key[i % len(self._key)]
+            for i, b in enumerate(frame.raw_bytes)
+        )
+```
+
+Use it exactly like any built-in mutator:
+
+```python
+campaign = await api.fuzz_session(
+    session_id=session_id,
+    mutators=[XorMutator(b"\xff"), BitFlipMutator()],
+    iterations=50,
+)
+```
+
+#### Protocol-aware example — target a specific field
+
+When `parsed` is not `None` you have full access to every decoded field (name, value, offset, size). Use the encoder to rebuild the packet with your modification so length fields are recomputed correctly.
+
+```python
+import random
+from protopoke.fuzzing.mutators.base import FrameMutator
+
+class FormatStringMutator(FrameMutator):
+    """Inject format-string payloads into every string field."""
+
+    _PAYLOADS = ["%s%s%n", "%x%x%x%x", "%p%p%p%p", "%.10000d"]
+
+    def __init__(self, encoder):
+        self._encoder = encoder
+
+    @property
+    def name(self) -> str:
+        return "FormatString"
+
+    async def mutate(self, frame, parsed):
+        if parsed is None:
+            return None   # no protocol definition loaded, skip
+
+        string_fields = [f for f in parsed.fields if isinstance(f.value, str)]
+        if not string_fields:
+            return None   # no string fields in this message type, skip
+
+        target  = random.choice(string_fields)
+        payload = random.choice(self._PAYLOADS)
+
+        try:
+            return self._encoder.encode_with_edits(parsed, {target.name: payload})
+        except Exception:
+            return None   # encoder rejected the value, skip
+```
+
+#### External-tool wrapper
+
+```python
+import asyncio
+from protopoke.fuzzing.mutators.base import FrameMutator
+from protopoke.fuzzing.mutators.raw import BitFlipMutator
+
+class HonggfuzzMutator(FrameMutator):
+    """Pipe the frame through honggfuzz-mutator (if installed)."""
+
+    async def mutate(self, frame, parsed):
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "honggfuzz-mutator",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            out, _ = await asyncio.wait_for(proc.communicate(frame.raw_bytes), timeout=5.0)
+            return out if out else None
+        except (FileNotFoundError, asyncio.TimeoutError):
+            return await BitFlipMutator().mutate(frame, parsed)  # fallback
+```
+
+#### Combining built-in and custom mutators
+
+Custom mutators compose with everything else:
+
+```python
+campaign = await api.fuzz_session(
+    session_id=session_id,
+    mutators=[
+        BitFlipMutator(),
+        KnownBadMutator(),
+        FormatStringMutator(api._encoder),
+        ChainMutator([FormatStringMutator(api._encoder), BitFlipMutator(count=2)]),
+    ],
+    iterations=200,
+    stop_on_crash=True,
+)
+```
+
+---
+
 ## Repository Layout
 
 ```
@@ -860,6 +1114,15 @@ protopoke/
 │   │   ├── rule.py         # InterceptRule, ReplaceRule dataclasses + RuleAction enum
 │   │   ├── engine.py       # RulesEngine: ordered replace-rule pipeline
 │   │   └── filter.py       # InterceptFilter: ordered intercept-rule evaluation
+│   ├── fuzzing/
+│   │   ├── models.py       # FuzzResult (anomaly heuristic) + FuzzCampaign
+│   │   ├── engine.py       # FuzzerEngine: baseline capture, round-robin mutation loop, crash detection
+│   │   └── mutators/
+│   │       ├── base.py     # FrameMutator ABC — one async method, optional name property
+│   │       ├── raw.py      # BitFlipMutator, ByteInsertMutator, ByteDeleteMutator,
+│   │       │               # KnownBadMutator, RadamsaMutator (radamsa fallback), ChainMutator
+│   │       └── field.py    # FieldBoundaryMutator, FieldOverflowMutator,
+│   │                       # NullByteMutator, LengthMangleMutator (protocol-aware, encoder-backed)
 │   ├── replay/
 │   │   ├── engine.py       # ReplayEngine + ReplayResult (direction filter, frame selector)
 │   │   └── models.py       # RepeaterRequest + SendRecord (for the UI repeater tab)
@@ -877,7 +1140,8 @@ protopoke/
 │       │   ├── config.py   # ConfigTab — proxy configuration form
 │       │   ├── logs.py     # LogsTab — sessions, frames, hex/parsed detail
 │       │   ├── intercept.py # InterceptTab — queue, hex editor, intercept/replace rules
-│       │   └── repeater.py # RepeaterTab — hand-craft and replay frames
+│       │   ├── repeater.py # RepeaterTab — hand-craft and replay frames
+│       │   └── fuzzer.py   # FuzzerTab — campaign config, mutator checkboxes, live results table
 │       ├── modals/
 │       │   ├── project.py  # NewProjectModal, OpenProjectModal, SaveAsModal
 │       │   ├── new_request.py # NewRequestModal — create a repeater request
@@ -967,8 +1231,9 @@ For TLS interception the proxy must terminate TLS on both sides independently so
 - **Field-level replay** ✅ — `replay_session_with_field_edits()` applies per-message-type field edits
 - **Wireshark-style display** ✅ — `render_hexdump()` with ANSI highlights, `render_field_tree()`, `render_frame_header()`
 - **Intercept / replace rules** ✅ — ordered, filterable, first-match-wins intercept rules; byte-pattern replace rules
-- **Terminal UI** ✅ — Textual TUI with Config, Logs, Intercept, and Repeater tabs; project save/load
+- **Terminal UI** ✅ — Textual TUI with Config, Logs, Intercept, Repeater, and Fuzzer tabs; project save/load
 - **MCP server** ✅ — FastMCP wrapper exposing all ProxyAPI operations as AI tools
+- **Fuzzing subsystem** ✅ — `FrameMutator` ABC; raw mutators (bit-flip, insert, delete, known-bad, radamsa, chain); protocol-aware mutators (field boundary, overflow, null-byte, length mangle); `FuzzerEngine` with baseline capture and anomaly detection; `api.fuzz_session()`; Fuzzer TUI tab (F5)
 
 ### Near term
 
@@ -983,8 +1248,6 @@ For TLS interception the proxy must terminate TLS on both sides independently so
 - **Protocol decoder library** — implement `ProtocolDecoder` subclasses for common protocols (e.g. HTTP/1.1, Redis, DNS) as built-in options alongside the definition-based approach.
 
 ### Advanced features
-
-- **Fuzzing hooks** — add a `FrameMutator` interface between the intercept controller and the relay. `ReplayEngine` already supports targeted replacement; a mutator layer can automate this for coverage-guided or random fuzzing.
 
 - **Differential replay** — replay the same session against two servers and compare responses frame-by-frame.
 
