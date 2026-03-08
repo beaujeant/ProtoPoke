@@ -9,7 +9,7 @@ from typing import Optional
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.message import Message
-from textual.widgets import Footer, Header, TabbedContent, TabPane
+from textual.widgets import Footer, Header, Switch, TabbedContent, TabPane
 
 from ..api import ProxyAPI
 from ..config import ProxyConfig
@@ -219,11 +219,9 @@ class ProtoPoke(App):
             self._proxy_running = True
             self._update_title()
             # Sync the intercept toggle in the Intercept tab to reflect config
-            from .tabs.intercept import InterceptTab as _IT
             try:
-                from textual.widgets import Switch as _SW
-                self.query_one("#intercept-tab", _IT).query_one(
-                    "#intercept-toggle", _SW
+                self.query_one("#intercept-tab", InterceptTab).query_one(
+                    "#intercept-toggle", Switch
                 ).value = self.api.config.intercept_enabled
             except Exception:
                 pass

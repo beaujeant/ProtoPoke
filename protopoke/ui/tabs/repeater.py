@@ -4,12 +4,8 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.widget import Widget
-from textual.widgets import (
-    DataTable, TextArea, Button, Label, Static,
-    TabbedContent, TabPane,
-)
+from textual.widgets import DataTable, TextArea, Button, Label, Static
 from textual.containers import Horizontal, Vertical
-from textual.message import Message
 
 from ...models import Frame
 from ...replay.models import RepeaterRequest, SendRecord
