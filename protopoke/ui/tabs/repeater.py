@@ -144,7 +144,7 @@ class RepeaterTab(Widget):
                 yield Static("  Request (hex — editable)", classes="pane-header")
                 yield TextArea("", id="req-editor", theme="monokai")
             with Vertical(id="response-view"):
-                yield Static("  Response packets  ↓ server→client", classes="pane-header")
+                yield Static("  Response frames  ↓ server→client", classes="pane-header")
                 yield DataTable(id="resp-packets-table", cursor_type="row")
                 yield Static("  Packet view (hex)", classes="pane-header")
                 yield TextArea("", id="resp-view", theme="monokai", read_only=True)
@@ -173,8 +173,7 @@ class RepeaterTab(Widget):
         dt.add_column("Error", key="err")
 
         rpt = self.query_one("#resp-packets-table", DataTable)
-        rpt.add_column("#", key="num")
-        rpt.add_column("Δt (ms)", key="delta")
+        rpt.add_column("Frame", key="num")
         rpt.add_column("Size (B)", key="size")
 
     # ------------------------------------------------------------------
@@ -225,28 +224,27 @@ class RepeaterTab(Widget):
         """Populate the response packet list and viewer from a SendRecord."""
         self._refresh_response_packets(record.response_packets)
 
-    def _refresh_response_packets(self, packets: list[bytes], send_ts: float = 0.0) -> None:
+    def _refresh_response_packets(self, packets: list[bytes]) -> None:
         """
         Repopulate the response-packet DataTable with *packets*.
 
-        Each row shows the packet index, elapsed time since send (ms),
-        and byte count.  The first packet is auto-selected so the hex
-        viewer is populated immediately.
+        Each row is one logical frame produced by the configured framer
+        (e.g. one delimiter-delimited message, one length-prefixed message,
+        or one raw read() chunk when the "raw" framer is active).
+        The first frame is auto-selected so the hex viewer populates immediately.
         """
         rpt = self.query_one("#resp-packets-table", DataTable)
         rpt.clear()
         self._current_response_packets = packets
 
         if not packets:
-            self.query_one("#resp-view", TextArea).load_text("# (no packets received)")
+            self.query_one("#resp-view", TextArea).load_text("# (no frames received)")
             return
 
-        base_ts = send_ts if send_ts else _time.time()
         for i, pkt in enumerate(packets):
-            delta_ms = ""  # timing not tracked per-packet; placeholder
-            rpt.add_row(str(i + 1), delta_ms, str(len(pkt)), key=str(i))
+            rpt.add_row(str(i + 1), str(len(pkt)), key=str(i))
 
-        # Auto-select and display the first packet
+        # Auto-select and display the first frame
         self._show_packet(0)
 
     def _show_packet(self, idx: int) -> None:
@@ -455,9 +453,9 @@ class RepeaterTab(Widget):
         self._display_record_response(record)
 
         self._refresh_history(req)
-        n_pkts = len(record.response_packets)
+        n_frames = len(record.response_packets)
         status = "OK" if record.success else f"Error: {record.error}"
-        self.notify(f"Send complete: {status} — {n_pkts} packet(s) received")
+        self.notify(f"Send complete: {status} — {n_frames} frame(s) received")
 
     # ------------------------------------------------------------------
     # DataTable row selection
