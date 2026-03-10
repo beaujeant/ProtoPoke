@@ -602,8 +602,9 @@ class ReplayEngine:
         host = session.info.server_host
         port = session.info.server_port
 
-        received      = bytearray()
-        server_closed = False
+        received         = bytearray()
+        received_packets: list[bytes] = []
+        server_closed    = False
         io_error: Optional[Exception] = None
 
         try:
@@ -635,6 +636,7 @@ class ReplayEngine:
                 if not chunk:   # EOF sentinel — server closed the connection
                     server_closed = True
                     break
+                received_packets.append(chunk)
                 received.extend(chunk)
 
         if server_closed:
@@ -648,6 +650,7 @@ class ReplayEngine:
                 return SendRecord.create(
                     sent_bytes=data,
                     received_bytes=bytes(received),
+                    response_packets=received_packets,
                     host=host,
                     port=port,
                     tls=tls,
@@ -656,12 +659,13 @@ class ReplayEngine:
                 )
 
         logger.info(
-            "send_on_repeater_session %s: sent=%d bytes, received=%d bytes",
-            session_id[:8], len(data), len(received),
+            "send_on_repeater_session %s: sent=%d bytes, received=%d bytes (%d packets)",
+            session_id[:8], len(data), len(received), len(received_packets),
         )
         return SendRecord.create(
             sent_bytes=data,
             received_bytes=bytes(received),
+            response_packets=received_packets,
             host=host,
             port=port,
             tls=tls,
@@ -738,7 +742,8 @@ class ReplayEngine:
                 error=f"Connection failed: {exc}",
             )
 
-        received = bytearray()
+        received         = bytearray()
+        received_packets: list[bytes] = []
         try:
             writer.write(data)
             if writer.can_write_eof():
@@ -750,6 +755,7 @@ class ReplayEngine:
                     chunk = await reader.read(4096)
                     if not chunk:
                         break
+                    received_packets.append(chunk)
                     received.extend(chunk)
 
             try:
@@ -764,6 +770,7 @@ class ReplayEngine:
             return SendRecord.create(
                 sent_bytes=data,
                 received_bytes=bytes(received),
+                response_packets=received_packets,
                 host=host,
                 port=port,
                 tls=tls,
@@ -778,12 +785,13 @@ class ReplayEngine:
                 pass
 
         logger.info(
-            "send_frame: sent=%d bytes, received=%d bytes to %s:%d",
-            len(data), len(received), host, port,
+            "send_frame: sent=%d bytes, received=%d bytes (%d packets) to %s:%d",
+            len(data), len(received), len(received_packets), host, port,
         )
         return SendRecord.create(
             sent_bytes=data,
             received_bytes=bytes(received),
+            response_packets=received_packets,
             host=host,
             port=port,
             tls=tls,

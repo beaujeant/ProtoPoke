@@ -28,37 +28,42 @@ class SendRecord:
     A single send+response pair recorded in the Repeater history.
 
     Attributes:
-        id:             Unique ID (UUID4).
-        timestamp:      When the send was initiated (Unix seconds).
-        sent_bytes:     Bytes that were sent to the target.
-        received_bytes: Raw bytes received back (empty on error).
-        host:           Target host.
-        port:           Target port.
-        tls:            Whether TLS was used for the connection.
-        success:        ``False`` if a connection/timeout error occurred.
-        error:          Error message when ``success`` is ``False``.
+        id:               Unique ID (UUID4).
+        timestamp:        When the send was initiated (Unix seconds).
+        sent_bytes:       Bytes that were sent to the target.
+        received_bytes:   Raw bytes received back (concatenated; empty on error).
+        response_packets: Individual network chunks received from the server,
+                          in order.  Each entry is one read() chunk — finer
+                          grained than received_bytes (which is their join).
+        host:             Target host.
+        port:             Target port.
+        tls:              Whether TLS was used for the connection.
+        success:          ``False`` if a connection/timeout error occurred.
+        error:            Error message when ``success`` is ``False``.
     """
 
-    id:             str
-    timestamp:      float
-    sent_bytes:     bytes
-    received_bytes: bytes
-    host:           str
-    port:           int
-    tls:            bool  = False
-    success:        bool  = True
-    error:          Optional[str] = None
+    id:               str
+    timestamp:        float
+    sent_bytes:       bytes
+    received_bytes:   bytes
+    host:             str
+    port:             int
+    tls:              bool        = False
+    success:          bool        = True
+    error:            Optional[str]  = None
+    response_packets: list[bytes] = field(default_factory=list)
 
     @classmethod
     def create(
         cls,
-        sent_bytes:     bytes,
-        received_bytes: bytes,
-        host:           str,
-        port:           int,
-        tls:            bool = False,
-        success:        bool = True,
-        error:          Optional[str] = None,
+        sent_bytes:       bytes,
+        received_bytes:   bytes,
+        host:             str,
+        port:             int,
+        tls:              bool        = False,
+        success:          bool        = True,
+        error:            Optional[str]  = None,
+        response_packets: list[bytes] = None,
     ) -> "SendRecord":
         return cls(
             id=str(uuid.uuid4()),
@@ -70,19 +75,21 @@ class SendRecord:
             tls=tls,
             success=success,
             error=error,
+            response_packets=response_packets or [],
         )
 
     def to_dict(self) -> dict:
         return {
-            "id":             self.id,
-            "timestamp":      self.timestamp,
-            "sent_bytes":     self.sent_bytes.hex(),
-            "received_bytes": self.received_bytes.hex(),
-            "host":           self.host,
-            "port":           self.port,
-            "tls":            self.tls,
-            "success":        self.success,
-            "error":          self.error,
+            "id":               self.id,
+            "timestamp":        self.timestamp,
+            "sent_bytes":       self.sent_bytes.hex(),
+            "received_bytes":   self.received_bytes.hex(),
+            "response_packets": [p.hex() for p in self.response_packets],
+            "host":             self.host,
+            "port":             self.port,
+            "tls":              self.tls,
+            "success":          self.success,
+            "error":            self.error,
         }
 
     @classmethod
@@ -92,6 +99,7 @@ class SendRecord:
             timestamp=d["timestamp"],
             sent_bytes=bytes.fromhex(d["sent_bytes"]),
             received_bytes=bytes.fromhex(d["received_bytes"]),
+            response_packets=[bytes.fromhex(p) for p in d.get("response_packets", [])],
             host=d["host"],
             port=d["port"],
             tls=d.get("tls", False),
@@ -127,6 +135,8 @@ class RepeaterRequest:
     current_bytes:       bytes             = b""
     history:             list[SendRecord]  = field(default_factory=list)
     source_session_id:   Optional[str]     = None
+    # Seconds to wait for server packets after a send (configurable per-tab).
+    response_window:     float             = 1.0
     # ID of the persistent TCP session created for custom host:port sends.
     # Not persisted to disk — connections don't survive restarts.
     repeater_session_id: Optional[str]     = field(default=None, compare=False)
@@ -165,6 +175,7 @@ class RepeaterRequest:
             "current_bytes":     self.current_bytes.hex(),
             "history":           [r.to_dict() for r in self.history],
             "source_session_id": self.source_session_id,
+            "response_window":   self.response_window,
         }
 
     @classmethod
@@ -178,4 +189,5 @@ class RepeaterRequest:
             current_bytes=bytes.fromhex(d.get("current_bytes", "")),
             history=[SendRecord.from_dict(r) for r in d.get("history", [])],
             source_session_id=d.get("source_session_id"),
+            response_window=d.get("response_window", 1.0),
         )
