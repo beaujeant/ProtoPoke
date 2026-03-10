@@ -561,8 +561,25 @@ class ProxyAPI:
         )
 
     # ------------------------------------------------------------------
-    # Repeater: single-frame direct send
+    # Repeater: inject into existing session OR direct send
     # ------------------------------------------------------------------
+
+    async def inject_to_server(self, session_id: str, data: bytes) -> bool:
+        """
+        Write *data* directly into the upstream connection of an active session.
+
+        The bytes arrive on the *same* TCP connection that the real client is
+        using, so the server sees them as part of the established session.  The
+        server's response (if any) flows back through the relay to the original
+        client and is captured as a normal session frame.
+
+        Returns:
+            ``True``  if the session was active and the write succeeded.
+            ``False`` if the session has no active upstream writer (closed or
+                      not found) — callers should fall back to
+                      :meth:`send_frame` in this case.
+        """
+        return await self.engine.inject_to_server(session_id, data)
 
     async def send_frame(
         self,

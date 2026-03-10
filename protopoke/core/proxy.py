@@ -96,6 +96,12 @@ class ProxyEngine:
         # Used to cancel all sessions on shutdown.
         self._session_tasks: dict[str, asyncio.Task] = {}
 
+        # session_id → StreamWriter to the upstream server.
+        # Populated when a session becomes active; removed when it closes.
+        # Used by inject_to_server() to write forged frames into an existing
+        # proxied connection without opening a new TCP connection.
+        self._session_server_writers: dict[str, asyncio.StreamWriter] = {}
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -248,6 +254,7 @@ class ProxyEngine:
 
         # Both sides connected
         self.session_registry.mark_active(session.id)
+        self._session_server_writers[session.id] = server_writer
         await self.event_bus.publish(SessionOpenedEvent(session=session.info))
 
         # Create one framer per direction
@@ -307,6 +314,39 @@ class ProxyEngine:
         except Exception as exc:
             logger.error("Session %s unhandled error: %s", session.id, exc, exc_info=True)
         finally:
+            self._session_server_writers.pop(session.id, None)
             self.session_registry.mark_closed(session.id)
             await self.event_bus.publish(SessionClosedEvent(session=session.info))
             logger.info("Session %s done", session.id)
+
+    # ------------------------------------------------------------------
+    # Repeater injection
+    # ------------------------------------------------------------------
+
+    async def inject_to_server(self, session_id: str, data: bytes) -> bool:
+        """
+        Write *data* directly into an active session's upstream TCP connection.
+
+        The bytes are written to the server writer that the relay already holds
+        open, so they arrive on the *same* TCP connection as the real client's
+        traffic.  The server's response (if any) flows back through the normal
+        relay path and is forwarded to the original client.
+
+        Returns:
+            ``True``  if the session was found and the write succeeded.
+            ``False`` if the session is not active (no writer registered).
+
+        Raises:
+            OSError / BrokenPipeError: propagated if the write itself fails
+            (caller should catch and treat as an injection error).
+        """
+        writer = self._session_server_writers.get(session_id)
+        if writer is None:
+            return False
+        writer.write(data)
+        await writer.drain()
+        logger.debug(
+            "inject_to_server: injected %d bytes into session %s",
+            len(data), session_id[:8],
+        )
+        return True

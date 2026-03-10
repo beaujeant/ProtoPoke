@@ -263,12 +263,35 @@ class RepeaterTab(Widget):
         self.run_worker(self._async_send(req, data), exclusive=True)
 
     async def _async_send(self, req: RepeaterRequest, data: bytes) -> None:
-        record = await self.app.api.send_frame(
-            data=data,
-            host=req.host,
-            port=req.port,
-            tls=req.tls,
-        )
+        # Prefer injecting into the existing proxy session so the forged packet
+        # arrives on the *same* TCP connection the real client is using.
+        # Fall back to a new direct connection when no live session is linked.
+        injected = False
+        if req.source_session_id:
+            try:
+                injected = await self.app.api.inject_to_server(
+                    req.source_session_id, data
+                )
+            except OSError:
+                injected = False
+
+        if injected:
+            from ...replay.models import SendRecord
+            record = SendRecord.create(
+                sent_bytes=data,
+                received_bytes=b"",
+                host=req.host,
+                port=req.port,
+                tls=req.tls,
+                success=True,
+            )
+        else:
+            record = await self.app.api.send_frame(
+                data=data,
+                host=req.host,
+                port=req.port,
+                tls=req.tls,
+            )
         req.add_record(record)
 
         # Update response pane
