@@ -121,14 +121,24 @@ class NewRequestModal(ModalScreen[NewRequestResult | None]):
         if event.select.id != "session-select":
             return
         sid = event.value
+        host_input = self.query_one("#req-host", Input)
+        port_input = self.query_one("#req-port", Input)
+        tls_switch = self.query_one("#req-tls", Switch)
         if not sid:
+            # Custom host:port — re-enable the fields
+            host_input.disabled = False
+            port_input.disabled = False
+            tls_switch.disabled = False
             return
-        # Pre-fill host/port from the selected session
+        # Pre-fill host/port from the selected session and grey out fields
         for session_id, _label, host, port in self._sessions:
             if session_id == sid:
-                self.query_one("#req-host", Input).value = host
-                self.query_one("#req-port", Input).value = str(port)
+                host_input.value = host
+                port_input.value = str(port)
                 break
+        host_input.disabled = True
+        port_input.disabled = True
+        tls_switch.disabled = True
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-cancel":
