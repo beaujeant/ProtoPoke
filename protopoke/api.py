@@ -566,11 +566,12 @@ class ProxyAPI:
 
     async def send_frame(
         self,
-        data:            bytes,
-        host:            str,
-        port:            int,
-        tls:             bool  = False,
-        connect_timeout: Optional[float] = None,
+        data:             bytes,
+        host:             str,
+        port:             int,
+        tls:              bool           = False,
+        connect_timeout:  Optional[float] = None,
+        receive_timeout:  Optional[float] = None,
     ) -> SendRecord:
         """
         Send raw bytes to *host*:*port* and return a :class:`SendRecord`.
@@ -580,11 +581,14 @@ class ProxyAPI:
         the connection.  Suitable for the Repeater tab's one-shot send.
 
         Args:
-            data:            Bytes to send.
-            host:            Target hostname or IP address.
-            port:            Target TCP port.
-            tls:             Wrap the connection in TLS (no cert verification).
-            connect_timeout: Override the default connect timeout.
+            data:             Bytes to send.
+            host:             Target hostname or IP address.
+            port:             Target TCP port.
+            tls:              Wrap the connection in TLS (no cert verification).
+            connect_timeout:  Override the default connect timeout.
+            receive_timeout:  Seconds to wait for the server response.  When
+                              the deadline is reached the bytes received so far
+                              are returned.  Defaults to the connect timeout.
 
         Returns:
             :class:`~protopoke.replay.models.SendRecord` with sent bytes,
@@ -596,6 +600,7 @@ class ProxyAPI:
             port=port,
             tls=tls,
             connect_timeout=connect_timeout,
+            receive_timeout=receive_timeout,
         )
 
     # ------------------------------------------------------------------

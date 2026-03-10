@@ -872,6 +872,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         port:            int,
         tls:             bool           = False,
         connect_timeout: Optional[float] = None,
+        receive_timeout: Optional[float] = None,
     ) -> dict:
         """
         Send raw bytes directly to host:port and return the response.
@@ -886,6 +887,9 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
             port:            Target TCP port.
             tls:             Wrap the connection in TLS (no cert verification).
             connect_timeout: Optional override for the default connect timeout.
+            receive_timeout: Seconds to wait for the server response before
+                             returning bytes received so far.  Defaults to the
+                             connect timeout.
 
         Returns:
             SendRecord dict: sent_bytes_hex, received_bytes_hex, success, error.
@@ -901,6 +905,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
             port=port,
             tls=tls,
             connect_timeout=connect_timeout,
+            receive_timeout=receive_timeout,
         )
         return record.to_dict()
 
