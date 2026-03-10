@@ -234,10 +234,15 @@ class ReplayEngine:
         self._framer_name      = framer_name
         self._framer_kwargs    = framer_kwargs or {}
         # Persistent connections created by the Repeater for custom host:port sends.
-        # Maps session_id → (reader, writer, tls_flag)
+        # Maps session_id → (writer, tls, reader_queue, reader_task)
+        # The StreamReader is owned exclusively by the background reader_task so
+        # that only one coroutine ever calls reader.read() — avoiding the
+        # Python 3.12+ RuntimeError "read() called while another coroutine is
+        # already waiting for incoming data" that occurs when asyncio.wait_for
+        # times out and leaves StreamReader._waiter in a cancelled state.
         self._open_connections: dict[
             str,
-            tuple[asyncio.StreamReader, asyncio.StreamWriter, bool]
+            tuple[asyncio.StreamWriter, bool, asyncio.Queue, asyncio.Task]
         ] = {}
 
     async def replay_session(
@@ -510,13 +515,46 @@ class ReplayEngine:
             server_port=port,
         )
         self._session_registry.mark_active(session.id)
-        self._open_connections[session.id] = (reader, writer, tls)
+
+        # Start a dedicated background task that is the *sole* reader of the
+        # StreamReader.  It feeds received bytes into a Queue so that
+        # send_on_repeater_session can drain from the Queue with a timeout
+        # without ever calling reader.read() from a second coroutine.
+        reader_queue: asyncio.Queue = asyncio.Queue()
+        reader_task = asyncio.get_event_loop().create_task(
+            self._background_reader(reader, reader_queue),
+            name=f"repeater-reader-{session.id[:8]}",
+        )
+        self._open_connections[session.id] = (writer, tls, reader_queue, reader_task)
 
         logger.info(
             "Repeater session opened: %s → %s:%d (tls=%s)",
             session.id[:8], host, port, tls,
         )
         return session
+
+    async def _background_reader(
+        self,
+        reader: asyncio.StreamReader,
+        queue:  asyncio.Queue,
+    ) -> None:
+        """
+        Background task — sole consumer of *reader*.
+
+        Feeds every chunk into *queue*.  Puts ``b""`` when the server closes
+        the connection (EOF).  Puts the exception object itself if an I/O
+        error occurs, so the send-side can distinguish EOF from errors.
+        """
+        try:
+            while True:
+                chunk = await reader.read(4096)
+                await queue.put(chunk)
+                if not chunk:   # EOF sentinel
+                    break
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            await queue.put(exc)   # propagate error as a sentinel value
 
     async def send_on_repeater_session(
         self,
@@ -560,48 +598,61 @@ class ReplayEngine:
                 error=f"Repeater session {session_id[:8]} not found or not open",
             )
 
-        reader, writer, tls = conn
+        writer, tls, queue, reader_task = conn
         host = session.info.server_host
         port = session.info.server_port
 
         received      = bytearray()
         server_closed = False
+        io_error: Optional[Exception] = None
 
         try:
             writer.write(data)   # No write_eof() — keep connection alive
             await writer.drain()
-
-            async def _read_response() -> None:
-                nonlocal server_closed
-                while True:
-                    chunk = await reader.read(4096)
-                    if not chunk:
-                        server_closed = True
-                        break
-                    received.extend(chunk)
-
-            try:
-                await asyncio.wait_for(_read_response(), timeout=receive_timeout)
-            except asyncio.TimeoutError:
-                pass  # Normal — connection is alive, no more data in the window
-
         except (ConnectionResetError, BrokenPipeError, OSError) as exc:
+            io_error      = exc
             server_closed = True
-            return SendRecord.create(
-                sent_bytes=data,
-                received_bytes=bytes(received),
-                host=host,
-                port=port,
-                tls=tls,
-                success=False,
-                error=f"I/O error: {exc}",
+
+        if not server_closed:
+            # Collect whatever the server sends back within the timeout window.
+            # We read from the Queue fed by _background_reader rather than
+            # calling reader.read() directly.  This ensures only one coroutine
+            # ever touches the StreamReader, avoiding the Python 3.12+
+            # RuntimeError about concurrent readers.
+            deadline = asyncio.get_event_loop().time() + receive_timeout
+            while True:
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    break
+                try:
+                    chunk = await asyncio.wait_for(queue.get(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    break   # No more data in window; connection stays alive
+                if isinstance(chunk, Exception):
+                    io_error      = chunk
+                    server_closed = True
+                    break
+                if not chunk:   # EOF sentinel — server closed the connection
+                    server_closed = True
+                    break
+                received.extend(chunk)
+
+        if server_closed:
+            reader_task.cancel()
+            self._open_connections.pop(session_id, None)
+            self._session_registry.mark_closed(session_id)
+            logger.info(
+                "Repeater session %s closed by server after send", session_id[:8]
             )
-        finally:
-            if server_closed:
-                self._open_connections.pop(session_id, None)
-                self._session_registry.mark_closed(session_id)
-                logger.info(
-                    "Repeater session %s closed by server after send", session_id[:8]
+            if io_error:
+                return SendRecord.create(
+                    sent_bytes=data,
+                    received_bytes=bytes(received),
+                    host=host,
+                    port=port,
+                    tls=tls,
+                    success=False,
+                    error=f"I/O error: {io_error}",
                 )
 
         logger.info(
