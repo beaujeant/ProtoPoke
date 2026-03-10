@@ -188,15 +188,30 @@ class ProxyEngine:
                 client_writer.close()
                 return
 
+        # In auto-CA / transparent-proxy mode the TLS handshake is already
+        # complete by the time asyncio calls this handler.  Extract the SNI
+        # server_name the client declared so we can:
+        #   a) record it as the logical server in the session
+        #   b) forward it as the upstream TLS SNI (and hostname for verification)
+        ssl_obj = client_writer.get_extra_info("ssl_object")
+        sni_host = self.tls_handler.get_sni_hostname(ssl_obj)
+        # Prefer the SNI hostname; fall back to the statically-configured host
+        effective_server_name = sni_host or self.config.upstream_host
+        if sni_host:
+            logger.debug("SNI hostname from client: %s", sni_host)
+
         # Create session record
         session = self.session_registry.create(
             client_host=client_host,
             client_port=client_port,
-            server_host=self.config.upstream_host,
+            server_host=effective_server_name,
             server_port=self.config.upstream_port,
         )
 
-        # Connect to upstream
+        # Connect to upstream (always the configured IP/host for the TCP
+        # connection, but pass the effective server name for TLS SNI and
+        # hostname verification so the upstream handshake matches what the
+        # client expects).
         upstream_ssl = self.tls_handler.get_upstream_ssl_context()
 
         try:
@@ -205,9 +220,10 @@ class ProxyEngine:
                     self.config.upstream_host,
                     self.config.upstream_port,
                     ssl=upstream_ssl,
-                    # server_hostname is required for SNI and hostname
-                    # verification when using TLS; ignored when ssl=None.
-                    server_hostname=self.config.upstream_host if upstream_ssl else None,
+                    # server_hostname drives both the TLS SNI extension sent to
+                    # the upstream server and the hostname used for cert
+                    # verification; ignored when ssl=None.
+                    server_hostname=effective_server_name if upstream_ssl else None,
                 ),
                 timeout=self.config.connect_timeout,
             )

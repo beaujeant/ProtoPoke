@@ -436,6 +436,64 @@ class TestTLSProxyIntegration:
             finally:
                 await engine.stop()
 
+    async def test_sni_aware_cert_dispatch(self, tmp_path):
+        """
+        When the client connects with a server_name in its TLS ClientHello,
+        the proxy presents a cert whose SAN matches that server_name, not the
+        statically-configured upstream_host.
+        """
+        ca = CertificateAuthority.generate()
+        ca_cert_path = str(tmp_path / "ca.crt")
+        ca_key_path  = str(tmp_path / "ca.key")
+        ca.save(ca_cert_path, ca_key_path)
+
+        async with echo_server_ctx() as (up_host, up_port):
+            listen_port = free_port()
+            cfg = ProxyConfig(
+                listen_host="127.0.0.1",
+                listen_port=listen_port,
+                upstream_host=up_host,
+                upstream_port=up_port,
+                tls_listen=True,
+                ca_cert_path=ca_cert_path,
+                ca_key_path=ca_key_path,
+            )
+            engine = ProxyEngine(cfg)
+            await engine.start()
+
+            try:
+                # Connect with a specific SNI that differs from upstream_host
+                sni_name = "api.example.test"
+
+                client_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                client_ctx.load_verify_locations(cadata=ca.cert_pem.decode())
+                client_ctx.check_hostname = False  # we check SAN manually below
+
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(
+                        "127.0.0.1", listen_port,
+                        ssl=client_ctx,
+                        server_hostname=sni_name,
+                    ),
+                    timeout=5.0,
+                )
+
+                # Inspect the cert the proxy presented
+                ssl_obj = writer.get_extra_info("ssl_object")
+                der = ssl_obj.getpeercert(binary_form=True)
+                from cryptography import x509 as _x509
+                leaf = _x509.load_der_x509_certificate(der)
+                san = leaf.extensions.get_extension_for_class(_x509.SubjectAlternativeName)
+                dns_names = san.value.get_values_for_type(_x509.DNSName)
+                assert sni_name in dns_names, (
+                    f"Expected proxy to present cert for {sni_name!r}, "
+                    f"got SANs: {dns_names}"
+                )
+
+                writer.close()
+            finally:
+                await engine.stop()
+
     async def test_manual_cert_listen(self, tmp_path):
         """
         Proxy uses a manually supplied cert (no auto-CA) on the listening side.
