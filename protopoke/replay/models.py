@@ -119,14 +119,17 @@ class RepeaterRequest:
         source_session_id: Session ID this request was sent from (optional).
     """
 
-    id:                str
-    label:             str
-    host:              str
-    port:              int
-    tls:               bool              = False
-    current_bytes:     bytes             = b""
-    history:           list[SendRecord]  = field(default_factory=list)
-    source_session_id: Optional[str]     = None
+    id:                  str
+    label:               str
+    host:                str
+    port:                int
+    tls:                 bool              = False
+    current_bytes:       bytes             = b""
+    history:             list[SendRecord]  = field(default_factory=list)
+    source_session_id:   Optional[str]     = None
+    # ID of the persistent TCP session created for custom host:port sends.
+    # Not persisted to disk — connections don't survive restarts.
+    repeater_session_id: Optional[str]     = field(default=None, compare=False)
 
     @classmethod
     def create(

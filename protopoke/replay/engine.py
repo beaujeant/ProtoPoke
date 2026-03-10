@@ -233,6 +233,12 @@ class ReplayEngine:
         self._connect_timeout  = connect_timeout
         self._framer_name      = framer_name
         self._framer_kwargs    = framer_kwargs or {}
+        # Persistent connections created by the Repeater for custom host:port sends.
+        # Maps session_id → (reader, writer, tls_flag)
+        self._open_connections: dict[
+            str,
+            tuple[asyncio.StreamReader, asyncio.StreamWriter, bool]
+        ] = {}
 
     async def replay_session(
         self,
@@ -450,6 +456,166 @@ class ReplayEngine:
                 await writer.wait_closed()
             except Exception:
                 pass
+
+    # ------------------------------------------------------------------
+    # Persistent repeater sessions (custom host:port)
+    # ------------------------------------------------------------------
+
+    async def open_repeater_session(
+        self,
+        host: str,
+        port: int,
+        tls:  bool = False,
+    ) -> "Session":
+        """
+        Open a persistent TCP connection to *host*:*port* and register it as a
+        session in the registry.
+
+        The connection is kept alive between sends (no EOF signalled).  Call
+        :meth:`send_on_repeater_session` to send data through it.  The session
+        is automatically closed and removed when the server drops the connection.
+
+        Returns:
+            The newly created :class:`Session` (state=ACTIVE).
+
+        Raises:
+            ConnectionError: if the connection cannot be established.
+        """
+        ssl_ctx: Optional[ssl.SSLContext] = None
+        if tls:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode    = ssl.CERT_NONE
+
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(
+                    host, port,
+                    ssl=ssl_ctx,
+                    server_hostname=host if ssl_ctx else None,
+                ),
+                timeout=self._connect_timeout,
+            )
+        except asyncio.TimeoutError:
+            raise ConnectionError(
+                f"Timeout connecting to {host}:{port} ({self._connect_timeout}s)"
+            )
+        except OSError as exc:
+            raise ConnectionError(f"Connection failed to {host}:{port}: {exc}") from exc
+
+        session = self._session_registry.create(
+            client_host="repeater",
+            client_port=0,
+            server_host=host,
+            server_port=port,
+        )
+        self._session_registry.mark_active(session.id)
+        self._open_connections[session.id] = (reader, writer, tls)
+
+        logger.info(
+            "Repeater session opened: %s → %s:%d (tls=%s)",
+            session.id[:8], host, port, tls,
+        )
+        return session
+
+    async def send_on_repeater_session(
+        self,
+        session_id:      str,
+        data:            bytes,
+        receive_timeout: float = 10.0,
+    ) -> SendRecord:
+        """
+        Send *data* through an existing persistent repeater session and read
+        the server's response.
+
+        Unlike :meth:`send_frame`, this method does **not** signal EOF after
+        sending, so the TCP connection stays alive for subsequent sends.
+
+        If the server closes the connection during the send, the session is
+        marked closed, removed from the pool, and the partial response (if
+        any) is returned as a successful record so the operator can see what
+        came back before the close.
+
+        Args:
+            session_id:      ID of the session opened via :meth:`open_repeater_session`.
+            data:            Bytes to send.
+            receive_timeout: Seconds to wait for the server's response.
+                             On timeout the bytes received so far are returned
+                             and the connection stays open.
+
+        Returns:
+            A :class:`SendRecord` with the sent bytes and received response.
+        """
+        conn = self._open_connections.get(session_id)
+        session = self._session_registry.get(session_id)
+
+        if not conn or not session:
+            return SendRecord.create(
+                sent_bytes=data,
+                received_bytes=b"",
+                host="",
+                port=0,
+                tls=False,
+                success=False,
+                error=f"Repeater session {session_id[:8]} not found or not open",
+            )
+
+        reader, writer, tls = conn
+        host = session.info.server_host
+        port = session.info.server_port
+
+        received      = bytearray()
+        server_closed = False
+
+        try:
+            writer.write(data)   # No write_eof() — keep connection alive
+            await writer.drain()
+
+            async def _read_response() -> None:
+                nonlocal server_closed
+                while True:
+                    chunk = await reader.read(4096)
+                    if not chunk:
+                        server_closed = True
+                        break
+                    received.extend(chunk)
+
+            try:
+                await asyncio.wait_for(_read_response(), timeout=receive_timeout)
+            except asyncio.TimeoutError:
+                pass  # Normal — connection is alive, no more data in the window
+
+        except (ConnectionResetError, BrokenPipeError, OSError) as exc:
+            server_closed = True
+            return SendRecord.create(
+                sent_bytes=data,
+                received_bytes=bytes(received),
+                host=host,
+                port=port,
+                tls=tls,
+                success=False,
+                error=f"I/O error: {exc}",
+            )
+        finally:
+            if server_closed:
+                self._open_connections.pop(session_id, None)
+                self._session_registry.mark_closed(session_id)
+                logger.info(
+                    "Repeater session %s closed by server after send", session_id[:8]
+                )
+
+        logger.info(
+            "send_on_repeater_session %s: sent=%d bytes, received=%d bytes",
+            session_id[:8], len(data), len(received),
+        )
+        return SendRecord.create(
+            sent_bytes=data,
+            received_bytes=bytes(received),
+            host=host,
+            port=port,
+            tls=tls,
+            success=True,
+        )
 
     async def send_frame(
         self,

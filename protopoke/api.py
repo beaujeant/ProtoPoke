@@ -564,6 +564,73 @@ class ProxyAPI:
     # Repeater: inject into existing session OR direct send
     # ------------------------------------------------------------------
 
+    async def open_repeater_session(
+        self,
+        host: str,
+        port: int,
+        tls:  bool = False,
+    ) -> str:
+        """
+        Open a persistent TCP connection to *host*:*port* for the Repeater.
+
+        Registers the connection as a session in the session registry so it
+        appears in the Logs tab and the "From session" dropdown.  The
+        connection is kept alive between sends; it is closed (and the session
+        marked CLOSED) automatically when the server drops the connection.
+
+        Returns:
+            The new session's ID.
+
+        Raises:
+            ConnectionError: if the connection cannot be established.
+        """
+        session = await self.replay_engine.open_repeater_session(host, port, tls)
+        await self.event_bus.publish(
+            SessionOpenedEvent(session=session.info)
+        )
+        return session.id
+
+    async def send_on_repeater_session(
+        self,
+        session_id:      str,
+        data:            bytes,
+        receive_timeout: Optional[float] = None,
+    ) -> SendRecord:
+        """
+        Send *data* through an existing persistent repeater session.
+
+        If the server closes the connection during the send the session is
+        automatically marked CLOSED and a :class:`SessionClosedEvent` is
+        fired so the Logs tab updates.
+
+        Args:
+            session_id:      ID returned by :meth:`open_repeater_session`.
+            data:            Bytes to send.
+            receive_timeout: Seconds to wait for a response.  Defaults to
+                             the proxy's configured connect timeout.
+
+        Returns:
+            :class:`~protopoke.replay.models.SendRecord` with the response.
+        """
+        recv_timeout = receive_timeout if receive_timeout is not None else self.config.connect_timeout
+        session_before = self.session_registry.get(session_id)
+        was_active     = session_before is not None and session_before.is_active()
+
+        record = await self.replay_engine.send_on_repeater_session(
+            session_id=session_id,
+            data=data,
+            receive_timeout=recv_timeout,
+        )
+
+        # If the session transitioned to CLOSED during the send, fire the event
+        session_after = self.session_registry.get(session_id)
+        if was_active and session_after is not None and not session_after.is_active():
+            await self.event_bus.publish(
+                SessionClosedEvent(session=session_after.info)
+            )
+
+        return record
+
     async def inject_to_server(self, session_id: str, data: bytes) -> bool:
         """
         Write *data* directly into the upstream connection of an active session.

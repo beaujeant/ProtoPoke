@@ -263,35 +263,87 @@ class RepeaterTab(Widget):
         self.run_worker(self._async_send(req, data), exclusive=True)
 
     async def _async_send(self, req: RepeaterRequest, data: bytes) -> None:
-        # Prefer injecting into the existing proxy session so the forged packet
-        # arrives on the *same* TCP connection the real client is using.
-        # Fall back to a new direct connection when no live session is linked.
-        injected = False
+        from ...replay.models import SendRecord
+
+        # ------------------------------------------------------------------
+        # Path 1: session-linked request — inject into existing proxy session
+        # ------------------------------------------------------------------
         if req.source_session_id:
+            injected = False
             try:
                 injected = await self.app.api.inject_to_server(
                     req.source_session_id, data
                 )
             except OSError:
-                injected = False
+                pass
 
-        if injected:
-            from ...replay.models import SendRecord
-            record = SendRecord.create(
-                sent_bytes=data,
-                received_bytes=b"",
-                host=req.host,
-                port=req.port,
-                tls=req.tls,
-                success=True,
-            )
+            if injected:
+                record = SendRecord.create(
+                    sent_bytes=data,
+                    received_bytes=b"",
+                    host=req.host,
+                    port=req.port,
+                    tls=req.tls,
+                    success=True,
+                )
+            else:
+                # Inject failed (session closed) — fall back to one-shot send
+                record = await self.app.api.send_frame(
+                    data=data,
+                    host=req.host,
+                    port=req.port,
+                    tls=req.tls,
+                )
+
+        # ------------------------------------------------------------------
+        # Path 2: custom host:port — use (or create) a persistent session
+        # ------------------------------------------------------------------
         else:
-            record = await self.app.api.send_frame(
+            # Check whether the existing persistent session is still alive
+            if req.repeater_session_id:
+                session = self.app.api.get_session(req.repeater_session_id)
+                if not (session and session.is_active()):
+                    req.repeater_session_id = None
+
+            # Open a new persistent session if we don't have one
+            if not req.repeater_session_id:
+                try:
+                    req.repeater_session_id = await self.app.api.open_repeater_session(
+                        req.host, req.port, req.tls
+                    )
+                except Exception as exc:
+                    # Could not connect — fall back to old one-shot behaviour
+                    record = await self.app.api.send_frame(
+                        data=data,
+                        host=req.host,
+                        port=req.port,
+                        tls=req.tls,
+                    )
+                    req.add_record(record)
+                    if record.received_bytes:
+                        pairs = [record.received_bytes.hex()[i:i+2]
+                                 for i in range(0, len(record.received_bytes.hex()), 2)]
+                        self.query_one("#resp-view", TextArea).load_text(" ".join(pairs))
+                    else:
+                        self.query_one("#resp-view", TextArea).load_text(
+                            f"# Error: {record.error}" if record.error else "# (no response)"
+                        )
+                    self._refresh_history(req)
+                    self.notify(f"Send complete (no persistent session): {exc}", severity="warning")
+                    return
+
+            record = await self.app.api.send_on_repeater_session(
+                session_id=req.repeater_session_id,
                 data=data,
-                host=req.host,
-                port=req.port,
-                tls=req.tls,
             )
+
+            # If the session was closed by the server during this send, clear
+            # the reference so the next send opens a fresh connection
+            if req.repeater_session_id:
+                session = self.app.api.get_session(req.repeater_session_id)
+                if session and not session.is_active():
+                    req.repeater_session_id = None
+
         req.add_record(record)
 
         # Update response pane
