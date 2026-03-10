@@ -402,7 +402,22 @@ class ProtoPoke(App):
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    """Launch the ProtoPoke TUI."""
+    """
+    Launch the ProtoPoke TUI, or the MCP server when ``--mcp`` is passed.
+
+    When run as ``protopoke --mcp [options]`` the TUI is skipped and the
+    proxy + MCP server starts instead (identical to ``protopoke-mcp``).
+    Pass ``--help`` after ``--mcp`` to see MCP-specific options.
+    """
+    import sys
+
+    if "--mcp" in sys.argv:
+        # Strip --mcp from argv and hand the rest to the MCP runner
+        mcp_argv = [a for a in sys.argv[1:] if a != "--mcp"]
+        from ..mcp.runner import main as mcp_main
+        mcp_main(mcp_argv)
+        return
+
     logging.basicConfig(level=logging.WARNING)
     app = ProtoPoke()
     app.run()
