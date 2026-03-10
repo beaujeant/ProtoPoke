@@ -31,6 +31,7 @@ import os
 import ssl
 import tempfile
 from typing import TYPE_CHECKING, Optional
+from weakref import WeakKeyDictionary
 
 from .ca import CertificateAuthority
 
@@ -53,6 +54,13 @@ class TLSHandler:
         self._config = config
         self._ca: Optional[CertificateAuthority] = None
         self._listen_ctx: Optional[ssl.SSLContext] = None
+        # ssl.SSLObject → SNI server_name captured during the TLS handshake.
+        # WeakKeyDictionary so entries are released automatically when the
+        # ssl object is garbage-collected (i.e. the connection is gone).
+        self._sni_map: WeakKeyDictionary = WeakKeyDictionary()
+        # hostname → SSLContext built from a CA-signed cert for that hostname.
+        # Avoids repeating temp-file I/O for repeated connections to the same host.
+        self._host_ctx_cache: dict[str, ssl.SSLContext] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -82,8 +90,13 @@ class TLSHandler:
                 key_path=self._config.ca_key_path,
             )
             self._listen_ctx = self._ctx_for_host(self._config.upstream_host)
+            # Cache the default-host context so _sni_callback hits the cache too
+            self._host_ctx_cache[self._config.upstream_host] = self._listen_ctx
+            # Install the SNI callback so we issue a correctly-named cert for
+            # every unique server_name the client presents in its ClientHello.
+            self._listen_ctx.set_servername_callback(self._sni_callback)
             logger.info(
-                "TLS listen: auto-CA mode; issuing cert for %s",
+                "TLS listen: auto-CA mode; SNI-aware cert dispatch enabled (default host: %s)",
                 self._config.upstream_host,
             )
 
@@ -132,9 +145,63 @@ class TLSHandler:
         """The active CA instance, or None when using a manual cert."""
         return self._ca
 
+    def get_sni_hostname(self, ssl_object: Optional[ssl.SSLObject]) -> Optional[str]:
+        """
+        Return the SNI server_name captured during the TLS handshake for
+        *ssl_object*, or None if no SNI was sent or TLS is not in use.
+
+        Call this after the client connection is established (the handshake
+        is complete by the time asyncio invokes the connection callback).
+        """
+        if ssl_object is None:
+            return None
+        try:
+            return self._sni_map.get(ssl_object)
+        except TypeError:
+            return None
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _sni_callback(
+        self,
+        ssl_object: ssl.SSLObject,
+        server_name: Optional[str],
+        original_ctx: ssl.SSLContext,
+    ) -> None:
+        """
+        OpenSSL SNI callback — called during the TLS ClientHello.
+
+        When the client announces a server_name extension, we:
+        1. Store it in _sni_map so the connection handler can retrieve it.
+        2. Issue (or fetch from cache) a CA-signed cert for that hostname.
+        3. Swap the SSLContext on *ssl_object* so the client sees the
+           correctly-named certificate instead of the default one.
+
+        Returning None tells OpenSSL to continue the handshake.
+        """
+        if not server_name:
+            return None
+
+        # Capture the SNI for later retrieval by the connection handler
+        try:
+            self._sni_map[ssl_object] = server_name
+        except TypeError:
+            logger.debug("SNI map: ssl_object not weakly referenceable, skipping")
+
+        # Build (or reuse) an SSLContext with a cert for this specific hostname
+        try:
+            ctx = self._host_ctx_cache.get(server_name)
+            if ctx is None:
+                ctx = self._ctx_for_host(server_name)
+                self._host_ctx_cache[server_name] = ctx
+            ssl_object.context = ctx
+            logger.debug("SNI: issued cert and swapped context for %s", server_name)
+        except Exception as exc:
+            logger.error("SNI callback failed for %s: %s", server_name, exc)
+
+        return None
 
     def _ctx_for_host(self, hostname: str) -> ssl.SSLContext:
         """Issue a CA-signed leaf cert for *hostname* and return an SSLContext."""
