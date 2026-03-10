@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import time as _time
+
 from textual.app import ComposeResult
 from textual.widget import Widget
-from textual.widgets import DataTable, TextArea, Button, Label, Static
+from textual.widgets import DataTable, TextArea, Button, Label, Static, Input
 from textual.containers import Horizontal, Vertical
 
-from ...models import Frame
+from ...models import Direction, Frame
 from ...replay.models import RepeaterRequest, SendRecord
 
 
@@ -21,9 +23,15 @@ class RepeaterTab(Widget):
       ├─────────────────────────────────────────┤
       │ Target: host:port  [TLS switch]          │  per-request header
       ├──────────────────────┬──────────────────┤
-      │ Hex editor (editable)│ Response hex view │  editor pane
+      │ Hex editor (editable)│ Response packets  │  editor pane
+      │                      │ ┌──────────────┐ │
+      │                      │ │ packet list  │ │  ← individual read() chunks
+      │                      │ │ (DataTable)  │ │    received within window
+      │                      │ ├──────────────┤ │
+      │                      │ │ hex viewer   │ │  ← selected packet bytes
+      │                      │ └──────────────┘ │
       ├──────────────────────┴──────────────────┤
-      │ [Send]  [Clear]                          │  action bar
+      │ [Send]  [Clear]  Window(s): [1.0]        │  action bar
       ├─────────────────────────────────────────┤
       │ History (DataTable of send records)      │  history pane
       └─────────────────────────────────────────┘
@@ -62,6 +70,14 @@ class RepeaterTab(Widget):
     }
     RepeaterTab #response-view {
         width: 1fr;
+        layout: vertical;
+    }
+    RepeaterTab #resp-packets-table {
+        height: 7;
+        border-bottom: solid $primary-darken-2;
+    }
+    RepeaterTab #resp-view {
+        height: 1fr;
     }
     RepeaterTab .pane-header {
         background: $primary-darken-2;
@@ -70,7 +86,7 @@ class RepeaterTab(Widget):
         height: 1;
         text-style: bold;
     }
-    RepeaterTab TextArea {
+    RepeaterTab #request-editor TextArea {
         height: 1fr;
     }
     RepeaterTab .action-bar {
@@ -82,11 +98,21 @@ class RepeaterTab(Widget):
     RepeaterTab .action-bar Button {
         margin-right: 1;
     }
+    RepeaterTab .action-bar Label {
+        margin-right: 1;
+    }
+    RepeaterTab .action-bar #resp-window {
+        width: 6;
+        margin-right: 1;
+    }
     RepeaterTab #history-pane {
         height: 1fr;
     }
     RepeaterTab DataTable {
         height: 1fr;
+    }
+    RepeaterTab #resp-packets-table {
+        height: 7;
     }
     """
 
@@ -94,6 +120,8 @@ class RepeaterTab(Widget):
         super().__init__(*args, **kwargs)
         self._requests: list[RepeaterRequest] = []
         self._current_idx: int = -1
+        # Response packets for the currently displayed send record
+        self._current_response_packets: list[bytes] = []
 
     def compose(self) -> ComposeResult:
         # Tab strip
@@ -116,7 +144,9 @@ class RepeaterTab(Widget):
                 yield Static("  Request (hex — editable)", classes="pane-header")
                 yield TextArea("", id="req-editor", theme="monokai")
             with Vertical(id="response-view"):
-                yield Static("  Response (hex)", classes="pane-header")
+                yield Static("  Response packets  ↓ server→client", classes="pane-header")
+                yield DataTable(id="resp-packets-table", cursor_type="row")
+                yield Static("  Packet view (hex)", classes="pane-header")
                 yield TextArea("", id="resp-view", theme="monokai", read_only=True)
 
         # Action bar
@@ -124,6 +154,8 @@ class RepeaterTab(Widget):
             yield Button("▶ Send", variant="success", id="btn-send")
             yield Button("Clear Request", id="btn-clear-req")
             yield Button("Clear History", id="btn-clear-hist")
+            yield Label("  Window (s):")
+            yield Input("1.0", id="resp-window")
 
         # History pane
         with Vertical(id="history-pane"):
@@ -139,6 +171,11 @@ class RepeaterTab(Widget):
         dt.add_column("Recv (B)", key="recv")
         dt.add_column("OK", key="ok")
         dt.add_column("Error", key="err")
+
+        rpt = self.query_one("#resp-packets-table", DataTable)
+        rpt.add_column("#", key="num")
+        rpt.add_column("Δt (ms)", key="delta")
+        rpt.add_column("Size (B)", key="size")
 
     # ------------------------------------------------------------------
     # Request tab management
@@ -165,6 +202,9 @@ class RepeaterTab(Widget):
         self.query_one("#target-port", Label).update(str(req.port))
         self.query_one("#target-tls", Label).update("Yes" if req.tls else "No")
 
+        # Sync the response-window input with this tab's configured value
+        self.query_one("#resp-window", Input).value = str(req.response_window)
+
         # Populate editor
         if req.current_bytes:
             pairs = [req.current_bytes.hex()[i:i+2] for i in range(0, len(req.current_bytes.hex()), 2)]
@@ -173,20 +213,54 @@ class RepeaterTab(Widget):
             self.query_one("#req-editor", TextArea).load_text("")
 
         # Populate response from last history entry
-        self.query_one("#resp-view", TextArea).load_text("")
         if req.history:
-            last = req.history[-1]
-            if last.received_bytes:
-                pairs = [last.received_bytes.hex()[i:i+2] for i in range(0, len(last.received_bytes.hex()), 2)]
-                self.query_one("#resp-view", TextArea).load_text(" ".join(pairs))
+            self._display_record_response(req.history[-1])
+        else:
+            self._refresh_response_packets([])
 
         # Refresh history table
         self._refresh_history(req)
 
+    def _display_record_response(self, record: SendRecord) -> None:
+        """Populate the response packet list and viewer from a SendRecord."""
+        self._refresh_response_packets(record.response_packets)
+
+    def _refresh_response_packets(self, packets: list[bytes], send_ts: float = 0.0) -> None:
+        """
+        Repopulate the response-packet DataTable with *packets*.
+
+        Each row shows the packet index, elapsed time since send (ms),
+        and byte count.  The first packet is auto-selected so the hex
+        viewer is populated immediately.
+        """
+        rpt = self.query_one("#resp-packets-table", DataTable)
+        rpt.clear()
+        self._current_response_packets = packets
+
+        if not packets:
+            self.query_one("#resp-view", TextArea).load_text("# (no packets received)")
+            return
+
+        base_ts = send_ts if send_ts else _time.time()
+        for i, pkt in enumerate(packets):
+            delta_ms = ""  # timing not tracked per-packet; placeholder
+            rpt.add_row(str(i + 1), delta_ms, str(len(pkt)), key=str(i))
+
+        # Auto-select and display the first packet
+        self._show_packet(0)
+
+    def _show_packet(self, idx: int) -> None:
+        """Display packet *idx* from _current_response_packets in hex."""
+        packets = self._current_response_packets
+        if not (0 <= idx < len(packets)):
+            return
+        pkt = packets[idx]
+        pairs = [pkt.hex()[i:i+2] for i in range(0, len(pkt.hex()), 2)]
+        self.query_one("#resp-view", TextArea).load_text(" ".join(pairs))
+
     def _refresh_history(self, req: RepeaterRequest) -> None:
         dt = self.query_one("#history-table", DataTable)
         dt.clear()
-        import time as _time
         for i, record in enumerate(req.history, 1):
             t = _time.strftime("%H:%M:%S", _time.localtime(record.timestamp))
             dest = f"{record.host}:{record.port}"
@@ -241,6 +315,26 @@ class RepeaterTab(Widget):
                 self._requests[self._current_idx].history.clear()
                 self.query_one("#history-table", DataTable).clear()
 
+    def _get_response_window(self) -> float:
+        """Return the configured response-capture window in seconds."""
+        try:
+            val = float(self.query_one("#resp-window", Input).value)
+            return max(0.0, val)
+        except (ValueError, Exception):
+            return 1.0
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Persist the response_window value into the current request."""
+        if event.input.id != "resp-window":
+            return
+        if self._current_idx < 0:
+            return
+        try:
+            val = float(event.value)
+            self._requests[self._current_idx].response_window = max(0.0, val)
+        except ValueError:
+            pass
+
     def _do_send(self) -> None:
         if self._current_idx < 0:
             self.notify("No request selected. Create one with [+ New].", severity="warning")
@@ -263,12 +357,15 @@ class RepeaterTab(Widget):
         self.run_worker(self._async_send(req, data), exclusive=True)
 
     async def _async_send(self, req: RepeaterRequest, data: bytes) -> None:
-        from ...replay.models import SendRecord
+        import time as _t
+
+        response_window = self._get_response_window()
 
         # ------------------------------------------------------------------
         # Path 1: session-linked request — inject into existing proxy session
         # ------------------------------------------------------------------
         if req.source_session_id:
+            send_time = _t.time()
             injected = False
             try:
                 injected = await self.app.api.inject_to_server(
@@ -278,9 +375,21 @@ class RepeaterTab(Widget):
                 pass
 
             if injected:
+                # Wait for the response window, then harvest SERVER_TO_CLIENT
+                # frames that the relay captured after our inject.
+                await __import__("asyncio").sleep(response_window)
+                session = self.app.api.get_session(req.source_session_id)
+                response_packets: list[bytes] = []
+                if session:
+                    response_packets = [
+                        f.raw_bytes for f in session.frames
+                        if f.direction is Direction.SERVER_TO_CLIENT
+                        and f.timestamp >= send_time
+                    ]
                 record = SendRecord.create(
                     sent_bytes=data,
-                    received_bytes=b"",
+                    received_bytes=b"".join(response_packets),
+                    response_packets=response_packets,
                     host=req.host,
                     port=req.port,
                     tls=req.tls,
@@ -293,6 +402,7 @@ class RepeaterTab(Widget):
                     host=req.host,
                     port=req.port,
                     tls=req.tls,
+                    receive_timeout=response_window,
                 )
 
         # ------------------------------------------------------------------
@@ -318,16 +428,10 @@ class RepeaterTab(Widget):
                         host=req.host,
                         port=req.port,
                         tls=req.tls,
+                        receive_timeout=response_window,
                     )
                     req.add_record(record)
-                    if record.received_bytes:
-                        pairs = [record.received_bytes.hex()[i:i+2]
-                                 for i in range(0, len(record.received_bytes.hex()), 2)]
-                        self.query_one("#resp-view", TextArea).load_text(" ".join(pairs))
-                    else:
-                        self.query_one("#resp-view", TextArea).load_text(
-                            f"# Error: {record.error}" if record.error else "# (no response)"
-                        )
+                    self._display_record_response(record)
                     self._refresh_history(req)
                     self.notify(f"Send complete (no persistent session): {exc}", severity="warning")
                     return
@@ -335,6 +439,7 @@ class RepeaterTab(Widget):
             record = await self.app.api.send_on_repeater_session(
                 session_id=req.repeater_session_id,
                 data=data,
+                receive_timeout=response_window,
             )
 
             # If the session was closed by the server during this send, clear
@@ -347,25 +452,28 @@ class RepeaterTab(Widget):
         req.add_record(record)
 
         # Update response pane
-        if record.received_bytes:
-            pairs = [record.received_bytes.hex()[i:i+2]
-                     for i in range(0, len(record.received_bytes.hex()), 2)]
-            self.query_one("#resp-view", TextArea).load_text(" ".join(pairs))
-        else:
-            self.query_one("#resp-view", TextArea).load_text(
-                f"# Error: {record.error}" if record.error else "# (no response)"
-            )
+        self._display_record_response(record)
 
         self._refresh_history(req)
+        n_pkts = len(record.response_packets)
         status = "OK" if record.success else f"Error: {record.error}"
-        self.notify(f"Send complete: {status}")
+        self.notify(f"Send complete: {status} — {n_pkts} packet(s) received")
 
     # ------------------------------------------------------------------
-    # History selection → restore request/response bytes
+    # DataTable row selection
     # ------------------------------------------------------------------
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if event.data_table.id != "history-table":
+        table_id = event.data_table.id
+
+        # Response packet list — show that packet in the hex viewer
+        if table_id == "resp-packets-table":
+            idx = int(str(event.row_key.value))
+            self._show_packet(idx)
+            return
+
+        # History table — restore sent bytes and response packets
+        if table_id != "history-table":
             return
         if self._current_idx < 0:
             return
@@ -377,9 +485,6 @@ class RepeaterTab(Widget):
                 pairs = [record.sent_bytes.hex()[i:i+2]
                          for i in range(0, len(record.sent_bytes.hex()), 2)]
                 self.query_one("#req-editor", TextArea).load_text(" ".join(pairs))
-                # Show received bytes in response view
-                if record.received_bytes:
-                    pairs = [record.received_bytes.hex()[i:i+2]
-                             for i in range(0, len(record.received_bytes.hex()), 2)]
-                    self.query_one("#resp-view", TextArea).load_text(" ".join(pairs))
+                # Restore response packets
+                self._display_record_response(record)
                 break
