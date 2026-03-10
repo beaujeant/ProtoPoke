@@ -38,7 +38,7 @@ class RuleTable(Widget, Generic[R]):
     }
     RuleTable .rule-buttons {
         height: 3;
-        margin-top: 1;
+        margin: 1 0;
     }
     RuleTable Button {
         min-width: 6;

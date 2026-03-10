@@ -43,7 +43,6 @@ class LogsTab(Widget):
     }
     LogsTab #frames-pane {
         height: 30%;
-        border-bottom: solid $primary-darken-2;
     }
     LogsTab #detail-pane {
         height: 35%;
@@ -53,7 +52,7 @@ class LogsTab(Widget):
     }
     LogsTab .toolbar {
         height: 3;
-        background: $surface-darken-1;
+        background: $primary-darken-2;
         align: left middle;
         padding: 0 1;
     }
