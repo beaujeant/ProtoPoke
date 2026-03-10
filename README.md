@@ -143,30 +143,217 @@ Projects save your proxy config, intercept/replace rules, and repeater requests 
 
 ## MCP Server
 
-ProtoPoke exposes all `ProxyAPI` operations as [Model Context Protocol](https://modelcontextprotocol.io/) tools so an AI assistant (Claude, etc.) can drive the proxy programmatically.
+ProtoPoke exposes all proxy operations as [Model Context Protocol](https://modelcontextprotocol.io/) tools. Once connected, an AI assistant can fully control the proxy — inspect sessions, intercept and modify frames live, replay traffic with field edits, manage rules, and more — all through natural conversation.
 
-Install the optional dependency:
+### What the AI can do
+
+| Capability | What you can ask |
+|---|---|
+| **Session inspection** | "List all sessions", "Show me the frames from session X", "How many bytes did the client send in session Y?", "Decode the frames and show me the field values" |
+| **Live interception** | "Enable interception", "Show me the pending intercepted frames", "Forward the first one but change the `username` field to `admin`", "Drop the frame that matches pattern `01 FF`" |
+| **Rules** | "Add an intercept rule that holds all client→server frames starting with `0x01`", "Disable the replace rule named 'strip auth'", "Move the null-byte rule to position 0", "Clear all intercept rules" |
+| **Search** | "Find all frames across all sessions that contain the bytes `FF FF 00`" |
+| **Replay** | "Replay session X against `staging.internal:9090`", "Replay session X but change the `password` field to `hunter2` in every LoginRequest" |
+| **Repeater** | "Create a repeater tab with the first frame from session X", "Send it and show me the response", "Change the payload to `deadbeef` and resend" |
+| **Protocol decoding** | "Load the protocol definition from `myproto.yaml`", "Decode frame Y and explain what each field means" |
+| **TLS** | "Give me the CA certificate so I can install it in my browser" |
+| **Config** | "What port is the proxy listening on?", "Enable TLS on the upstream side" |
+
+### Installation
 
 ```bash
 pip install "protopoke[mcp]"
+# or install everything at once:
+pip install "protopoke[all]"
 ```
 
-Use in code:
+### Launching the MCP server
+
+The MCP server starts the proxy and communicates with the AI client over **stdio** (standard MCP transport). Two ways to launch it:
+
+**Dedicated command** (recommended):
+
+```bash
+protopoke-mcp \
+  --upstream-host 10.0.0.1 \
+  --upstream-port 9090 \
+  --listen-port 8080
+```
+
+**Via the main command** with `--mcp`:
+
+```bash
+protopoke --mcp --upstream-host 10.0.0.1 --upstream-port 9090
+```
+
+**All CLI flags:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--listen-host HOST` | `127.0.0.1` | Proxy bind address |
+| `--listen-port PORT` | `8080` | Proxy listen port |
+| `--upstream-host HOST` | `127.0.0.1` | Target host to forward to |
+| `--upstream-port PORT` | `9090` | Target port to forward to |
+| `--intercept` | off | Enable interception on startup |
+| `--tls-listen` | off | Terminate TLS on the client side (MITM mode) |
+| `--tls-upstream` | off | Connect to upstream over TLS |
+| `--no-tls-verify` | off | Accept any upstream TLS certificate |
+| `--framer NAME` | `raw` | `raw`, `delimiter`, or `length_prefix` |
+| `--protocol PATH` | — | Path to a `.yaml`/`.json` protocol definition |
+| `--config PATH` | — | Load a saved ProxyConfig JSON file |
+| `--log-level LEVEL` | `WARNING` | Python logging level; logs go to stderr |
+| `--name NAME` | `ProtoPoke` | MCP server name shown to the AI client |
+
+---
+
+### Configuring Claude Desktop
+
+Add a `protopoke` entry to your Claude Desktop MCP configuration file:
+
+**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "protopoke": {
+      "command": "protopoke-mcp",
+      "args": [
+        "--upstream-host", "10.0.0.1",
+        "--upstream-port", "9090",
+        "--listen-port",   "8080"
+      ]
+    }
+  }
+}
+```
+
+With TLS interception and a protocol definition:
+
+```json
+{
+  "mcpServers": {
+    "protopoke": {
+      "command": "protopoke-mcp",
+      "args": [
+        "--upstream-host", "api.example.com",
+        "--upstream-port", "443",
+        "--tls-listen",
+        "--tls-upstream",
+        "--protocol", "/path/to/myproto.yaml",
+        "--intercept"
+      ]
+    }
+  }
+}
+```
+
+Restart Claude Desktop after editing. A hammer icon (🔨) will appear in the chat input bar when the server is connected. You can now ask Claude to interact with the proxy directly.
+
+---
+
+### Configuring Claude Code (this CLI)
+
+Add ProtoPoke as an MCP server in your project's `.mcp.json` or `~/.claude/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "protopoke": {
+      "command": "protopoke-mcp",
+      "args": ["--upstream-host", "10.0.0.1", "--upstream-port", "9090"]
+    }
+  }
+}
+```
+
+Or add it inline from the Claude Code CLI:
+
+```bash
+claude mcp add protopoke -- protopoke-mcp --upstream-host 10.0.0.1 --upstream-port 9090
+```
+
+---
+
+### Configuring OpenAI (Agents SDK)
+
+OpenAI's [Agents SDK](https://github.com/openai/openai-agents-python) has native MCP support via `MCPServerStdio`. Install it and connect to ProtoPoke:
+
+```bash
+pip install openai-agents "protopoke[mcp]"
+```
 
 ```python
+import asyncio
+from agents import Agent, Runner
+from agents.mcp import MCPServerStdio
+
+async def main():
+    # Spin up the ProtoPoke MCP server as a subprocess
+    async with MCPServerStdio(
+        name="ProtoPoke",
+        params={
+            "command": "protopoke-mcp",
+            "args": [
+                "--upstream-host", "10.0.0.1",
+                "--upstream-port", "9090",
+                "--listen-port",   "8080",
+                "--intercept",
+            ],
+        },
+    ) as mcp_server:
+        agent = Agent(
+            name="ProxyAnalyst",
+            instructions=(
+                "You are a security researcher analysing binary protocol traffic "
+                "captured by a ProtoPoke proxy. Use the available tools to inspect "
+                "sessions, decode frames, intercept and modify packets, and replay "
+                "traffic as needed."
+            ),
+            mcp_servers=[mcp_server],
+        )
+
+        result = await Runner.run(
+            agent,
+            "List all captured sessions and decode the frames in the first one."
+        )
+        print(result.final_output)
+
+asyncio.run(main())
+```
+
+The agent automatically discovers all ProtoPoke tools (list_sessions, get_frames, intercept_toggle, add_intercept_rule, replay_session, etc.) and can call them as needed.
+
+---
+
+### Programmatic usage (embed in your own script)
+
+You can also build the MCP server directly in Python and run it alongside your own proxy automation:
+
+```python
+import asyncio
 from protopoke.api import ProxyAPI
 from protopoke.config import ProxyConfig
 from protopoke.mcp.server import build_mcp_server
 
-config = ProxyConfig(listen_port=8080, upstream_host="10.0.0.1", upstream_port=9090)
-api = ProxyAPI(config)
-mcp = build_mcp_server(api)
+async def main():
+    config = ProxyConfig(
+        listen_port=8080,
+        upstream_host="10.0.0.1",
+        upstream_port=9090,
+        intercept_enabled=True,
+        protocol_definition_path="myproto.yaml",
+    )
+    api = ProxyAPI(config)
+    await api.start()
 
-# Run as a standalone MCP server (STDIO transport — for Claude Desktop etc.)
-mcp.run()
+    mcp = build_mcp_server(api, name="ProtoPoke")
+    await mcp.run_async()   # serves over stdio until the AI client disconnects
+
+asyncio.run(main())
 ```
 
-Available MCP tools:
+---
 
 | Tool group | Tools |
 |---|---|
@@ -179,6 +366,60 @@ Available MCP tools:
 | Replay | `replay_session` |
 | Fuzzing | `fuzz_start`, `fuzz_status`, `fuzz_results`, `fuzz_stop`, `list_campaigns` |
 | Config | `get_config`, `set_config` |
+### Full tool reference
+
+| Group | Tool | Description |
+|---|---|---|
+| **Proxy lifecycle** | `proxy_status` | Running state, session counts, listen/upstream address |
+| | `proxy_start` | Start the proxy listener |
+| | `proxy_stop` | Stop the proxy and release resources |
+| **Sessions** | `list_sessions` | All sessions (active + closed) with metadata |
+| | `get_session` | Details for one session by ID |
+| | `get_session_summary` | Frame counts, byte totals, duration, per-direction stats |
+| | `get_frames` | Raw frames for a session (hex-encoded), with optional direction filter |
+| | `get_frame` | One specific frame by session ID + frame ID |
+| | `decode_frames` | All frames decoded using the loaded protocol decoder |
+| | `decode_frame_by_id` | Decode one specific frame into named, typed fields |
+| | `search_frames` | Binary pattern search across all (or one) session(s) |
+| **Interception** | `intercept_status` | Enabled flag, queue depth, active filters |
+| | `intercept_toggle` | Enable or disable interception |
+| | `list_intercepted` | All frames currently waiting for a verdict |
+| | `intercept_decode_pending` | Pending frames with their parsed protocol view |
+| | `intercept_forward` | Forward a frame as-is |
+| | `intercept_drop` | Drop a frame (do not forward) |
+| | `intercept_modify_and_forward` | Replace payload bytes and forward |
+| | `intercept_modify_field_and_forward` | Edit named protocol fields and forward (auto-recomputes lengths) |
+| | `intercept_forward_all` | Forward all pending frames at once |
+| | `intercept_set_direction_filter` | Restrict interception to one direction |
+| | `intercept_set_session_filter` | Restrict interception to specific sessions |
+| **Replace rules** | `list_replace_rules` | All replace rules in evaluation order |
+| | `add_replace_rule` | Add a binary find-and-replace rule |
+| | `update_replace_rule` | Toggle enabled state or rename a rule |
+| | `remove_replace_rule` | Remove a rule by ID |
+| | `reorder_replace_rule` | Move a rule to a different position |
+| | `clear_replace_rules` | Remove all replace rules |
+| **Intercept rules** | `list_intercept_rules` | All intercept rules in evaluation order |
+| | `add_intercept_rule` | Add a filter rule (intercept or forward action) |
+| | `update_intercept_rule` | Toggle, rename, or flip the action of a rule |
+| | `remove_intercept_rule` | Remove a rule by ID |
+| | `reorder_intercept_rule` | Move a rule to a different priority position |
+| | `clear_intercept_rules` | Remove all intercept rules |
+| **Protocol** | `set_protocol_file` | Load a YAML/JSON protocol definition file |
+| | `set_protocol_dict` | Load a protocol definition from an inline dict |
+| | `get_protocol_info` | Currently loaded decoder/encoder names and status |
+| **Repeater** | `send_frame` | One-shot send of raw bytes to host:port |
+| | `list_repeater_requests` | All named repeater tabs |
+| | `create_repeater_request` | Create a new repeater tab with a target and payload |
+| | `get_repeater_request` | Get a tab with its full send history |
+| | `update_repeater_request` | Change label, host, port, TLS, or payload |
+| | `delete_repeater_request` | Remove a tab and its history |
+| | `send_repeater_request` | Send the current payload and record the response |
+| | `frame_to_repeater` | Create a repeater tab from a captured frame ("Send to Repeater") |
+| **Replay** | `replay_session` | Re-send a session's frames to the server |
+| | `replay_with_field_edits` | Replay with per-message-type field overrides |
+| **TLS / CA** | `get_ca_cert` | Export the CA certificate PEM for client trust store installation |
+| **Config** | `get_config` | Current ProxyConfig as a JSON dict |
+| | `set_config` | Update one or more config fields at runtime |
 
 #### Fuzzing via MCP
 
@@ -1187,7 +1428,8 @@ protopoke/
 │   ├── events/
 │   │   └── bus.py          # EventBus (pub/sub, async handlers)
 │   ├── mcp/
-│   │   └── server.py       # FastMCP server exposing all ProxyAPI operations as tools
+│   │   ├── server.py       # FastMCP server: 50+ tools covering all ProxyAPI operations
+│   │   └── runner.py       # CLI entry point for protopoke-mcp / protopoke --mcp
 │   └── ui/
 │       ├── app.py          # ProtoPoke(App) — main Textual application, event bridge
 │       ├── tabs/

@@ -4,7 +4,9 @@ All tools return JSON-serialisable dicts.  Bytes fields are hex-encoded strings.
 Tools are grouped by concern:
 
     Proxy lifecycle         : proxy_status, proxy_start, proxy_stop
-    Session management      : list_sessions, get_session, get_frames, decode_frames
+    Session management      : list_sessions, get_session, get_frames,
+                              get_frame, get_session_summary, decode_frames,
+                              decode_frame_by_id, search_frames
     Interception control    : intercept_status, intercept_toggle,
                               list_intercepted, intercept_forward, intercept_drop,
                               intercept_modify_and_forward
@@ -13,6 +15,27 @@ Tools are grouped by concern:
     Repeater / send         : send_frame
     Replay                  : replay_session
     Fuzzing                 : fuzz_start, fuzz_status, fuzz_results, fuzz_stop, list_campaigns
+                              list_intercepted, intercept_decode_pending,
+                              intercept_forward, intercept_drop,
+                              intercept_modify_and_forward,
+                              intercept_modify_field_and_forward,
+                              intercept_forward_all,
+                              intercept_set_direction_filter,
+                              intercept_set_session_filter
+    Replace rules           : list_replace_rules, add_replace_rule,
+                              update_replace_rule, remove_replace_rule,
+                              reorder_replace_rule, clear_replace_rules
+    Intercept rules         : list_intercept_rules, add_intercept_rule,
+                              update_intercept_rule, remove_intercept_rule,
+                              reorder_intercept_rule, clear_intercept_rules
+    Protocol management     : set_protocol_file, set_protocol_dict,
+                              get_protocol_info
+    Repeater / send         : send_frame, list_repeater_requests,
+                              create_repeater_request, get_repeater_request,
+                              update_repeater_request, delete_repeater_request,
+                              send_repeater_request, frame_to_repeater
+    Replay                  : replay_session, replay_with_field_edits
+    TLS / CA                : get_ca_cert
     Config                  : get_config, set_config
 """
 
@@ -48,8 +71,12 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
 
     from protopoke.models import Direction
     from protopoke.rules.rule import ReplaceRule, InterceptRule, RuleAction
+    from protopoke.replay.models import RepeaterRequest, SendRecord
 
     mcp = FastMCP(name)
+
+    # In-memory repeater request store (MCP-side, mirrors UI repeater tabs)
+    _repeater_requests: dict[str, RepeaterRequest] = {}
 
     # ------------------------------------------------------------------ #
     # Proxy lifecycle                                                       #
@@ -69,6 +96,8 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
             "listen": f"{api.config.listen_host}:{api.config.listen_port}",
             "upstream": f"{api.config.upstream_host}:{api.config.upstream_port}",
             "framer": api.config.framer_name,
+            "tls_listen": api.config.tls_listen,
+            "tls_upstream": api.config.tls_upstream,
         }
 
     @mcp.tool()
@@ -95,7 +124,12 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
 
     @mcp.tool()
     def list_sessions() -> list[dict]:
-        """List all captured sessions (active and closed)."""
+        """
+        List all captured sessions (active and closed).
+
+        Returns session metadata: id, client/server host:port, state, timestamps.
+        Use get_frames() to retrieve the actual communication data.
+        """
         return [s.info.to_dict() for s in api.list_sessions()]
 
     @mcp.tool()
@@ -115,16 +149,61 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         return session.info.to_dict()
 
     @mcp.tool()
+    def get_session_summary(session_id: str) -> Optional[dict]:
+        """
+        Get a comprehensive summary for a session, including frame counts,
+        byte totals per direction, duration, and per-direction breakdown.
+
+        Args:
+            session_id: The session UUID to summarise.
+
+        Returns:
+            Summary dict with stats, or None if session not found.
+        """
+        session = api.get_session(session_id)
+        if session is None:
+            return None
+
+        info = session.info.to_dict()
+        frames = session.frames
+
+        client_frames = [f for f in frames if f.direction.value == "client_to_server"]
+        server_frames = [f for f in frames if f.direction.value == "server_to_client"]
+
+        client_bytes = sum(len(f.raw_bytes) for f in client_frames)
+        server_bytes = sum(len(f.raw_bytes) for f in server_frames)
+
+        duration: Optional[float] = None
+        if info["closed_at"] is not None:
+            duration = info["closed_at"] - info["created_at"]
+        elif frames:
+            duration = frames[-1].timestamp - info["created_at"]
+
+        return {
+            **info,
+            "total_frames": len(frames),
+            "client_to_server_frames": len(client_frames),
+            "server_to_client_frames": len(server_frames),
+            "client_to_server_bytes": client_bytes,
+            "server_to_client_bytes": server_bytes,
+            "total_bytes": client_bytes + server_bytes,
+            "duration_seconds": duration,
+            "first_frame_at": frames[0].timestamp if frames else None,
+            "last_frame_at": frames[-1].timestamp if frames else None,
+        }
+
+    @mcp.tool()
     def get_frames(session_id: str, direction: Optional[str] = None) -> list[dict]:
         """
-        Get captured frames for a session.
+        Get all captured frames for a session, including raw bytes.
 
         Args:
             session_id: Session UUID.
             direction:  Optional filter — "client_to_server" or "server_to_client".
 
         Returns:
-            List of frame dicts with raw_bytes as hex strings.
+            List of frame dicts. raw_bytes is hex-encoded. Frames are in
+            capture order with sequence numbers and timestamps.
         """
         dir_enum = None
         if direction is not None:
@@ -136,16 +215,40 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         return [f.to_dict() for f in frames]
 
     @mcp.tool()
+    def get_frame(session_id: str, frame_id: str) -> Optional[dict]:
+        """
+        Get a single specific frame by its ID within a session.
+
+        Args:
+            session_id: Session UUID.
+            frame_id:   Frame UUID to retrieve.
+
+        Returns:
+            Frame dict (raw_bytes as hex), or None if not found.
+        """
+        session = api.get_session(session_id)
+        if session is None:
+            return None
+        for f in session.frames:
+            if f.id == frame_id:
+                return f.to_dict()
+        return None
+
+    @mcp.tool()
     def decode_frames(session_id: str, direction: Optional[str] = None) -> list[dict]:
         """
-        Decode frames for a session using the attached protocol decoder.
+        Decode all frames for a session using the attached protocol decoder.
+
+        Requires a protocol definition to be loaded via set_protocol_file().
+        Returns passthrough (hex-only) results if no decoder is configured.
 
         Args:
             session_id: Session UUID.
             direction:  Optional filter — "client_to_server" or "server_to_client".
 
         Returns:
-            List of ParsedMessage dicts with structured fields.
+            List of ParsedMessage dicts with structured fields, message_type,
+            and per-field offset/size metadata.
         """
         dir_enum = None
         if direction is not None:
@@ -156,13 +259,171 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         messages = api.decode_session_frames(session_id, dir_enum)
         return [m.to_dict() for m in messages]
 
+    @mcp.tool()
+    def decode_frame_by_id(session_id: str, frame_id: str) -> Optional[dict]:
+        """
+        Decode a single frame by its ID using the attached protocol decoder.
+
+        Args:
+            session_id: Session UUID.
+            frame_id:   Frame UUID to decode.
+
+        Returns:
+            ParsedMessage dict with structured fields, or None if frame not found.
+        """
+        session = api.get_session(session_id)
+        if session is None:
+            return None
+        for f in session.frames:
+            if f.id == frame_id:
+                return api.decode_frame(f).to_dict()
+        return None
+
+    @mcp.tool()
+    def search_frames(
+        pattern:    str,
+        session_id: Optional[str] = None,
+        direction:  Optional[str] = None,
+        max_results: int = 100,
+    ) -> list[dict]:
+        """
+        Search for a binary pattern across captured frames.
+
+        Uses the same binary hex pattern syntax as rules:
+          "01 02 ??"  — literal bytes with a wildcard
+          "FF [03-09]" — byte range
+          "(01|02) 00" — alternation
+
+        Args:
+            pattern:     Binary hex pattern to search for.
+            session_id:  Limit search to a specific session (None = all sessions).
+            direction:   Limit to "client_to_server" or "server_to_client" (None = both).
+            max_results: Maximum number of matching frames to return (default 100).
+
+        Returns:
+            List of frame dicts for all frames that match the pattern.
+        """
+        import re as _re
+        from protopoke.rules.rule import compile_binary_pattern, PatternError
+
+        try:
+            compiled = compile_binary_pattern(pattern)
+        except PatternError as exc:
+            return [{"error": f"Invalid pattern: {exc}"}]
+
+        dir_enum = None
+        if direction is not None:
+            try:
+                dir_enum = Direction(direction)
+            except ValueError:
+                return [{"error": f"Invalid direction '{direction}'."}]
+
+        sessions = (
+            [api.get_session(session_id)]
+            if session_id
+            else api.list_sessions()
+        )
+
+        results: list[dict] = []
+        for session in sessions:
+            if session is None:
+                continue
+            for frame in session.frames:
+                if dir_enum is not None and frame.direction is not dir_enum:
+                    continue
+                if compiled.search(frame.raw_bytes):
+                    results.append(frame.to_dict())
+                    if len(results) >= max_results:
+                        return results
+        return results
+
+    # ------------------------------------------------------------------ #
+    # Protocol management                                                   #
+    # ------------------------------------------------------------------ #
+
+    @mcp.tool()
+    def set_protocol_file(path: str) -> dict:
+        """
+        Load a protocol definition from a YAML or JSON file.
+
+        Protocol definitions describe message types, fields, byte offsets,
+        and data types so that frames can be decoded into structured fields
+        (visible via decode_frames / decode_frame_by_id).
+
+        Args:
+            path: Path to a .yaml, .yml, or .json protocol definition file.
+
+        Returns:
+            {"ok": True, "protocol_name": "..."} on success.
+        """
+        try:
+            api.set_protocol_file(path)
+            return {"ok": True, "protocol_name": api._decoder.protocol_name}
+        except FileNotFoundError as exc:
+            return {"ok": False, "error": f"File not found: {exc}"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @mcp.tool()
+    def set_protocol_dict(definition: dict) -> dict:
+        """
+        Load a protocol definition from a dict (same schema as the YAML format).
+
+        Useful for defining simple inline protocols without a file.
+
+        Example definition::
+
+            {
+              "name": "MyProto",
+              "messages": [
+                {
+                  "name": "Login",
+                  "match": {"magic": "01 00"},
+                  "fields": [
+                    {"name": "msg_type", "type": "uint8"},
+                    {"name": "username_len", "type": "uint8"},
+                    {"name": "username", "type": "string", "length": "{username_len}"}
+                  ]
+                }
+              ]
+            }
+
+        Args:
+            definition: Protocol definition dict.
+
+        Returns:
+            {"ok": True, "protocol_name": "..."} on success.
+        """
+        try:
+            api.set_protocol_dict(definition)
+            return {"ok": True, "protocol_name": api._decoder.protocol_name}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @mcp.tool()
+    def get_protocol_info() -> dict:
+        """
+        Return information about the currently loaded protocol decoder.
+
+        Returns:
+            Dict with protocol_name and whether a decoder/encoder is active.
+        """
+        from protopoke.protocol.base import PassthroughDecoder
+        decoder = api._decoder
+        has_definition = not isinstance(decoder, PassthroughDecoder)
+        return {
+            "protocol_name": decoder.protocol_name,
+            "has_definition": has_definition,
+            "has_encoder": api._encoder is not None,
+        }
+
     # ------------------------------------------------------------------ #
     # Interception control                                                  #
     # ------------------------------------------------------------------ #
 
     @mcp.tool()
     def intercept_status() -> dict:
-        """Return interception state: enabled flag and pending queue size."""
+        """Return interception state: enabled flag, pending queue size, and filters."""
         return {
             "intercept_enabled": api.intercept_enabled,
             "pending_count": api.pending_count(),
@@ -183,8 +444,11 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         """
         Enable or disable interception at runtime.
 
+        When disabled, all pending frames are immediately forwarded.
+        When enabled, subsequent frames matching intercept rules are held.
+
         Args:
-            enabled: True to enable, False to disable (forward all pending frames).
+            enabled: True to enable, False to disable.
         """
         api.intercept_enabled = enabled
         return {"intercept_enabled": api.intercept_enabled}
@@ -194,15 +458,37 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         """
         Return all frames currently waiting in the intercept queue.
 
-        Each entry includes the frame's raw bytes as a hex string and the
-        unit ID needed to forward/drop/modify it.
+        Each entry includes the frame's raw bytes as a hex string, the unit
+        ID needed to forward/drop/modify it, and the current action verdict.
         """
         return [u.to_dict() for u in api.list_intercepted()]
 
     @mcp.tool()
+    def intercept_decode_pending() -> list[dict]:
+        """
+        Return all pending intercepted frames with their protocol-decoded views.
+
+        Like list_intercepted() but each entry also includes a ``parsed``
+        field with the structured ParsedMessage for that frame. Requires a
+        protocol definition to be loaded via set_protocol_file() for useful output.
+
+        Returns:
+            List of dicts, each with "unit" (InterceptedUnit) and "parsed"
+            (ParsedMessage) sub-dicts.
+        """
+        results = []
+        for unit in api.list_intercepted():
+            parsed = api.decode_frame(unit.frame)
+            results.append({
+                "unit": unit.to_dict(),
+                "parsed": parsed.to_dict(),
+            })
+        return results
+
+    @mcp.tool()
     def intercept_forward(unit_id: str) -> dict:
         """
-        Forward an intercepted frame as-is.
+        Forward an intercepted frame as-is (no modifications).
 
         Args:
             unit_id: The intercepted unit ID (from list_intercepted).
@@ -224,7 +510,10 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
     @mcp.tool()
     def intercept_modify_and_forward(unit_id: str, new_bytes_hex: str) -> dict:
         """
-        Replace an intercepted frame's payload and forward it.
+        Replace an intercepted frame's payload with raw bytes and forward it.
+
+        Use this for raw binary edits. For protocol-aware field-level edits,
+        use intercept_modify_field_and_forward() instead.
 
         Args:
             unit_id:       The intercepted unit ID (from list_intercepted).
@@ -238,8 +527,47 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         return {"ok": ok, "unit_id": unit_id}
 
     @mcp.tool()
+    def intercept_modify_field_and_forward(
+        unit_id:     str,
+        field_edits: dict[str, Any],
+    ) -> dict:
+        """
+        Re-encode an intercepted frame with protocol field edits, then forward it.
+
+        Requires a protocol definition to be loaded via set_protocol_file().
+        The frame is decoded, the specified fields are replaced, the message
+        is re-encoded (with length fields automatically recomputed), and the
+        result is forwarded.
+
+        Args:
+            unit_id:     The intercepted unit ID (from list_intercepted).
+            field_edits: Dict of field_name → new_value. Values are typed
+                         according to the protocol definition (int, str, bytes-as-hex).
+
+        Example::
+
+            intercept_modify_field_and_forward(
+                unit_id="abc-123",
+                field_edits={"username": "admin", "msg_type": 2}
+            )
+
+        Returns:
+            {"ok": True/False, "unit_id": ...}
+        """
+        ok = api.modify_field_and_forward(unit_id, field_edits)
+        if not ok:
+            # Check if it failed because no encoder is loaded
+            if api._encoder is None:
+                return {
+                    "ok": False,
+                    "unit_id": unit_id,
+                    "error": "No protocol encoder loaded. Call set_protocol_file() first.",
+                }
+        return {"ok": ok, "unit_id": unit_id}
+
+    @mcp.tool()
     def intercept_forward_all() -> dict:
-        """Forward all currently pending intercepted frames."""
+        """Forward all currently pending intercepted frames without modification."""
         count = api.forward_all()
         return {"forwarded": count}
 
@@ -280,7 +608,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
 
     @mcp.tool()
     def list_replace_rules() -> list[dict]:
-        """List all active replace rules in order."""
+        """List all active replace rules in order. Rules are applied sequentially."""
         return [r.to_dict() for r in api.list_replace_rules()]
 
     @mcp.tool()
@@ -292,12 +620,15 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         enabled:          bool          = True,
     ) -> dict:
         """
-        Add a binary replace rule.
+        Add a binary find-and-replace rule applied to all matching frames.
+
+        Replace rules are applied to frame bytes automatically before forwarding.
+        Multiple rules stack: the output of rule N becomes the input to rule N+1.
 
         Args:
             label:           Human-readable name.
             pattern:         Binary pattern string, e.g. "01 02 ??" or "[00-0F]".
-            replacement_hex: Replacement bytes as hex string.
+            replacement_hex: Replacement bytes as hex string (e.g. "deadbeef").
             direction:       Optional "client_to_server" or "server_to_client".
             enabled:         Whether the rule is active immediately.
 
@@ -325,6 +656,34 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         return {"ok": True, "rule": rule.to_dict()}
 
     @mcp.tool()
+    def update_replace_rule(
+        rule_id: str,
+        label:   Optional[str]  = None,
+        enabled: Optional[bool] = None,
+    ) -> dict:
+        """
+        Update a replace rule's label or enabled state.
+
+        Use this to toggle a rule on/off without removing it, or to rename it.
+
+        Args:
+            rule_id: Rule UUID from list_replace_rules.
+            label:   New human-readable name (or null to keep current).
+            enabled: True to enable, False to disable (or null to keep current).
+
+        Returns:
+            Updated rule dict, or {"ok": False} if not found.
+        """
+        rule = api.rules_engine.get_rule(rule_id)
+        if rule is None:
+            return {"ok": False, "error": f"Rule '{rule_id}' not found."}
+        if label is not None:
+            rule.label = label
+        if enabled is not None:
+            rule.enabled = enabled
+        return {"ok": True, "rule": rule.to_dict()}
+
+    @mcp.tool()
     def remove_replace_rule(rule_id: str) -> dict:
         """
         Remove a replace rule by its ID.
@@ -335,13 +694,42 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         ok = api.remove_replace_rule(rule_id)
         return {"ok": ok, "rule_id": rule_id}
 
+    @mcp.tool()
+    def reorder_replace_rule(rule_id: str, new_index: int) -> dict:
+        """
+        Move a replace rule to a different position in the evaluation order.
+
+        Rules are applied in order; position 0 is evaluated first.
+
+        Args:
+            rule_id:   Rule UUID from list_replace_rules.
+            new_index: Zero-based target position (0 = top/first).
+
+        Returns:
+            {"ok": True} on success, or {"ok": False} if rule not found.
+        """
+        ok = api.rules_engine.move_rule(rule_id, new_index)
+        return {"ok": ok, "rule_id": rule_id, "new_index": new_index}
+
+    @mcp.tool()
+    def clear_replace_rules() -> dict:
+        """Remove all replace rules."""
+        api.rules_engine.clear()
+        return {"ok": True, "message": "All replace rules cleared."}
+
     # ------------------------------------------------------------------ #
     # Intercept rules                                                       #
     # ------------------------------------------------------------------ #
 
     @mcp.tool()
     def list_intercept_rules() -> list[dict]:
-        """List all active intercept filter rules in order."""
+        """
+        List all active intercept filter rules in order.
+
+        Rules use first-match semantics: the first matching rule's action wins.
+        When no rules are configured, all frames are intercepted.
+        When rules are configured but none match, frames are auto-forwarded.
+        """
         return [r.to_dict() for r in api.list_intercept_rules()]
 
     @mcp.tool()
@@ -356,10 +744,13 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         """
         Add an intercept filter rule.
 
+        Intercept rules use first-match semantics and decide whether a frame
+        is held for inspection or automatically forwarded.
+
         Args:
             label:       Human-readable name.
-            pattern:     Binary pattern string (empty = match all).
-            action:      "intercept" or "forward".
+            pattern:     Binary pattern string (empty string = match all frames).
+            action:      "intercept" (hold for review) or "forward" (auto-forward).
             direction:   Optional "client_to_server" or "server_to_client".
             session_ids: Optional list of session UUIDs this rule applies to.
             enabled:     Whether the rule is active immediately.
@@ -395,6 +786,42 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         return {"ok": True, "rule": rule.to_dict()}
 
     @mcp.tool()
+    def update_intercept_rule(
+        rule_id: str,
+        label:   Optional[str]  = None,
+        action:  Optional[str]  = None,
+        enabled: Optional[bool] = None,
+    ) -> dict:
+        """
+        Update an intercept rule's label, action, or enabled state.
+
+        Use this to flip a rule between intercept/forward, toggle it on/off,
+        or rename it, without removing and re-adding it.
+
+        Args:
+            rule_id: Rule UUID from list_intercept_rules.
+            label:   New name (or null to keep current).
+            action:  "intercept" or "forward" (or null to keep current).
+            enabled: True/False (or null to keep current).
+
+        Returns:
+            Updated rule dict, or {"ok": False} if not found.
+        """
+        rule = api.intercept_filter.get_rule(rule_id)
+        if rule is None:
+            return {"ok": False, "error": f"Rule '{rule_id}' not found."}
+        if label is not None:
+            rule.label = label
+        if enabled is not None:
+            rule.enabled = enabled
+        if action is not None:
+            try:
+                rule.action = RuleAction(action)
+            except ValueError:
+                return {"ok": False, "error": f"Invalid action '{action}'. Use 'intercept' or 'forward'."}
+        return {"ok": True, "rule": rule.to_dict()}
+
+    @mcp.tool()
     def remove_intercept_rule(rule_id: str) -> dict:
         """
         Remove an intercept filter rule by its ID.
@@ -404,6 +831,35 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         """
         ok = api.remove_intercept_rule(rule_id)
         return {"ok": ok, "rule_id": rule_id}
+
+    @mcp.tool()
+    def reorder_intercept_rule(rule_id: str, new_index: int) -> dict:
+        """
+        Move an intercept rule to a different position in the evaluation order.
+
+        Rules are evaluated top-to-bottom; the first match wins.
+        Position 0 is evaluated first (highest priority).
+
+        Args:
+            rule_id:   Rule UUID from list_intercept_rules.
+            new_index: Zero-based target position (0 = top/highest priority).
+
+        Returns:
+            {"ok": True} on success, or {"ok": False} if rule not found.
+        """
+        ok = api.intercept_filter.move_rule(rule_id, new_index)
+        return {"ok": ok, "rule_id": rule_id, "new_index": new_index}
+
+    @mcp.tool()
+    def clear_intercept_rules() -> dict:
+        """
+        Remove all intercept filter rules.
+
+        After clearing, the default behaviour resumes: all frames are intercepted
+        (when intercept_enabled is True).
+        """
+        api.intercept_filter.clear()
+        return {"ok": True, "message": "All intercept rules cleared."}
 
     # ------------------------------------------------------------------ #
     # Repeater / direct send                                                #
@@ -420,8 +876,9 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         """
         Send raw bytes directly to host:port and return the response.
 
-        Opens a direct TCP connection (bypassing the proxy listener), sends the
-        bytes, reads the response, and closes the connection.
+        Opens a direct TCP connection (bypassing the proxy listener), sends
+        the bytes, reads the response, and closes the connection. This is
+        a one-shot send — for named reusable requests use the repeater tools.
 
         Args:
             data_hex:        Bytes to send as a hex string (e.g. "deadbeef01").
@@ -448,6 +905,203 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         return record.to_dict()
 
     # ------------------------------------------------------------------ #
+    # Repeater request management                                           #
+    # ------------------------------------------------------------------ #
+
+    @mcp.tool()
+    def list_repeater_requests() -> list[dict]:
+        """
+        List all repeater request tabs.
+
+        Repeater requests are named, reusable send configurations — analogous
+        to Burp Suite's Repeater tabs. Each has editable bytes, a target, and
+        a history of sends.
+
+        Returns:
+            List of repeater request dicts (without full history).
+        """
+        result = []
+        for req in _repeater_requests.values():
+            d = req.to_dict()
+            d["history_count"] = len(req.history)
+            d.pop("history", None)  # Omit full history from list view
+            result.append(d)
+        return result
+
+    @mcp.tool()
+    def create_repeater_request(
+        label:             str,
+        host:              str,
+        port:              int,
+        data_hex:          str            = "",
+        tls:               bool           = False,
+        source_session_id: Optional[str]  = None,
+    ) -> dict:
+        """
+        Create a new repeater request tab.
+
+        Args:
+            label:             Human-readable name for this request tab.
+            host:              Target hostname or IP address.
+            port:              Target TCP port.
+            data_hex:          Initial bytes to send, as hex string.
+            tls:               Whether to use TLS.
+            source_session_id: Optional session ID to associate with this request.
+
+        Returns:
+            The new repeater request dict including its generated ID.
+        """
+        try:
+            current_bytes = bytes.fromhex(data_hex) if data_hex else b""
+        except ValueError as exc:
+            return {"ok": False, "error": f"Invalid data hex: {exc}"}
+
+        req = RepeaterRequest.create(
+            label=label,
+            host=host,
+            port=port,
+            tls=tls,
+            current_bytes=current_bytes,
+            source_session_id=source_session_id,
+        )
+        _repeater_requests[req.id] = req
+        return {"ok": True, "request": req.to_dict()}
+
+    @mcp.tool()
+    def get_repeater_request(request_id: str) -> Optional[dict]:
+        """
+        Get a repeater request tab, including its full send history.
+
+        Args:
+            request_id: The repeater request UUID from list_repeater_requests.
+
+        Returns:
+            Full repeater request dict with history, or None if not found.
+        """
+        req = _repeater_requests.get(request_id)
+        if req is None:
+            return None
+        return req.to_dict()
+
+    @mcp.tool()
+    def update_repeater_request(
+        request_id: str,
+        label:      Optional[str]  = None,
+        host:       Optional[str]  = None,
+        port:       Optional[int]  = None,
+        data_hex:   Optional[str]  = None,
+        tls:        Optional[bool] = None,
+    ) -> dict:
+        """
+        Update a repeater request tab's settings or payload bytes.
+
+        Args:
+            request_id: The repeater request UUID.
+            label:      New name (or null to keep current).
+            host:       New target host (or null to keep current).
+            port:       New target port (or null to keep current).
+            data_hex:   New payload bytes as hex (or null to keep current).
+            tls:        New TLS setting (or null to keep current).
+
+        Returns:
+            Updated request dict, or {"ok": False} if not found.
+        """
+        req = _repeater_requests.get(request_id)
+        if req is None:
+            return {"ok": False, "error": f"Request '{request_id}' not found."}
+        if label    is not None: req.label = label
+        if host     is not None: req.host  = host
+        if port     is not None: req.port  = port
+        if tls      is not None: req.tls   = tls
+        if data_hex is not None:
+            try:
+                req.current_bytes = bytes.fromhex(data_hex)
+            except ValueError as exc:
+                return {"ok": False, "error": f"Invalid data hex: {exc}"}
+        return {"ok": True, "request": req.to_dict()}
+
+    @mcp.tool()
+    def delete_repeater_request(request_id: str) -> dict:
+        """
+        Delete a repeater request tab and its history.
+
+        Args:
+            request_id: The repeater request UUID to delete.
+        """
+        if request_id not in _repeater_requests:
+            return {"ok": False, "error": f"Request '{request_id}' not found."}
+        del _repeater_requests[request_id]
+        return {"ok": True, "request_id": request_id}
+
+    @mcp.tool()
+    async def send_repeater_request(request_id: str) -> dict:
+        """
+        Send the current bytes of a repeater request to its target.
+
+        Records the send+response in the request's history. Retrieve the
+        full history via get_repeater_request().
+
+        Args:
+            request_id: The repeater request UUID from list_repeater_requests.
+
+        Returns:
+            The SendRecord dict for this send, including received bytes.
+        """
+        req = _repeater_requests.get(request_id)
+        if req is None:
+            return {"ok": False, "error": f"Request '{request_id}' not found."}
+        if not req.current_bytes:
+            return {"ok": False, "error": "Request has no bytes to send. Update it via update_repeater_request()."}
+
+        record = await api.send_frame(
+            data=req.current_bytes,
+            host=req.host,
+            port=req.port,
+            tls=req.tls,
+        )
+        req.add_record(record)
+        return {"ok": True, "record": record.to_dict()}
+
+    @mcp.tool()
+    def frame_to_repeater(
+        session_id: str,
+        frame_id:   str,
+        label:      Optional[str] = None,
+    ) -> dict:
+        """
+        Create a repeater request tab pre-loaded with a captured frame's bytes.
+
+        This is the MCP equivalent of "Send to Repeater" in the UI. The new
+        tab targets the same server the session was talking to.
+
+        Args:
+            session_id: Session UUID containing the frame.
+            frame_id:   Frame UUID to load into the repeater.
+            label:      Name for the new tab (default: "From <session_id[:8]>").
+
+        Returns:
+            The new repeater request dict.
+        """
+        session = api.get_session(session_id)
+        if session is None:
+            return {"ok": False, "error": f"Session '{session_id}' not found."}
+
+        frame = next((f for f in session.frames if f.id == frame_id), None)
+        if frame is None:
+            return {"ok": False, "error": f"Frame '{frame_id}' not found in session."}
+
+        req = RepeaterRequest.create(
+            label=label or f"From {session_id[:8]}",
+            host=session.info.server_host,
+            port=session.info.server_port,
+            tls=api.config.tls_upstream,
+            current_bytes=frame.raw_bytes,
+            source_session_id=session_id,
+        )
+        _repeater_requests[req.id] = req
+        return {"ok": True, "request": req.to_dict()}
+
+    # ------------------------------------------------------------------ #
     # Replay                                                                #
     # ------------------------------------------------------------------ #
 
@@ -462,6 +1116,9 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
     ) -> dict:
         """
         Replay a captured session against the upstream server.
+
+        Replays the captured frames (in the selected direction) to the server.
+        Useful for reproducing observed traffic, regression testing, or fuzzing.
 
         Args:
             session_id:     Session UUID to replay.
@@ -490,6 +1147,104 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
             frame_selector=frame_selector,
         )
         return result.to_dict()
+
+    @mcp.tool()
+    async def replay_with_field_edits(
+        session_id:     str,
+        field_edits:    dict[str, dict[str, Any]],
+        server_host:    Optional[str]  = None,
+        server_port:    Optional[int]  = None,
+        frame_delay:    float          = 0.0,
+        direction:      str            = "client_to_server",
+        frame_selector: Optional[str]  = None,
+    ) -> dict:
+        """
+        Replay a captured session with protocol field-level edits applied.
+
+        Requires a protocol definition to be loaded via set_protocol_file().
+        Each message type can have specific fields overridden. The encoder
+        automatically recomputes length fields after edits.
+
+        Args:
+            session_id:     Session UUID to replay.
+            field_edits:    Dict of message_type_name → {field_name → new_value}.
+                            Example:
+                              {
+                                "LoginRequest": {
+                                  "username": "admin2",
+                                  "session_token": 99
+                                }
+                              }
+            server_host:    Override target host (default: original server host).
+            server_port:    Override target port (default: original server port).
+            frame_delay:    Seconds between frames.
+            direction:      "client_to_server" (default) or "server_to_client".
+            frame_selector: Selector string for specific frames (e.g. "0,2,4-6").
+
+        Returns:
+            ReplayResult dict. Falls back to original bytes for frames whose
+            message type is not in field_edits or whose encoding fails.
+        """
+        if api._encoder is None:
+            return {
+                "ok": False,
+                "error": (
+                    "No protocol encoder loaded. "
+                    "Call set_protocol_file() first to enable field-level replay."
+                ),
+            }
+
+        try:
+            dir_enum = Direction(direction)
+        except ValueError:
+            return {"ok": False, "error": f"Invalid direction '{direction}'."}
+
+        try:
+            result = await api.replay_session_with_field_edits(
+                session_id=session_id,
+                field_edits=field_edits,
+                server_host=server_host,
+                server_port=server_port,
+                frame_delay=frame_delay,
+                direction=dir_enum,
+                frame_selector=frame_selector,
+            )
+        except RuntimeError as exc:
+            return {"ok": False, "error": str(exc)}
+
+        return result.to_dict()
+
+    # ------------------------------------------------------------------ #
+    # TLS / CA                                                              #
+    # ------------------------------------------------------------------ #
+
+    @mcp.tool()
+    def get_ca_cert() -> dict:
+        """
+        Return the proxy's TLS CA certificate in PEM format.
+
+        Install this certificate in your client application or OS trust store
+        so that the client trusts the proxy's per-session certificates during
+        TLS interception.
+
+        Returns:
+            {"pem": "<certificate PEM string>"} or an error if TLS is not
+            configured or the CA has not been initialised.
+        """
+        ca = api.ca
+        if ca is None:
+            return {
+                "ok": False,
+                "error": (
+                    "TLS CA not initialised. "
+                    "Ensure tls_listen=True in config and start the proxy."
+                ),
+            }
+        try:
+            pem = ca.cert_pem.decode("utf-8")
+            return {"ok": True, "pem": pem}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
 
     # ------------------------------------------------------------------ #
     # Fuzzing                                                               #
@@ -764,43 +1519,50 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
 
     @mcp.tool()
     def set_config(
-        listen_host:     Optional[str]  = None,
-        listen_port:     Optional[int]  = None,
-        upstream_host:   Optional[str]  = None,
-        upstream_port:   Optional[int]  = None,
-        tls_listen:      Optional[bool] = None,
-        tls_upstream:    Optional[bool] = None,
-        intercept_enabled: Optional[bool] = None,
-        framer_name:     Optional[str]  = None,
+        listen_host:        Optional[str]  = None,
+        listen_port:        Optional[int]  = None,
+        upstream_host:      Optional[str]  = None,
+        upstream_port:      Optional[int]  = None,
+        tls_listen:         Optional[bool] = None,
+        tls_upstream:       Optional[bool] = None,
+        tls_upstream_verify: Optional[bool] = None,
+        intercept_enabled:  Optional[bool] = None,
+        framer_name:        Optional[str]  = None,
+        protocol_definition_path: Optional[str] = None,
     ) -> dict:
         """
         Update one or more ProxyConfig fields.
 
         Only the provided (non-null) fields are changed; all others keep their
-        current values.  Changes take effect for new connections; existing
+        current values. Changes take effect for new connections; existing
         connections are not affected.
 
         Args:
-            listen_host:       Bind address for the proxy listener.
-            listen_port:       Port for the proxy listener.
-            upstream_host:     Default upstream host to forward to.
-            upstream_port:     Default upstream port to forward to.
-            tls_listen:        Terminate TLS on the listening side.
-            tls_upstream:      Use TLS when connecting upstream.
-            intercept_enabled: Master intercept on/off switch in config.
-            framer_name:       Framer to use: "raw", "line", "delimiter", etc.
+            listen_host:              Bind address for the proxy listener.
+            listen_port:              Port for the proxy listener.
+            upstream_host:            Default upstream host to forward to.
+            upstream_port:            Default upstream port to forward to.
+            tls_listen:               Terminate TLS on the listening side.
+            tls_upstream:             Use TLS when connecting upstream.
+            tls_upstream_verify:      Verify upstream TLS certificates.
+            intercept_enabled:        Master intercept on/off switch.
+            framer_name:              Framer: "raw", "delimiter", "length_prefix".
+            protocol_definition_path: Path to a protocol .yaml/.json file.
 
         Returns:
             The updated config dict.
         """
-        if listen_host     is not None: api.config.listen_host       = listen_host
-        if listen_port     is not None: api.config.listen_port       = listen_port
-        if upstream_host   is not None: api.config.upstream_host     = upstream_host
-        if upstream_port   is not None: api.config.upstream_port     = upstream_port
-        if tls_listen      is not None: api.config.tls_listen        = tls_listen
-        if tls_upstream    is not None: api.config.tls_upstream      = tls_upstream
-        if intercept_enabled is not None: api.config.intercept_enabled = intercept_enabled
-        if framer_name     is not None: api.config.framer_name       = framer_name
+        if listen_host        is not None: api.config.listen_host       = listen_host
+        if listen_port        is not None: api.config.listen_port       = listen_port
+        if upstream_host      is not None: api.config.upstream_host     = upstream_host
+        if upstream_port      is not None: api.config.upstream_port     = upstream_port
+        if tls_listen         is not None: api.config.tls_listen        = tls_listen
+        if tls_upstream       is not None: api.config.tls_upstream      = tls_upstream
+        if tls_upstream_verify is not None: api.config.tls_upstream_verify = tls_upstream_verify
+        if intercept_enabled  is not None: api.config.intercept_enabled = intercept_enabled
+        if framer_name        is not None: api.config.framer_name       = framer_name
+        if protocol_definition_path is not None:
+            api.config.protocol_definition_path = protocol_definition_path
 
         return api.config.to_dict()
 
