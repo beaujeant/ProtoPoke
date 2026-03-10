@@ -453,11 +453,12 @@ class ReplayEngine:
 
     async def send_frame(
         self,
-        data:            bytes,
-        host:            str,
-        port:            int,
-        tls:             bool  = False,
-        connect_timeout: Optional[float] = None,
+        data:             bytes,
+        host:             str,
+        port:             int,
+        tls:              bool           = False,
+        connect_timeout:  Optional[float] = None,
+        receive_timeout:  Optional[float] = None,
     ) -> SendRecord:
         """
         Send raw bytes to *host*:*port* and read all response bytes.
@@ -467,17 +468,23 @@ class ReplayEngine:
         the connection.  Suitable for the Repeater's one-shot send action.
 
         Args:
-            data:            Bytes to send.
-            host:            Target hostname or IP address.
-            port:            Target TCP port.
-            tls:             Wrap the connection in TLS (no cert verification).
-            connect_timeout: Override the engine's default connect timeout.
+            data:             Bytes to send.
+            host:             Target hostname or IP address.
+            port:             Target TCP port.
+            tls:              Wrap the connection in TLS (no cert verification).
+            connect_timeout:  Override the engine's default connect timeout.
+            receive_timeout:  Seconds to wait for the server to finish sending
+                              its response.  When the deadline is reached the
+                              bytes received so far are returned as a successful
+                              record (the server simply kept the connection open).
+                              Defaults to the same value as *connect_timeout*.
 
         Returns:
             A ``SendRecord`` capturing the sent bytes, response bytes,
             success flag, and error message (if any).
         """
         timeout = connect_timeout if connect_timeout is not None else self._connect_timeout
+        recv_timeout = receive_timeout if receive_timeout is not None else timeout
         ssl_ctx: Optional[ssl.SSLContext] = None
         if tls:
             ssl_ctx = ssl.create_default_context()
@@ -521,11 +528,20 @@ class ReplayEngine:
                 writer.write_eof()
             await writer.drain()
 
-            while True:
-                chunk = await reader.read(4096)
-                if not chunk:
-                    break
-                received.extend(chunk)
+            async def _read_all() -> None:
+                while True:
+                    chunk = await reader.read(4096)
+                    if not chunk:
+                        break
+                    received.extend(chunk)
+
+            try:
+                await asyncio.wait_for(_read_all(), timeout=recv_timeout)
+            except asyncio.TimeoutError:
+                logger.debug(
+                    "send_frame: receive timeout (%ss) — returning %d bytes received so far",
+                    recv_timeout, len(received),
+                )
 
         except (ConnectionResetError, BrokenPipeError, OSError) as exc:
             return SendRecord.create(

@@ -92,3 +92,53 @@ class TestSendFrame:
         # An empty send: server echoes nothing back
         assert rec.success is True
         assert rec.received_bytes == b""
+
+    async def test_receive_timeout_returns_partial_response(self, engine):
+        """Server sends data but never closes — receive_timeout must unblock."""
+        port = free_port()
+
+        async def _non_closing_handler(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            await reader.read(4096)  # drain client bytes
+            writer.write(b"\xaa\xbb\xcc")
+            await writer.drain()
+            await asyncio.sleep(60)  # keep connection open
+            writer.close()
+
+        server = await asyncio.start_server(_non_closing_handler, "127.0.0.1", port)
+        async with server:
+            rec = await engine.send_frame(
+                b"\x01\x02\x03",
+                "127.0.0.1",
+                port,
+                receive_timeout=0.5,
+            )
+
+        assert rec.success is True
+        assert rec.sent_bytes == b"\x01\x02\x03"
+        assert rec.received_bytes == b"\xaa\xbb\xcc"
+
+    async def test_receive_timeout_no_response(self, engine):
+        """Server accepts but sends nothing — receive_timeout must unblock."""
+        port = free_port()
+
+        async def _silent_handler(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            await reader.read(4096)  # drain client bytes
+            await asyncio.sleep(60)  # never respond
+            writer.close()
+
+        server = await asyncio.start_server(_silent_handler, "127.0.0.1", port)
+        async with server:
+            rec = await engine.send_frame(
+                b"\xde\xad",
+                "127.0.0.1",
+                port,
+                receive_timeout=0.3,
+            )
+
+        assert rec.success is True
+        assert rec.sent_bytes == b"\xde\xad"
+        assert rec.received_bytes == b""
