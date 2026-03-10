@@ -19,6 +19,7 @@ from ..replay.models import RepeaterRequest
 from .modals.new_request import NewRequestModal, NewRequestResult
 from .modals.project import NewProjectModal, OpenProjectModal, SaveAsModal
 from .tabs.config import ConfigTab
+from .tabs.fuzzer import FuzzerTab
 from .tabs.intercept import InterceptTab
 from .tabs.logs import LogsTab
 from .tabs.repeater import RepeaterTab
@@ -83,6 +84,7 @@ class ProtoPoke(App):
         Binding("f2",           "switch_tab('logs')",      "Logs",      show=True),
         Binding("f3",           "switch_tab('intercept')", "Intercept", show=True),
         Binding("f4",           "switch_tab('repeater')",  "Repeater",  show=True),
+        Binding("f5",           "switch_tab('fuzzer')",    "Fuzzer",    show=True),
         Binding("ctrl+n",       "new_project",             "New",       show=False),
         Binding("ctrl+o",       "open_project",            "Open",      show=False),
         Binding("ctrl+s",       "save_project",            "Save",      show=False),
@@ -136,6 +138,8 @@ class ProtoPoke(App):
                 yield InterceptTab(id="intercept-tab")
             with TabPane("Repeater [F4]", id="repeater"):
                 yield RepeaterTab(id="repeater-tab")
+            with TabPane("Fuzzer [F5]", id="fuzzer"):
+                yield FuzzerTab(id="fuzzer-tab")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -168,11 +172,13 @@ class ProtoPoke(App):
         session = self.api.get_session(msg.session_id)
         if session:
             self.query_one("#logs-tab", LogsTab).add_session(session)
+            self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
 
     def on__session_closed(self, msg: _SessionClosed) -> None:
         session = self.api.get_session(msg.session_id)
         if session:
             self.query_one("#logs-tab", LogsTab).update_session(session)
+            self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
 
     def on__frame_captured(self, msg: _FrameCaptured) -> None:
         session = self.api.get_session(msg.session_id)
