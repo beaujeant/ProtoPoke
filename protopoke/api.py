@@ -28,8 +28,9 @@ Why a separate API class:
     - Tests can drive the proxy via ProxyAPI without touching internals.
     - A future HTTP API server (e.g. aiohttp/FastAPI) wraps ProxyAPI methods.
     - A future terminal UI also wraps ProxyAPI — no other layer changes.
-    - The intercept controller type (passthrough vs queued) is selected based on
-      config here, so callers don't need to think about it.
+    - The intercept controller always uses QueuedInterceptController, with
+      config.intercept_enabled controlling its initial on/off state. This allows
+      toggling interception at runtime regardless of the startup config value.
 
 Usage example:
 
@@ -65,11 +66,7 @@ from .events.bus import (
     SessionClosedEvent,
     FrameCapturedEvent,
 )
-from .intercept.controller import (
-    InterceptController,
-    PassthroughController,
-    QueuedInterceptController,
-)
+from .intercept.controller import QueuedInterceptController
 from .replay.engine import ReplayEngine, ReplayResult
 from .replay.models import SendRecord, RepeaterRequest
 from .rules.engine import RulesEngine, InterceptFilter
@@ -109,15 +106,13 @@ class ProxyAPI:
         self.rules_engine     = rules_engine     or RulesEngine()
         self.intercept_filter = intercept_filter or InterceptFilter()
 
-        # Select intercept controller based on config
-        self._intercept_controller: InterceptController
-        if config.intercept_enabled:
-            self._intercept_controller = QueuedInterceptController(
-                intercept_enabled=True,
-                intercept_filter=self.intercept_filter,
-            )
-        else:
-            self._intercept_controller = PassthroughController()
+        # Always use QueuedInterceptController; config.intercept_enabled sets
+        # the initial on/off state so it can be toggled at any time.
+        self._intercept_controller: QueuedInterceptController
+        self._intercept_controller = QueuedInterceptController(
+            intercept_enabled=config.intercept_enabled,
+            intercept_filter=self.intercept_filter,
+        )
 
         # Core engine (passes rules_engine to relay)
         self.engine = ProxyEngine(
@@ -239,9 +234,7 @@ class ProxyAPI:
     @property
     def intercept_enabled(self) -> bool:
         """Whether interception is currently active."""
-        if isinstance(self._intercept_controller, QueuedInterceptController):
-            return self._intercept_controller.intercept_enabled
-        return False
+        return self._intercept_controller.intercept_enabled
 
     @intercept_enabled.setter
     def intercept_enabled(self, value: bool) -> None:
@@ -250,18 +243,8 @@ class ProxyAPI:
 
         When disabled, all currently pending frames are immediately forwarded.
         When enabled, subsequent frames are held for operator review.
-
-        Note: if the proxy was started without intercept_enabled=True in config,
-        the intercept controller is a PassthroughController and toggling this
-        property has no effect (logs a warning).
         """
-        if isinstance(self._intercept_controller, QueuedInterceptController):
-            self._intercept_controller.intercept_enabled = value
-        elif value:
-            logger.warning(
-                "Cannot enable interception: proxy was started with intercept_enabled=False. "
-                "Set intercept_enabled=True in ProxyConfig and restart."
-            )
+        self._intercept_controller.intercept_enabled = value
 
     async def get_next_intercepted(self) -> InterceptedUnit:
         """
@@ -272,47 +255,30 @@ class ProxyAPI:
         Raises:
             RuntimeError: if interception is not enabled.
         """
-        if not isinstance(self._intercept_controller, QueuedInterceptController):
-            raise RuntimeError(
-                "Interception not enabled. "
-                "Create ProxyAPI with ProxyConfig(intercept_enabled=True)."
-            )
         return await self._intercept_controller.get_pending()
 
     def list_intercepted(self) -> list[InterceptedUnit]:
         """Snapshot of all frames currently waiting for a verdict."""
-        if not isinstance(self._intercept_controller, QueuedInterceptController):
-            return []
         return self._intercept_controller.list_pending()
 
     def pending_count(self) -> int:
         """Number of frames waiting for an intercept verdict."""
-        if not isinstance(self._intercept_controller, QueuedInterceptController):
-            return 0
         return self._intercept_controller.pending_count()
 
     def forward(self, unit_id: str) -> bool:
         """Forward an intercepted frame as-is."""
-        if not isinstance(self._intercept_controller, QueuedInterceptController):
-            return False
         return self._intercept_controller.forward(unit_id)
 
     def drop(self, unit_id: str) -> bool:
         """Drop an intercepted frame (don't forward it)."""
-        if not isinstance(self._intercept_controller, QueuedInterceptController):
-            return False
         return self._intercept_controller.drop(unit_id)
 
     def modify_and_forward(self, unit_id: str, new_data: bytes) -> bool:
         """Forward an intercepted frame with replacement bytes."""
-        if not isinstance(self._intercept_controller, QueuedInterceptController):
-            return False
         return self._intercept_controller.modify_and_forward(unit_id, new_data)
 
     def forward_all(self) -> int:
         """Forward all currently pending intercepted frames. Returns count."""
-        if not isinstance(self._intercept_controller, QueuedInterceptController):
-            return 0
         return self._intercept_controller.forward_all()
 
     # ------------------------------------------------------------------
@@ -492,9 +458,6 @@ class ProxyAPI:
         Returns:
             True if the verdict was applied, False if unit_id not found.
         """
-        if not isinstance(self._intercept_controller, QueuedInterceptController):
-            return False
-
         unit = self._intercept_controller.get_by_id(unit_id)
         if unit is None:
             return False
@@ -669,29 +632,23 @@ class ProxyAPI:
 
     @property
     def intercept_direction_filter(self) -> "Optional[Direction]":
-        """Direction filter on the QueuedInterceptController, or ``None``."""
-        if isinstance(self._intercept_controller, QueuedInterceptController):
-            return self._intercept_controller.direction_filter
-        return None
+        """Direction filter on the intercept controller, or ``None``."""
+        return self._intercept_controller.direction_filter
 
     @intercept_direction_filter.setter
     def intercept_direction_filter(self, value: "Optional[Direction]") -> None:
-        """Set the direction filter on the QueuedInterceptController."""
-        if isinstance(self._intercept_controller, QueuedInterceptController):
-            self._intercept_controller.direction_filter = value
+        """Set the direction filter on the intercept controller."""
+        self._intercept_controller.direction_filter = value
 
     @property
     def intercept_session_filter(self) -> "Optional[set[str]]":
-        """Session ID filter on the QueuedInterceptController, or ``None``."""
-        if isinstance(self._intercept_controller, QueuedInterceptController):
-            return self._intercept_controller.session_filter
-        return None
+        """Session ID filter on the intercept controller, or ``None``."""
+        return self._intercept_controller.session_filter
 
     @intercept_session_filter.setter
     def intercept_session_filter(self, value: "Optional[set[str]]") -> None:
-        """Set the session ID filter on the QueuedInterceptController."""
-        if isinstance(self._intercept_controller, QueuedInterceptController):
-            self._intercept_controller.session_filter = value
+        """Set the session ID filter on the intercept controller."""
+        self._intercept_controller.session_filter = value
 
     # ------------------------------------------------------------------
     # Event subscriptions
