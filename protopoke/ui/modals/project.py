@@ -36,6 +36,7 @@ class NewProjectModal(ModalScreen[str | None]):
     }
     NewProjectModal Button {
         margin-left: 1;
+        padding: 0 0;
     }
     """
 
@@ -95,6 +96,7 @@ class OpenProjectModal(ModalScreen[str | None]):
     }
     OpenProjectModal Button {
         margin-left: 1;
+        padding: 0 0;
     }
     """
 
@@ -155,6 +157,7 @@ class SaveAsModal(ModalScreen[str | None]):
     }
     SaveAsModal Button {
         margin-left: 1;
+        padding: 0 0;
     }
     """
 

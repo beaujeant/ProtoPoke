@@ -69,6 +69,7 @@ class FuzzerTab(Widget):
     }
     FuzzerTab .action-bar Button {
         margin-right: 1;
+        padding: 0 0;
     }
     FuzzerTab #status-label {
         margin-left: 2;

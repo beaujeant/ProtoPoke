@@ -42,6 +42,7 @@ class ParsedView(Vertical):
     ParsedView .view-toolbar Button {
         min-width: 10;
         margin-left: 1;
+        padding: 0 0;
     }
     ParsedView #detail-content {
         height: 1fr;

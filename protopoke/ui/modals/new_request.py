@@ -66,6 +66,7 @@ class NewRequestModal(ModalScreen[NewRequestResult | None]):
     }
     NewRequestModal Button {
         margin-left: 1;
+        padding: 0 0;
     }
     NewRequestModal .section-title {
         color: $text-muted;

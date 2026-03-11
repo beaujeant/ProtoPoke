@@ -70,6 +70,7 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
     }
     AddReplaceRuleModal Button {
         margin-left: 1;
+        padding: 0 0;
     }
     AddReplaceRuleModal #validation-msg {
         color: $error;
@@ -226,6 +227,7 @@ class AddInterceptRuleModal(ModalScreen[InterceptRule | None]):
     }
     AddInterceptRuleModal Button {
         margin-left: 1;
+        padding: 0 0;
     }
     AddInterceptRuleModal #validation-msg {
         color: $error;

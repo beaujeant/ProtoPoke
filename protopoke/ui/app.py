@@ -105,16 +105,6 @@ class ProtoPoke(App):
     }
     """
 
-    # CSS is the app-level stylesheet and has higher cascade priority than
-    # DEFAULT_CSS (including Textual's own built-in widget styles).  Any rule
-    # that must override a built-in widget style — such as stripping the
-    # default button padding — belongs here rather than in DEFAULT_CSS.
-    CSS = """
-    Button {
-        padding: 0 0;
-    }
-    """
-
     def __init__(
         self,
         config: Optional[ProxyConfig] = None,
