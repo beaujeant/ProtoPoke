@@ -72,6 +72,7 @@ class InterceptTab(Widget):
     }
     InterceptTab .action-bar Button {
         margin-right: 1;
+        padding: 0 0;
     }
     InterceptTab #hex-editor-pane {
         height: 20%;

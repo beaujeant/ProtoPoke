@@ -103,9 +103,6 @@ class ProtoPoke(App):
     ProtoPoke .status-dirty {
         color: $warning;
     }
-    Button {
-        padding: 0 0;
-    }
     """
 
     def __init__(

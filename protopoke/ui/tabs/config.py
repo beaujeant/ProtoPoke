@@ -86,6 +86,7 @@ class ConfigTab(Widget):
     }
     ConfigTab Button {
         margin-left: 1;
+        padding: 0 0;
     }
     ConfigTab .status-bar {
         height: 3;

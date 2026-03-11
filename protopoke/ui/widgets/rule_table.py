@@ -43,6 +43,7 @@ class RuleTable(Widget, Generic[R]):
     RuleTable Button {
         min-width: 6;
         margin-right: 1;
+        padding: 0 0;
     }
     """
 
