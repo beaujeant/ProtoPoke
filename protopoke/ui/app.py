@@ -92,7 +92,7 @@ class ProtoPoke(App):
         Binding("ctrl+q",       "quit",                    "Quit",      show=True),
     ]
 
-    CSS = """
+    DEFAULT_CSS = """
     ProtoPoke TabbedContent {
         height: 1fr;
     }
