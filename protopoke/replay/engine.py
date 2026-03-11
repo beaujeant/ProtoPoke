@@ -602,6 +602,15 @@ class ReplayEngine:
         host = session.info.server_host
         port = session.info.server_port
 
+        # Framer for the response direction — produces logical frames according
+        # to the configured framing strategy (raw, delimiter, length_prefix, …).
+        response_framer = create_framer(
+            self._framer_name,
+            session_id=session_id,
+            direction=Direction.SERVER_TO_CLIENT,
+            **self._framer_kwargs,
+        )
+
         received         = bytearray()
         received_packets: list[bytes] = []
         server_closed    = False
@@ -636,8 +645,15 @@ class ReplayEngine:
                 if not chunk:   # EOF sentinel — server closed the connection
                     server_closed = True
                     break
-                received_packets.append(chunk)
                 received.extend(chunk)
+                for frame in response_framer.feed(chunk):
+                    received_packets.append(frame.raw_bytes)
+
+        # Flush any bytes still buffered inside the framer (e.g. a partial
+        # message that arrived before the window closed).
+        for frame in response_framer.flush():
+            if frame.raw_bytes:
+                received_packets.append(frame.raw_bytes)
 
         if server_closed:
             reader_task.cancel()
@@ -659,8 +675,8 @@ class ReplayEngine:
                 )
 
         logger.info(
-            "send_on_repeater_session %s: sent=%d bytes, received=%d bytes (%d packets)",
-            session_id[:8], len(data), len(received), len(received_packets),
+            "send_on_repeater_session %s: sent=%d bytes, received=%d bytes (%d frames, framer=%s)",
+            session_id[:8], len(data), len(received), len(received_packets), self._framer_name,
         )
         return SendRecord.create(
             sent_bytes=data,
@@ -742,6 +758,16 @@ class ReplayEngine:
                 error=f"Connection failed: {exc}",
             )
 
+        # Framer for the server's response — uses the same strategy as the proxy.
+        # For one-shot sends there is no real session yet; use a temporary ID.
+        oneshot_id = f"oneshot-{host}-{port}"
+        response_framer = create_framer(
+            self._framer_name,
+            session_id=oneshot_id,
+            direction=Direction.SERVER_TO_CLIENT,
+            **self._framer_kwargs,
+        )
+
         received         = bytearray()
         received_packets: list[bytes] = []
         try:
@@ -755,8 +781,9 @@ class ReplayEngine:
                     chunk = await reader.read(4096)
                     if not chunk:
                         break
-                    received_packets.append(chunk)
                     received.extend(chunk)
+                    for frame in response_framer.feed(chunk):
+                        received_packets.append(frame.raw_bytes)
 
             try:
                 await asyncio.wait_for(_read_all(), timeout=recv_timeout)
@@ -767,6 +794,9 @@ class ReplayEngine:
                 )
 
         except (ConnectionResetError, BrokenPipeError, OSError) as exc:
+            for frame in response_framer.flush():
+                if frame.raw_bytes:
+                    received_packets.append(frame.raw_bytes)
             return SendRecord.create(
                 sent_bytes=data,
                 received_bytes=bytes(received),
@@ -784,9 +814,14 @@ class ReplayEngine:
             except Exception:
                 pass
 
+        # Flush any bytes still buffered in the framer after EOF / timeout.
+        for frame in response_framer.flush():
+            if frame.raw_bytes:
+                received_packets.append(frame.raw_bytes)
+
         logger.info(
-            "send_frame: sent=%d bytes, received=%d bytes (%d packets) to %s:%d",
-            len(data), len(received), len(received_packets), host, port,
+            "send_frame: sent=%d bytes, received=%d bytes (%d frames, framer=%s) to %s:%d",
+            len(data), len(received), len(received_packets), self._framer_name, host, port,
         )
         return SendRecord.create(
             sent_bytes=data,
