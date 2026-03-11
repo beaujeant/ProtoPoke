@@ -52,7 +52,6 @@ class InterceptTab(Widget):
     }
     InterceptTab #queue-pane {
         height: 30%;
-        border-bottom: solid $primary-darken-2;
     }
     InterceptTab .pane-header {
         background: $primary-darken-2;
@@ -68,6 +67,7 @@ class InterceptTab(Widget):
         height: 3;
         align: left middle;
         padding: 0 1;
+        margin: 1 0;
         background: $surface-darken-1;
     }
     InterceptTab .action-bar Button {
@@ -75,14 +75,12 @@ class InterceptTab(Widget):
     }
     InterceptTab #hex-editor-pane {
         height: 20%;
-        border-bottom: solid $primary-darken-2;
     }
     InterceptTab TextArea {
         height: 1fr;
     }
     InterceptTab #intercept-rules-pane {
         height: 1fr;
-        border-bottom: solid $primary-darken-2;
     }
     InterceptTab #replace-rules-pane {
         height: 1fr;
