@@ -48,9 +48,7 @@ class RepeaterTab(Widget):
         padding: 0 1;
     }
     RepeaterTab .tab-strip Button {
-        min-width: 8;
         margin-right: 1;
-        padding: 0 1;
     }
     RepeaterTab .target-bar {
         height: 3;
@@ -98,9 +96,7 @@ class RepeaterTab(Widget):
         background: $surface-darken-1;
     }
     RepeaterTab .action-bar Button {
-        min-width: 8;
         margin-right: 1;
-        padding: 0 1;
     }
     RepeaterTab .action-bar Label {
         margin-right: 1;
@@ -131,7 +127,7 @@ class RepeaterTab(Widget):
         # Tab strip
         with Horizontal(classes="tab-strip"):
             yield Label("Requests:", id="tab-label")
-            yield Button("[+ New]", id="btn-new-request", variant="success")
+            yield Button("[+ New]", id="btn-new-request", variant="success", compact=True)
 
         # Target bar
         with Horizontal(classes="target-bar"):
@@ -155,9 +151,9 @@ class RepeaterTab(Widget):
 
         # Action bar
         with Horizontal(classes="action-bar"):
-            yield Button("▶ Send", variant="success", id="btn-send")
-            yield Button("Clear Request", id="btn-clear-req")
-            yield Button("Clear History", id="btn-clear-hist")
+            yield Button("▶ Send", variant="success", id="btn-send",       compact=True)
+            yield Button("Clear Request",              id="btn-clear-req",  compact=True)
+            yield Button("Clear History",              id="btn-clear-hist", compact=True)
             yield Label("  Window (s):")
             yield Input("1.0", id="resp-window")
 
@@ -189,7 +185,7 @@ class RepeaterTab(Widget):
         self._requests.append(req)
         # Add a button for this tab in the strip
         idx = len(self._requests) - 1
-        btn = Button(req.label, id=f"req-tab-{idx}")
+        btn = Button(req.label, id=f"req-tab-{idx}", compact=True)
         self.query_one(".tab-strip", Horizontal).mount(btn, before="#btn-new-request")
         self._switch_to(idx)
 

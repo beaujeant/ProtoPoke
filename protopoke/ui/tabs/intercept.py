@@ -50,11 +50,6 @@ class InterceptTab(Widget):
     InterceptTab .top-bar Switch {
         margin-right: 2;
     }
-    InterceptTab .top-bar Button {
-        min-width: 8;
-        margin-right: 1;
-        padding: 0 1;
-    }
     InterceptTab #queue-pane {
         height: 30%;
     }
@@ -76,9 +71,7 @@ class InterceptTab(Widget):
         background: $surface-darken-1;
     }
     InterceptTab .action-bar Button {
-        min-width: 8;
         margin-right: 1;
-        padding: 0 1;
     }
     InterceptTab #hex-editor-pane {
         height: 20%;
@@ -108,9 +101,9 @@ class InterceptTab(Widget):
             yield Label("Intercept:")
             yield Switch(id="intercept-toggle", value=False)
             yield Label("Direction:")
-            yield Button("Both",  id="dir-both", variant="default")
-            yield Button("→ C→S", id="dir-c2s",  variant="default")
-            yield Button("← S→C", id="dir-s2c",  variant="default")
+            yield Button("Both",  id="dir-both", variant="default", compact=True)
+            yield Button("→ C→S", id="dir-c2s",  variant="default", compact=True)
+            yield Button("← S→C", id="dir-s2c",  variant="default", compact=True)
             yield Label("", id="pending-label")
 
         # Queue
@@ -120,10 +113,10 @@ class InterceptTab(Widget):
 
         # Action bar
         with Horizontal(classes="action-bar"):
-            yield Button("▶ Forward",         variant="success", id="btn-forward")
-            yield Button("✖ Drop",            variant="error",   id="btn-drop")
-            yield Button("✎ Modify+Forward",  variant="warning", id="btn-modify")
-            yield Button("▶▶ Forward All",                       id="btn-forward-all")
+            yield Button("▶ Forward",        variant="success", id="btn-forward",    compact=True)
+            yield Button("✖ Drop",           variant="error",   id="btn-drop",       compact=True)
+            yield Button("✎ Modify+Forward", variant="warning", id="btn-modify",     compact=True)
+            yield Button("▶▶ Forward All",                      id="btn-forward-all", compact=True)
 
         # Hex editor
         with Vertical(id="hex-editor-pane"):
