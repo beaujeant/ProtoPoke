@@ -50,6 +50,11 @@ class InterceptTab(Widget):
     InterceptTab .top-bar Switch {
         margin-right: 2;
     }
+    InterceptTab .top-bar Button {
+        min-width: 8;
+        margin-right: 1;
+        padding: 0 1;
+    }
     InterceptTab #queue-pane {
         height: 30%;
     }
@@ -71,8 +76,9 @@ class InterceptTab(Widget):
         background: $surface-darken-1;
     }
     InterceptTab .action-bar Button {
+        min-width: 8;
         margin-right: 1;
-        padding: 0 0;
+        padding: 0 1;
     }
     InterceptTab #hex-editor-pane {
         height: 20%;
