@@ -45,6 +45,7 @@ from typing import Optional
 from ..config import ProxyConfig
 from ..rules.engine import RulesEngine, InterceptFilter
 from ..replay.models import RepeaterRequest
+from ..sequencer.models import SequencerSession
 
 # Project format version — bump when the schema changes incompatibly.
 _FORMAT_VERSION = 1
@@ -59,19 +60,21 @@ class ProjectState:
     and wire it into the running ProxyAPI.
 
     Attributes:
-        config:             Proxy configuration.
-        rules_engine:       Active replace rules.
-        intercept_filter:   Active intercept rules.
-        repeater_requests:  All repeater tabs (with history).
-        db_path:            Path to the SQLite sessions database, or ``None``
-                            when in-memory mode.
-        name:               Human-readable project name.
+        config:              Proxy configuration.
+        rules_engine:        Active replace rules.
+        intercept_filter:    Active intercept rules.
+        repeater_requests:   All repeater tabs (with history).
+        sequencer_sessions:  All sequencer sessions (with steps, variables, history).
+        db_path:             Path to the SQLite sessions database, or ``None``
+                             when in-memory mode.
+        name:                Human-readable project name.
     """
 
     config:              ProxyConfig
     rules_engine:        RulesEngine
     intercept_filter:    InterceptFilter
     repeater_requests:   list[RepeaterRequest]
+    sequencer_sessions:  list[SequencerSession]
     db_path:             Optional[Path]
     name:                str = "Untitled"
 
@@ -96,13 +99,14 @@ class ProjectManager:
     """
 
     def __init__(self) -> None:
-        self.config:             ProxyConfig          = ProxyConfig()
-        self.rules_engine:       RulesEngine          = RulesEngine()
-        self.intercept_filter:   InterceptFilter      = InterceptFilter()
-        self.repeater_requests:  list[RepeaterRequest] = []
-        self.name:               str                  = "Untitled"
-        self.path:               Optional[Path]       = None
-        self.is_dirty:           bool                 = False
+        self.config:              ProxyConfig           = ProxyConfig()
+        self.rules_engine:        RulesEngine           = RulesEngine()
+        self.intercept_filter:    InterceptFilter       = InterceptFilter()
+        self.repeater_requests:   list[RepeaterRequest] = []
+        self.sequencer_sessions:  list[SequencerSession] = []
+        self.name:                str                   = "Untitled"
+        self.path:                Optional[Path]        = None
+        self.is_dirty:            bool                  = False
 
         # Timestamps
         self._created_at:  float = time.time()
@@ -119,15 +123,16 @@ class ProjectManager:
         Clears all state.  Does *not* stop a running proxy — the caller
         must do that before calling ``new()``.
         """
-        self.config            = ProxyConfig()
-        self.rules_engine      = RulesEngine()
-        self.intercept_filter  = InterceptFilter()
-        self.repeater_requests = []
-        self.name              = name
-        self.path              = None
-        self.is_dirty          = False
-        self._created_at       = time.time()
-        self._saved_at         = 0.0
+        self.config             = ProxyConfig()
+        self.rules_engine       = RulesEngine()
+        self.intercept_filter   = InterceptFilter()
+        self.repeater_requests  = []
+        self.sequencer_sessions = []
+        self.name               = name
+        self.path               = None
+        self.is_dirty           = False
+        self._created_at        = time.time()
+        self._saved_at          = 0.0
 
     def open(self, path: str | Path) -> ProjectState:
         """
@@ -185,6 +190,16 @@ class ProjectManager:
         else:
             self.repeater_requests = []
 
+        # Sequencer
+        sequencer_path = project_dir / "sequencer.json"
+        if sequencer_path.exists():
+            sequencer_data = json.loads(sequencer_path.read_text(encoding="utf-8"))
+            self.sequencer_sessions = [
+                SequencerSession.from_dict(s) for s in sequencer_data.get("sessions", [])
+            ]
+        else:
+            self.sequencer_sessions = []
+
         self.name      = meta.get("name", project_dir.stem)
         self.path      = project_dir
         self.is_dirty  = False
@@ -200,6 +215,7 @@ class ProjectManager:
             rules_engine=self.rules_engine,
             intercept_filter=self.intercept_filter,
             repeater_requests=self.repeater_requests,
+            sequencer_sessions=self.sequencer_sessions,
             db_path=db_path,
             name=self.name,
         )
@@ -274,6 +290,14 @@ class ProjectManager:
         }
         (project_dir / "repeater.json").write_text(
             json.dumps(repeater_data, indent=2), encoding="utf-8"
+        )
+
+        # sequencer.json
+        sequencer_data = {
+            "sessions": [s.to_dict() for s in self.sequencer_sessions],
+        }
+        (project_dir / "sequencer.json").write_text(
+            json.dumps(sequencer_data, indent=2), encoding="utf-8"
         )
 
         self._saved_at = now

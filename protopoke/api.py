@@ -76,6 +76,8 @@ from .protocol.base import ProtocolDecoder, ProtocolEncoder, PassthroughDecoder
 from .fuzzing.models import FuzzCampaign, FuzzResult
 from .fuzzing.engine import FuzzerEngine
 from .fuzzing.mutators.base import FrameMutator
+from .sequencer.models import HistoryEntry, SequencerSession
+from .sequencer.engine import SequencerEngine, load_script
 
 logger = logging.getLogger(__name__)
 
@@ -686,6 +688,120 @@ class ProxyAPI:
             connect_timeout=connect_timeout,
             receive_timeout=receive_timeout,
         )
+
+    # ------------------------------------------------------------------
+    # Sequencer
+    # ------------------------------------------------------------------
+
+    async def run_sequence(
+        self,
+        seq:               SequencerSession,
+        on_entry:          Optional[Callable[[HistoryEntry], None]] = None,
+    ) -> None:
+        """
+        Execute a :class:`~protopoke.sequencer.models.SequencerSession`.
+
+        Resolves ``##VAR##`` placeholders in each step, calls optional script
+        hooks, sends packets, and records the flat history log.
+
+        Connection mode is determined by ``seq.source_session_id``:
+
+        - **Set**: inject each step's bytes into the named existing proxy
+          session and capture ``SERVER_TO_CLIENT`` frames within the
+          configured ``response_window``.
+        - **Not set**: open (or reuse) a persistent TCP connection to
+          ``seq.host:seq.port`` (with optional TLS) and use the repeater
+          session mechanism.
+
+        The configured ``sequencer_script`` (from :attr:`config`) is loaded
+        once and its ``on_response`` / ``on_send`` hooks are called around
+        each step.
+
+        Args:
+            seq:      The sequence to run.  Updated in-place (history, variables).
+            on_entry: Optional callback invoked immediately after each
+                      :class:`~protopoke.sequencer.models.HistoryEntry` is
+                      created, allowing live UI updates.
+        """
+        import asyncio as _asyncio
+        import time as _time
+
+        # Load script once (if configured)
+        script = None
+        if self.config.sequencer_script:
+            try:
+                script = load_script(self.config.sequencer_script)
+            except Exception as exc:
+                logger.error(
+                    "Failed to load sequencer script %s: %s",
+                    self.config.sequencer_script, exc,
+                )
+
+        engine = SequencerEngine()
+
+        # ------------------------------------------------------------------
+        # Build the send_fn based on connection mode
+        # ------------------------------------------------------------------
+
+        if seq.source_session_id:
+            # Session-linked: inject into an existing proxy session
+            _src_id = seq.source_session_id
+
+            async def send_fn(data: bytes) -> list[bytes]:
+                send_time = _time.time()
+                ok = await self.inject_to_server(_src_id, data)
+                if not ok:
+                    logger.warning(
+                        "Sequencer: inject_to_server on %s failed", _src_id[:8]
+                    )
+                    return []
+                await _asyncio.sleep(seq.response_window)
+                session = self.get_session(_src_id)
+                if not session:
+                    return []
+                return [
+                    f.raw_bytes
+                    for f in session.frames
+                    if f.direction is Direction.SERVER_TO_CLIENT
+                    and f.timestamp >= send_time
+                ]
+
+        else:
+            # New / persistent connection via the repeater session pool
+            _conn_id: list[Optional[str]] = [None]  # mutable cell
+
+            async def send_fn(data: bytes) -> list[bytes]:  # type: ignore[misc]
+                # Verify the persistent connection is still alive
+                if _conn_id[0]:
+                    session = self.get_session(_conn_id[0])
+                    if not (session and session.is_active()):
+                        _conn_id[0] = None
+
+                # Open a new connection if needed
+                if _conn_id[0] is None:
+                    try:
+                        _conn_id[0] = await self.open_repeater_session(
+                            seq.host, seq.port, seq.tls
+                        )
+                    except ConnectionError as exc:
+                        logger.error("Sequencer: cannot connect: %s", exc)
+                        return []
+
+                record = await self.send_on_repeater_session(
+                    session_id=_conn_id[0],
+                    data=data,
+                    receive_timeout=seq.response_window,
+                )
+
+                # If server closed the connection, clear the cell
+                if _conn_id[0]:
+                    s = self.get_session(_conn_id[0])
+                    if s and not s.is_active():
+                        _conn_id[0] = None
+
+                return record.response_packets
+
+        await engine.run(seq, send_fn=send_fn, script=script, on_entry=on_entry)
 
     # ------------------------------------------------------------------
     # Replace rules management

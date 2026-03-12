@@ -23,6 +23,7 @@ from .tabs.fuzzer import FuzzerTab
 from .tabs.intercept import InterceptTab
 from .tabs.logs import LogsTab
 from .tabs.repeater import RepeaterTab
+from .tabs.sequencer import SequencerTab
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,7 @@ class ProtoPoke(App):
         Binding("f3",           "switch_tab('intercept')", "Intercept", show=True),
         Binding("f4",           "switch_tab('repeater')",  "Repeater",  show=True),
         Binding("f5",           "switch_tab('fuzzer')",    "Fuzzer",    show=True),
+        Binding("f6",           "switch_tab('sequencer')", "Sequencer", show=True),
         Binding("ctrl+n",       "new_project",             "New",       show=False),
         Binding("ctrl+o",       "open_project",            "Open",      show=False),
         Binding("ctrl+s",       "save_project",            "Save",      show=False),
@@ -140,6 +142,8 @@ class ProtoPoke(App):
                 yield RepeaterTab(id="repeater-tab")
             with TabPane("Fuzzer [F5]", id="fuzzer"):
                 yield FuzzerTab(id="fuzzer-tab")
+            with TabPane("Sequencer [F6]", id="sequencer"):
+                yield SequencerTab(id="sequencer-tab")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -271,6 +275,7 @@ class ProtoPoke(App):
         self._rebuild_api()
         self.query_one("#config-tab", ConfigTab).load_config(self._project.config)
         self.query_one("#repeater-tab", RepeaterTab).load_requests([])
+        self.query_one("#sequencer-tab", SequencerTab).load_sequences([])
         self._update_title()
         self.notify(f"New project: {name}")
 
@@ -285,6 +290,7 @@ class ProtoPoke(App):
             self._rebuild_api_from_state(state)
             self.query_one("#config-tab", ConfigTab).load_config(state.config)
             self.query_one("#repeater-tab", RepeaterTab).load_requests(state.repeater_requests)
+            self.query_one("#sequencer-tab", SequencerTab).load_sequences(state.sequencer_sessions)
             self._update_title()
             self.notify(f"Opened project: {state.name}")
         except Exception as exc:
@@ -321,6 +327,14 @@ class ProtoPoke(App):
         """Copy the current repeater requests from the UI into the project."""
         repeater_tab = self.query_one("#repeater-tab", RepeaterTab)
         self._project.repeater_requests = list(repeater_tab._requests)
+        sequencer_tab = self.query_one("#sequencer-tab", SequencerTab)
+        sequencer_tab._save_step_editor()
+        self._project.sequencer_sessions = list(sequencer_tab._sequences)
+
+    def mark_dirty(self) -> None:
+        """Mark the project as having unsaved changes."""
+        self._project.mark_dirty()
+        self._update_title()
 
     # ------------------------------------------------------------------
     # Helpers for tabs to call
@@ -351,6 +365,26 @@ class ProtoPoke(App):
         self.query_one("#repeater-tab", RepeaterTab).add_request(req)
         self._project.repeater_requests.append(req)
         self.action_switch_tab("repeater")
+
+    def send_frame_to_sequencer(self, session_id: str, frame_id: str) -> None:
+        """Called by LogsTab — add a captured frame as a new step in the Sequencer."""
+        session = self.api.get_session(session_id)
+        if not session:
+            return
+        frame = next((f for f in session.frames if f.id == frame_id), None)
+        if not frame:
+            return
+        self.query_one("#sequencer-tab", SequencerTab).add_step_from_bytes(
+            raw_bytes=frame.raw_bytes,
+            label=f"From {session_id[:8]} seq={frame.sequence_number}",
+            host=session.info.server_host,
+            port=session.info.server_port,
+            tls=self.api.config.tls_upstream,
+            source_session_id=session_id,
+        )
+        self._project.mark_dirty()
+        self.action_switch_tab("sequencer")
+        self.notify(f"Frame added to Sequencer: {frame_id[:8]}")
 
     def send_frame_to_repeater(self, session_id: str, frame_id: str) -> None:
         """Called by LogsTab — create a repeater request from a captured frame."""
