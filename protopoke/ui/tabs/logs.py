@@ -87,7 +87,8 @@ class LogsTab(Widget):
         with Vertical(id="frames-pane"):
             with Horizontal(classes="toolbar"):
                 yield Static("  Frames")
-                yield Button("→ Repeater", id="btn-to-repeater", variant="default")
+                yield Button("→ Repeater",  id="btn-to-repeater",  variant="default")
+                yield Button("→ Sequencer", id="btn-to-sequencer", variant="default")
             yield DataTable(id="frames-table", cursor_type="row")
 
         # Detail pane with hex↔parsed toggle
@@ -210,6 +211,15 @@ class LogsTab(Widget):
             event.stop()
             if self._current_frame_id and self._current_session_id:
                 self.app.send_frame_to_repeater(
+                    self._current_session_id, self._current_frame_id
+                )
+            else:
+                self.notify("Select a frame first.", severity="warning")
+
+        elif event.button.id == "btn-to-sequencer":
+            event.stop()
+            if self._current_frame_id and self._current_session_id:
+                self.app.send_frame_to_sequencer(
                     self._current_session_id, self._current_frame_id
                 )
             else:
