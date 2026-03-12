@@ -64,7 +64,6 @@ class ConfigTab(Widget):
         background: $primary-darken-2;
         color: $text;
         padding: 0 1;
-        margin-top: 1;
         text-style: bold;
     }
     ConfigTab .field-row {
@@ -82,11 +81,12 @@ class ConfigTab(Widget):
     ConfigTab .action-row {
         height: 3;
         margin-top: 1;
+        margin-bottom: 1;
+        padding-right: 2;
         align: right middle;
     }
     ConfigTab Button {
-        margin-left: 1;
-        padding: 0 0;
+        margin-right: 1;
     }
     ConfigTab .status-bar {
         height: 3;
@@ -215,7 +215,13 @@ class ConfigTab(Widget):
 
         # ---- Action bar ----
         with Horizontal(classes="action-row"):
-            yield Button("Apply", variant="primary", id="btn-apply")
+            yield Button(
+                "Apply",
+                variant="primary",
+                id="btn-apply",
+                classes="btn-small",
+                #compact=True,
+            )
             yield Button("▶ Start Proxy", variant="success", id="btn-start")
             yield Button("■ Stop Proxy", variant="error", id="btn-stop")
 

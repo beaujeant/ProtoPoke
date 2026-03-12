@@ -61,8 +61,11 @@ class LogsTab(Widget):
     }
     LogsTab .toolbar Static {
         width: 1fr;
+        height: 100%;
         color: $text;
         text-style: bold;
+        content-align-horizontal: left;
+        content-align-vertical: middle;
     }
     LogsTab ParsedView {
         height: 1fr;

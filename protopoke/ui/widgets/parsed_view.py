@@ -36,8 +36,11 @@ class ParsedView(Vertical):
     }
     ParsedView .view-toolbar Static {
         width: 1fr;
+        height: 100%;
         color: $text;
         text-style: bold;
+        content-align-horizontal: left;
+        content-align-vertical: middle;
     }
     ParsedView .view-toolbar Button {
         min-width: 10;
