@@ -48,8 +48,9 @@ class RepeaterTab(Widget):
         padding: 0 1;
     }
     RepeaterTab .tab-strip Button {
+        min-width: 8;
         margin-right: 1;
-        padding: 0 0;
+        padding: 0 1;
     }
     RepeaterTab .target-bar {
         height: 3;
@@ -97,8 +98,9 @@ class RepeaterTab(Widget):
         background: $surface-darken-1;
     }
     RepeaterTab .action-bar Button {
+        min-width: 8;
         margin-right: 1;
-        padding: 0 0;
+        padding: 0 1;
     }
     RepeaterTab .action-bar Label {
         margin-right: 1;

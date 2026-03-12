@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Static
+from textual.widgets import Static, Tab, Tabs
 
 from ...models import Frame, ParsedMessage
 from ...protocol.display.hexdump import highlights_from_message, render_hexdump
@@ -20,7 +20,7 @@ class ParsedView(Vertical):
     Public API::
 
         pv.show_frame(frame)              # hex only (no decoder available)
-        pv.show_frame(frame, message)     # hex + enables Parsed button
+        pv.show_frame(frame, message)     # hex + enables Parsed tab
         pv.clear()
     """
 
@@ -42,10 +42,11 @@ class ParsedView(Vertical):
         content-align-horizontal: left;
         content-align-vertical: middle;
     }
-    ParsedView .view-toolbar Button {
-        min-width: 10;
-        margin-left: 1;
-        padding: 0 0;
+    ParsedView .view-toolbar Tabs {
+        height: 3;
+        width: auto;
+        background: $primary-darken-2;
+        border: none;
     }
     ParsedView #detail-content {
         height: 1fr;
@@ -64,9 +65,14 @@ class ParsedView(Vertical):
     def compose(self) -> ComposeResult:
         with Horizontal(classes="view-toolbar"):
             yield Static(self._title, id="view-title")
-            yield Button("Hex",    id="btn-hex",    variant="primary")
-            yield Button("Parsed", id="btn-parsed", variant="default")
+            yield Tabs(
+                Tab("Hex", id="tab-hex"),
+                Tab("Parsed", id="tab-parsed"),
+            )
         yield Static("", id="detail-content", markup=False)
+
+    def on_mount(self) -> None:
+        self.query_one("#tab-parsed", Tab).disabled = True
 
     # ------------------------------------------------------------------
     # Public API
@@ -77,13 +83,13 @@ class ParsedView(Vertical):
         frame: Frame,
         message: ParsedMessage | None = None,
     ) -> None:
-        """Display *frame*.  If *message* is provided, the Parsed view is available."""
+        """Display *frame*.  If *message* is provided, the Parsed tab is available."""
         self._frame = frame
         self._message = message
-        btn_parsed = self.query_one("#btn-parsed", Button)
-        btn_parsed.disabled = message is None
+        self.query_one("#tab-parsed", Tab).disabled = message is None
         if message is None and self._mode == "parsed":
             self._mode = "hex"
+            self.query_one(Tabs).active = "tab-hex"
         self._refresh_content()
 
     def clear(self) -> None:
@@ -91,22 +97,21 @@ class ParsedView(Vertical):
         self._frame = None
         self._message = None
         self.query_one("#detail-content", Static).update("")
-        self.query_one("#btn-parsed", Button).disabled = True
+        self.query_one("#tab-parsed", Tab).disabled = True
 
     # ------------------------------------------------------------------
     # Mode toggle
     # ------------------------------------------------------------------
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-hex":
+    def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
+        if event.tab is None:
+            return
+        tab_id = event.tab.id
+        if tab_id == "tab-hex":
             self._mode = "hex"
-            self.query_one("#btn-hex",    Button).variant = "primary"
-            self.query_one("#btn-parsed", Button).variant = "default"
             self._refresh_content()
-        elif event.button.id == "btn-parsed":
+        elif tab_id == "tab-parsed":
             self._mode = "parsed"
-            self.query_one("#btn-hex",    Button).variant = "default"
-            self.query_one("#btn-parsed", Button).variant = "primary"
             self._refresh_content()
 
     def _refresh_content(self) -> None:
