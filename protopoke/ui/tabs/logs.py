@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
+from textual.events import Key
 from textual.widget import Widget
 from textual.widgets import DataTable, Static, Button
 from textual.containers import Horizontal, Vertical
@@ -24,6 +25,14 @@ class LogsTab(Widget):
       ├─────────────────────────────────────────┤
       │ ParsedView (hex ↔ field tree)     ~35%  │
       └─────────────────────────────────────────┘
+
+    Session / frame navigation:
+      • Single click or arrow keys highlight a row → auto-selects it.
+      • First session created is selected automatically.
+      • First frame captured for the current session is selected automatically.
+      • Shift + ↑/↓ in the Frames table extends the selection (range).
+        The direction of the first selected frame determines which direction is
+        sent when using "→ Sequencer".
     """
 
     DEFAULT_CSS = """
@@ -77,6 +86,25 @@ class LogsTab(Widget):
         self._current_session_id: str | None = None
         self._current_frame_id: str | None = None
 
+        # Ordered list of frame IDs matching the current frames-table rows.
+        # Kept in sync whenever frames are loaded or appended.
+        self._frame_rows: list[str] = []
+
+        # Index of the anchor row (first clicked / selected frame) for
+        # shift-range selection.  -1 means no anchor is set.
+        self._anchor_frame_idx: int = -1
+
+        # IDs of all currently selected frames (ordered from top to bottom).
+        self._selected_frame_ids: list[str] = []
+
+        # True during the processing of a RowHighlighted event that was
+        # triggered by a shift+key press — causes range extension instead of
+        # single selection.  Reset to False after each RowHighlighted.
+        self._extending_selection: bool = False
+
+        # Label widget reference for the frames toolbar (shows selection count).
+        self._frames_label: Static | None = None
+
     def compose(self) -> ComposeResult:
         # Sessions pane
         with Vertical(id="sessions-pane"):
@@ -86,7 +114,9 @@ class LogsTab(Widget):
         # Frames pane
         with Vertical(id="frames-pane"):
             with Horizontal(classes="toolbar"):
-                yield Static("  Frames")
+                lbl = Static("  Frames")
+                self._frames_label = lbl
+                yield lbl
                 yield Button("→ Repeater",  id="btn-to-repeater",  variant="default")
                 yield Button("→ Sequencer", id="btn-to-sequencer", variant="default")
             yield DataTable(id="frames-table", cursor_type="row")
@@ -118,11 +148,12 @@ class LogsTab(Widget):
     # ------------------------------------------------------------------
 
     def add_session(self, session: Session) -> None:
-        """Append a newly opened session row."""
+        """Append a newly opened session row. Auto-selects the first session."""
         import time as _time
         info    = session.info
         started = _time.strftime("%H:%M:%S", _time.localtime(info.created_at))
         dt = self.query_one("#sessions-table", DataTable)
+        is_first = dt.row_count == 0
         dt.add_row(
             info.id[:8],
             f"{info.client_host}:{info.client_port}",
@@ -132,6 +163,10 @@ class LogsTab(Widget):
             started,
             key=info.id,       # full UUID as row key
         )
+        # Auto-select the first session that arrives
+        if is_first:
+            dt.move_cursor(row=0)
+            self.show_frames(session)
 
     def update_session(self, session: Session) -> None:
         """Refresh a session row (state, frame count)."""
@@ -147,17 +182,32 @@ class LogsTab(Widget):
         """Populate the frames pane with all frames from *session*."""
         dt = self.query_one("#frames-table", DataTable)
         dt.clear()
-        for frame in session.frames:
-            self._add_frame_row(dt, frame)
+        self._frame_rows = []
+        self._anchor_frame_idx = -1
+        self._selected_frame_ids = []
         self._current_session_id = session.id
         self._current_frame_id   = None
         self.query_one("#parsed-view", ParsedView).clear()
+        self._update_frames_label()
+
+        for frame in session.frames:
+            self._add_frame_row(dt, frame)
 
     def add_frame_to_current(self, frame: Frame) -> None:
         """Append a new frame if it belongs to the currently displayed session."""
         if self._current_session_id != frame.session_id:
             return
-        self._add_frame_row(self.query_one("#frames-table", DataTable), frame)
+        dt = self.query_one("#frames-table", DataTable)
+        is_first = dt.row_count == 0
+        self._add_frame_row(dt, frame)
+        # Auto-select and show the first frame that arrives
+        if is_first:
+            self._anchor_frame_idx = 0
+            self._selected_frame_ids = [frame.id]
+            self._current_frame_id = frame.id
+            dt.move_cursor(row=0)
+            self._show_frame_in_detail(frame.id)
+            self._update_frames_label()
 
     def _add_frame_row(self, dt: DataTable, frame: Frame) -> None:
         direction = "→" if frame.direction is Direction.CLIENT_TO_SERVER else "←"
@@ -172,39 +222,102 @@ class LogsTab(Widget):
             preview,
             key=frame.id,      # full UUID as row key
         )
+        self._frame_rows.append(frame.id)
+
+    def _show_frame_in_detail(self, frame_id: str) -> None:
+        """Look up *frame_id* in the current session and display it."""
+        if not self._current_session_id:
+            return
+        session = self.app.api.get_session(self._current_session_id)
+        if not session:
+            return
+        for frame in session.frames:
+            if frame.id == frame_id:
+                message = None
+                try:
+                    message = self.app.api.decode_frame(frame)
+                    if not message.fields and not message.message_type:
+                        message = None
+                except Exception:
+                    pass
+                self.query_one("#parsed-view", ParsedView).show_frame(frame, message)
+                return
+
+    def _update_frames_label(self) -> None:
+        """Update the toolbar label to reflect the current selection count."""
+        try:
+            lbl = self.query_one(".toolbar Static", Static)
+            n = len(self._selected_frame_ids)
+            if n > 1:
+                lbl.update(f"  Frames  [{n} selected]")
+            else:
+                lbl.update("  Frames")
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Key events — detect shift for range selection
+    # ------------------------------------------------------------------
+
+    def on_key(self, event: Key) -> None:
+        """
+        Set _extending_selection before the frames DataTable processes the key.
+
+        Because Textual dispatches Key messages before internal widget handling,
+        this flag is visible in the subsequent DataTable.RowHighlighted event
+        (which is posted to the queue after the key handler runs).
+        """
+        focused = self.app.focused
+        if focused and getattr(focused, "id", None) == "frames-table":
+            if event.key in ("shift+up", "shift+down", "shift+home", "shift+end",
+                             "shift+pageup", "shift+pagedown"):
+                self._extending_selection = True
+            else:
+                self._extending_selection = False
 
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
 
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """
+        Single click or arrow key navigation selects a row immediately.
+
+        For the frames table, shift+arrow extends the selection range from the
+        anchor row to the newly highlighted row.
+        """
+        if event.row_key is None:
+            return
         row_id = str(event.row_key.value)
 
         if event.data_table.id == "sessions-table":
-            # row_key is the full session UUID
+            # A session was highlighted — load its frames
             session = self.app.api.get_session(row_id)
             if session:
                 self.show_frames(session)
 
         elif event.data_table.id == "frames-table":
-            # row_key is the full frame UUID
-            self._current_frame_id = row_id
-            if self._current_session_id:
-                session = self.app.api.get_session(self._current_session_id)
-                if session:
-                    for frame in session.frames:
-                        if frame.id == row_id:
-                            # Try to get a parsed message if a decoder is loaded
-                            message = None
-                            try:
-                                message = self.app.api.decode_frame(frame)
-                                # PassthroughDecoder returns a message with no fields
-                                if not message.fields and not message.message_type:
-                                    message = None
-                            except Exception:
-                                pass
-                            self.query_one("#parsed-view", ParsedView).show_frame(frame, message)
-                            break
+            current_idx = next(
+                (i for i, fid in enumerate(self._frame_rows) if fid == row_id), -1
+            )
+            if current_idx < 0:
+                self._extending_selection = False
+                return
+
+            if self._extending_selection and self._anchor_frame_idx >= 0:
+                # Extend / shrink the selection range from anchor to current
+                lo = min(self._anchor_frame_idx, current_idx)
+                hi = max(self._anchor_frame_idx, current_idx)
+                self._selected_frame_ids = self._frame_rows[lo : hi + 1]
+            else:
+                # Single selection — reset anchor
+                self._anchor_frame_idx = current_idx
+                self._selected_frame_ids = [row_id]
+                self._current_frame_id = row_id
+                self._show_frame_in_detail(row_id)
+
+            self._extending_selection = False
+            self._update_frames_label()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-to-repeater":
@@ -218,9 +331,9 @@ class LogsTab(Widget):
 
         elif event.button.id == "btn-to-sequencer":
             event.stop()
-            if self._current_frame_id and self._current_session_id:
-                self.app.send_frame_to_sequencer(
-                    self._current_session_id, self._current_frame_id
+            if self._selected_frame_ids and self._current_session_id:
+                self.app.send_frames_to_sequencer(
+                    self._current_session_id, list(self._selected_frame_ids)
                 )
             else:
                 self.notify("Select a frame first.", severity="warning")

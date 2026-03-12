@@ -102,6 +102,12 @@ class ProxyEngine:
         # proxied connection without opening a new TCP connection.
         self._session_server_writers: dict[str, asyncio.StreamWriter] = {}
 
+        # session_id → StreamWriter to the client.
+        # Populated when a session becomes active; removed when it closes.
+        # Used by inject_to_client() to push data toward the client (simulating
+        # server → client traffic from outside the normal relay path).
+        self._session_client_writers: dict[str, asyncio.StreamWriter] = {}
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -255,6 +261,7 @@ class ProxyEngine:
         # Both sides connected
         self.session_registry.mark_active(session.id)
         self._session_server_writers[session.id] = server_writer
+        self._session_client_writers[session.id] = client_writer
         await self.event_bus.publish(SessionOpenedEvent(session=session.info))
 
         # Create one framer per direction
@@ -315,6 +322,7 @@ class ProxyEngine:
             logger.error("Session %s unhandled error: %s", session.id, exc, exc_info=True)
         finally:
             self._session_server_writers.pop(session.id, None)
+            self._session_client_writers.pop(session.id, None)
             self.session_registry.mark_closed(session.id)
             await self.event_bus.publish(SessionClosedEvent(session=session.info))
             logger.info("Session %s done", session.id)
@@ -322,6 +330,29 @@ class ProxyEngine:
     # ------------------------------------------------------------------
     # Repeater injection
     # ------------------------------------------------------------------
+
+    async def inject_to_client(self, session_id: str, data: bytes) -> bool:
+        """
+        Write *data* directly into an active session's client TCP connection.
+
+        The bytes are written to the client writer that the relay already holds
+        open, so they arrive on the *same* TCP connection as the real server's
+        traffic — the client sees them as if the server sent them.
+
+        Returns:
+            ``True``  if the session was found and the write succeeded.
+            ``False`` if the session is not active (no writer registered).
+        """
+        writer = self._session_client_writers.get(session_id)
+        if writer is None:
+            return False
+        writer.write(data)
+        await writer.drain()
+        logger.debug(
+            "inject_to_client: injected %d bytes into session %s",
+            len(data), session_id[:8],
+        )
+        return True
 
     async def inject_to_server(self, session_id: str, data: bytes) -> bool:
         """

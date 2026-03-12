@@ -633,6 +633,21 @@ class ProxyAPI:
 
         return record
 
+    async def inject_to_client(self, session_id: str, data: bytes) -> bool:
+        """
+        Write *data* directly into the client connection of an active session.
+
+        The bytes arrive on the *same* TCP connection that the real server is
+        using, so the client sees them as if they came from the server.  Useful
+        for injecting server-to-client traffic during a sequencer run.
+
+        Returns:
+            ``True``  if the session was active and the write succeeded.
+            ``False`` if the session has no active client writer (closed or
+                      not found).
+        """
+        return await self.engine.inject_to_client(session_id, data)
+
     async def inject_to_server(self, session_id: str, data: bytes) -> bool:
         """
         Write *data* directly into the upstream connection of an active session.
@@ -744,33 +759,64 @@ class ProxyAPI:
         # ------------------------------------------------------------------
 
         if seq.source_session_id:
-            # Session-linked: inject into an existing proxy session
+            # Session-linked: inject into an existing proxy session.
+            # Direction routes the bytes to the appropriate side:
+            #   client_to_server → inject_to_server (normal client traffic)
+            #   server_to_client → inject_to_client (push data toward the client)
             _src_id = seq.source_session_id
 
-            async def send_fn(data: bytes) -> list[bytes]:
+            async def send_fn(data: bytes, direction: str = "client_to_server") -> list[bytes]:
                 send_time = _time.time()
-                ok = await self.inject_to_server(_src_id, data)
-                if not ok:
-                    logger.warning(
-                        "Sequencer: inject_to_server on %s failed", _src_id[:8]
-                    )
-                    return []
-                await _asyncio.sleep(seq.response_window)
-                session = self.get_session(_src_id)
-                if not session:
-                    return []
-                return [
-                    f.raw_bytes
-                    for f in session.frames
-                    if f.direction is Direction.SERVER_TO_CLIENT
-                    and f.timestamp >= send_time
-                ]
+                if direction == "server_to_client":
+                    ok = await self.inject_to_client(_src_id, data)
+                    if not ok:
+                        logger.warning(
+                            "Sequencer: inject_to_client on %s failed", _src_id[:8]
+                        )
+                        return []
+                    # Collect client-to-server frames that arrive after injection
+                    await _asyncio.sleep(seq.response_window)
+                    session = self.get_session(_src_id)
+                    if not session:
+                        return []
+                    return [
+                        f.raw_bytes
+                        for f in session.frames
+                        if f.direction is Direction.CLIENT_TO_SERVER
+                        and f.timestamp >= send_time
+                    ]
+                else:
+                    ok = await self.inject_to_server(_src_id, data)
+                    if not ok:
+                        logger.warning(
+                            "Sequencer: inject_to_server on %s failed", _src_id[:8]
+                        )
+                        return []
+                    await _asyncio.sleep(seq.response_window)
+                    session = self.get_session(_src_id)
+                    if not session:
+                        return []
+                    return [
+                        f.raw_bytes
+                        for f in session.frames
+                        if f.direction is Direction.SERVER_TO_CLIENT
+                        and f.timestamp >= send_time
+                    ]
 
         else:
-            # New / persistent connection via the repeater session pool
+            # New / persistent connection via the repeater session pool.
+            # server_to_client direction is not supported without an active proxy
+            # session; log a warning and skip the response wait.
             _conn_id: list[Optional[str]] = [None]  # mutable cell
 
-            async def send_fn(data: bytes) -> list[bytes]:  # type: ignore[misc]
+            async def send_fn(data: bytes, direction: str = "client_to_server") -> list[bytes]:  # type: ignore[misc]
+                if direction == "server_to_client":
+                    logger.warning(
+                        "Sequencer: server_to_client step requires a linked proxy "
+                        "session (set Session ID in the run bar); skipping step."
+                    )
+                    return []
+
                 # Verify the persistent connection is still alive
                 if _conn_id[0]:
                     session = self.get_session(_conn_id[0])

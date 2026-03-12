@@ -19,9 +19,9 @@ Two modes:
 Upstream side (proxy → server)
 --------------------------------
 When tls_upstream=True the proxy connects to the server over TLS.
-Set tls_upstream_verify=False to accept any server certificate (equivalent
-to Burp's "Accept any certificate" option — useful for self-signed or
-expired certs on internal services).
+Upstream certificate verification is always disabled: this tool is for
+reverse engineering and must accept any certificate (self-signed, expired,
+unknown CA, mismatched hostname, etc.).
 """
 
 from __future__ import annotations
@@ -116,24 +116,17 @@ class TLSHandler:
         Return the SSLContext for asyncio.open_connection(), or None if TLS is
         disabled on the upstream side.
 
-        When tls_upstream_verify=False the context accepts any server cert
-        (no hostname check, no chain validation).
+        Certificate verification is always disabled: this tool is for reverse
+        engineering and must accept any upstream certificate (self-signed,
+        expired, unknown CA, mismatched hostname, etc.).
         """
         if not self._config.tls_upstream:
             return None
 
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-
-        if self._config.tls_upstream_verify:
-            ctx.verify_mode  = ssl.CERT_REQUIRED
-            ctx.check_hostname = True
-            ctx.load_default_certs()
-            logger.debug("TLS upstream: certificate verification enabled")
-        else:
-            ctx.check_hostname = False
-            ctx.verify_mode  = ssl.CERT_NONE
-            logger.debug("TLS upstream: certificate verification DISABLED")
-
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        logger.debug("TLS upstream: certificate verification disabled (reverser mode)")
         return ctx
 
     # ------------------------------------------------------------------

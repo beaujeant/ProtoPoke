@@ -24,7 +24,6 @@ Options
     --intercept                 Enable interception on startup
     --tls-listen                Wrap client side with TLS (MITM mode)
     --tls-upstream              Connect to upstream over TLS
-    --no-tls-verify             Do not verify upstream TLS certificate
     --framer NAME               Framer: raw | delimiter | length_prefix
     --protocol PATH             Path to .yaml/.json protocol definition
     --config PATH               Load a ProxyConfig from a JSON file
@@ -79,13 +78,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--intercept", action="store_true",
                    help="Enable interception on startup (frames held for review)")
 
-    # TLS
+    # TLS (upstream cert verification is always disabled in reverser mode)
     p.add_argument("--tls-listen", action="store_true",
                    help="Wrap client connections with TLS (MITM mode)")
     p.add_argument("--tls-upstream", action="store_true",
-                   help="Connect to upstream over TLS")
-    p.add_argument("--no-tls-verify", action="store_true",
-                   help="Do not verify upstream TLS certificate (accept any cert)")
+                   help="Connect to upstream over TLS (cert verification always disabled)")
 
     # Framing / Protocol
     p.add_argument("--framer", default=None, metavar="NAME",
@@ -122,7 +119,6 @@ def _make_config(args: argparse.Namespace) -> ProxyConfig:
     if args.intercept:                 config.intercept_enabled = True
     if args.tls_listen:                config.tls_listen        = True
     if args.tls_upstream:              config.tls_upstream      = True
-    if args.no_tls_verify:             config.tls_upstream_verify = False
     if args.framer        is not None: config.framer_name       = args.framer
     if args.protocol      is not None: config.protocol_definition_path = args.protocol
 

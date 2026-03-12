@@ -204,6 +204,7 @@ class SequencerTab(Widget):
     def on_mount(self) -> None:
         dt = self.query_one("#step-table", DataTable)
         dt.add_column("#",       key="num")
+        dt.add_column("Dir",     key="dir")
         dt.add_column("Label",   key="label")
         dt.add_column("Len",     key="len")
         dt.add_column("Preview", key="preview")
@@ -263,6 +264,11 @@ class SequencerTab(Widget):
     # Step list
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _direction_symbol(direction: str) -> str:
+        """Return a short arrow symbol for a step direction."""
+        return "→" if direction == "client_to_server" else "←"
+
     def _refresh_step_list(self) -> None:
         dt = self.query_one("#step-table", DataTable)
         dt.clear()
@@ -272,6 +278,7 @@ class SequencerTab(Widget):
         for i, step in enumerate(seq.steps):
             dt.add_row(
                 str(i + 1),
+                self._direction_symbol(step.direction),
                 step.label or f"Step {i+1}",
                 str(step.byte_length()),
                 step.preview(),
@@ -299,6 +306,7 @@ class SequencerTab(Widget):
         # Update the row in the table
         try:
             dt = self.query_one("#step-table", DataTable)
+            dt.update_cell(step.id, "dir",     self._direction_symbol(step.direction),            update_width=False)
             dt.update_cell(step.id, "label",   step.label or f"Step {self._selected_step_idx+1}", update_width=False)
             dt.update_cell(step.id, "len",     str(step.byte_length()),                           update_width=False)
             dt.update_cell(step.id, "preview", step.preview(),                                    update_width=False)
@@ -562,12 +570,19 @@ class SequencerTab(Widget):
         port: int = 0,
         tls: bool = False,
         source_session_id: str | None = None,
+        direction: str = "client_to_server",
     ) -> None:
         """
         Add a new step from raw bytes (called when importing from the Logs tab).
 
         If no sequence exists, a new one is created first, inheriting the
         connection parameters from the imported frame's session.
+
+        Args:
+            direction: ``"client_to_server"`` or ``"server_to_client"``.  A
+                       sequence should only contain steps of one direction; this
+                       is enforced at the Logs tab import level (only frames
+                       matching the first selected frame's direction are sent).
         """
         if self._current_idx < 0:
             from ...sequencer.models import SequencerSession
@@ -585,7 +600,7 @@ class SequencerTab(Widget):
         hex_str = " ".join(
             raw_bytes.hex()[i : i + 2] for i in range(0, len(raw_bytes.hex()), 2)
         )
-        step = SequenceStep.create(label=label, raw_hex=hex_str)
+        step = SequenceStep.create(label=label, raw_hex=hex_str, direction=direction)
         seq.steps.append(step)
         self._selected_step_idx = len(seq.steps) - 1
         self._refresh_step_list()

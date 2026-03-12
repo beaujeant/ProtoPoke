@@ -147,9 +147,6 @@ class ConfigTab(Widget):
                 yield Label("TLS upstream:", classes="field-label")
                 yield Switch(value=cfg.tls_upstream, id="tls-upstream")
             with Horizontal(classes="field-row"):
-                yield Label("Verify upstream cert:", classes="field-label")
-                yield Switch(value=cfg.tls_upstream_verify, id="tls-verify")
-            with Horizontal(classes="field-row"):
                 yield Label("CA cert path:", classes="field-label")
                 yield Input(value=cfg.ca_cert_path or "", id="ca-cert",
                             placeholder="~/.protopoke/ca.crt", classes="field-input")
@@ -304,7 +301,6 @@ class ConfigTab(Widget):
         cfg.connect_timeout    = _float("connect-timeout", 10.0)
         cfg.tls_listen         = _sw("tls-listen")
         cfg.tls_upstream       = _sw("tls-upstream")
-        cfg.tls_upstream_verify = _sw("tls-verify")
         cfg.ca_cert_path       = _str("ca-cert") or None
         cfg.ca_key_path        = _str("ca-key") or None
         cfg.tls_cert_path      = _str("tls-cert") or None
@@ -358,7 +354,6 @@ class ConfigTab(Widget):
         _set("connect-timeout", str(cfg.connect_timeout))
         _sw("tls-listen", cfg.tls_listen)
         _sw("tls-upstream", cfg.tls_upstream)
-        _sw("tls-verify", cfg.tls_upstream_verify)
         _set("ca-cert", cfg.ca_cert_path or "")
         _set("ca-key", cfg.ca_key_path or "")
         _set("tls-cert", cfg.tls_cert_path or "")
