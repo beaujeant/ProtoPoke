@@ -1530,7 +1530,6 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         upstream_port:      Optional[int]  = None,
         tls_listen:         Optional[bool] = None,
         tls_upstream:       Optional[bool] = None,
-        tls_upstream_verify: Optional[bool] = None,
         intercept_enabled:  Optional[bool] = None,
         framer_name:        Optional[str]  = None,
         protocol_definition_path: Optional[str] = None,
@@ -1542,6 +1541,9 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         current values. Changes take effect for new connections; existing
         connections are not affected.
 
+        Upstream TLS certificate verification is always disabled — this tool
+        is for reverse engineering and accepts any certificate unconditionally.
+
         Args:
             listen_host:              Bind address for the proxy listener.
             listen_port:              Port for the proxy listener.
@@ -1549,7 +1551,6 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
             upstream_port:            Default upstream port to forward to.
             tls_listen:               Terminate TLS on the listening side.
             tls_upstream:             Use TLS when connecting upstream.
-            tls_upstream_verify:      Verify upstream TLS certificates.
             intercept_enabled:        Master intercept on/off switch.
             framer_name:              Framer: "raw", "delimiter", "length_prefix".
             protocol_definition_path: Path to a protocol .yaml/.json file.
@@ -1563,7 +1564,6 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         if upstream_port      is not None: api.config.upstream_port     = upstream_port
         if tls_listen         is not None: api.config.tls_listen        = tls_listen
         if tls_upstream       is not None: api.config.tls_upstream      = tls_upstream
-        if tls_upstream_verify is not None: api.config.tls_upstream_verify = tls_upstream_verify
         if intercept_enabled  is not None: api.config.intercept_enabled = intercept_enabled
         if framer_name        is not None: api.config.framer_name       = framer_name
         if protocol_definition_path is not None:

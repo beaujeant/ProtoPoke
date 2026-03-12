@@ -36,19 +36,31 @@ class SequenceStep:
     One packet slot in a sequence.
 
     Attributes:
-        id:      Unique ID (UUID4).
-        label:   Human-readable name shown in the step list.
-        raw_hex: Space-separated hex pairs, may contain ##VAR## placeholders.
-                 Example: ``"01 02 ##SESS_ID## 0a 0b"``
+        id:        Unique ID (UUID4).
+        label:     Human-readable name shown in the step list.
+        raw_hex:   Space-separated hex pairs, may contain ##VAR## placeholders.
+                   Example: ``"01 02 ##SESS_ID## 0a 0b"``
+        direction: Traffic direction for this step.
+                   ``"client_to_server"`` — send bytes toward the upstream server
+                   (normal client request).
+                   ``"server_to_client"`` — inject bytes toward the client
+                   (simulate a server push / response).
+                   A single sequence should only contain steps of one direction.
     """
 
-    id:      str
-    label:   str
-    raw_hex: str
+    id:        str
+    label:     str
+    raw_hex:   str
+    direction: str = "client_to_server"   # "client_to_server" | "server_to_client"
 
     @classmethod
-    def create(cls, label: str = "", raw_hex: str = "") -> "SequenceStep":
-        return cls(id=str(uuid.uuid4()), label=label, raw_hex=raw_hex)
+    def create(
+        cls,
+        label:     str = "",
+        raw_hex:   str = "",
+        direction: str = "client_to_server",
+    ) -> "SequenceStep":
+        return cls(id=str(uuid.uuid4()), label=label, raw_hex=raw_hex, direction=direction)
 
     # ------------------------------------------------------------------
     # Derived properties for UI display
@@ -82,7 +94,12 @@ class SequenceStep:
     # ------------------------------------------------------------------
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "label": self.label, "raw_hex": self.raw_hex}
+        return {
+            "id":        self.id,
+            "label":     self.label,
+            "raw_hex":   self.raw_hex,
+            "direction": self.direction,
+        }
 
     @classmethod
     def from_dict(cls, d: dict) -> "SequenceStep":
@@ -90,6 +107,7 @@ class SequenceStep:
             id=d["id"],
             label=d.get("label", ""),
             raw_hex=d.get("raw_hex", ""),
+            direction=d.get("direction", "client_to_server"),
         )
 
 

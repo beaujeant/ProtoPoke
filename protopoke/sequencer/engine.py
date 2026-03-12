@@ -37,8 +37,9 @@ from .variables import resolve_hex
 logger = logging.getLogger(__name__)
 
 # Type alias for the send callable supplied by the caller.
-# Receives the bytes to send, returns the list of received packets (may be empty).
-SendFn = Callable[[bytes], Awaitable[List[bytes]]]
+# Receives the bytes to send and the step direction ("client_to_server" or
+# "server_to_client"), returns the list of received packets (may be empty).
+SendFn = Callable[[bytes, str], Awaitable[List[bytes]]]
 
 
 def load_script(path: str) -> types.ModuleType:
@@ -153,7 +154,7 @@ class SequencerEngine:
             # ------------------------------------------------------------------
             received_packets: list[bytes] = []
             try:
-                received_packets = await send_fn(data)
+                received_packets = await send_fn(data, step.direction)
             except Exception as exc:
                 logger.error(
                     "Sequencer step %d (%r): send_fn raised — %s", idx, step.label, exc

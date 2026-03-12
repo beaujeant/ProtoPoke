@@ -54,13 +54,14 @@ class ProxyConfig:
         log_level: Python logging level name ("DEBUG", "INFO", "WARNING", ...).
 
     TLS:
-        tls_listen:          Wrap client connections with TLS (MITM mode).
-        tls_upstream:        Connect to upstream server over TLS.
-        tls_upstream_verify: Verify upstream cert/hostname (default True).
-        ca_cert_path:        CA cert path. Auto-generated at ~/.protopoke/ca.crt.
-        ca_key_path:         CA key path.  Auto-generated at ~/.protopoke/ca.key.
-        tls_cert_path:       Manual cert override (skips auto-CA).
-        tls_key_path:        Private key for tls_cert_path.
+        tls_listen:    Wrap client connections with TLS (MITM mode).
+        tls_upstream:  Connect to upstream server over TLS. Upstream cert
+                       verification is always disabled — this tool is for
+                       reverse engineering and accepts any certificate.
+        ca_cert_path:  CA cert path. Auto-generated at ~/.protopoke/ca.crt.
+        ca_key_path:   CA key path.  Auto-generated at ~/.protopoke/ca.key.
+        tls_cert_path: Manual cert override (skips auto-CA).
+        tls_key_path:  Private key for tls_cert_path.
     """
     # Networking
     listen_host:      str   = "127.0.0.1"
@@ -93,13 +94,9 @@ class ProxyConfig:
     tls_listen: bool = False
 
     # Upstream side — connect to the upstream server over TLS.
+    # Certificate verification is always disabled: this tool is for reverse
+    # engineering and must accept self-signed / expired / unknown-CA certs.
     tls_upstream: bool = False
-
-    # When True (default) the proxy verifies the upstream server's certificate
-    # chain and hostname.  Set False to accept any certificate — useful for
-    # self-signed or expired certs on internal services (equivalent to Burp's
-    # "Accept any certificate" toggle).
-    tls_upstream_verify: bool = True
 
     # --- CA for auto-generated per-session leaf certificates (Burp-style) ---
     # If both are None the CA is stored at ~/.protopoke/ca.crt / ca.key and

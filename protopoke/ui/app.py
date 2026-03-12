@@ -13,6 +13,7 @@ from textual.widgets import Footer, Header, Switch, TabbedContent, TabPane
 
 from ..api import ProxyAPI
 from ..config import ProxyConfig
+from ..models import Direction
 from ..events.bus import FrameCapturedEvent, SessionClosedEvent, SessionOpenedEvent
 from ..project.manager import ProjectManager, ProjectState
 from ..replay.models import RepeaterRequest
@@ -366,25 +367,63 @@ class ProtoPoke(App):
         self._project.repeater_requests.append(req)
         self.action_switch_tab("repeater")
 
-    def send_frame_to_sequencer(self, session_id: str, frame_id: str) -> None:
-        """Called by LogsTab — add a captured frame as a new step in the Sequencer."""
+    def send_frames_to_sequencer(
+        self, session_id: str, frame_ids: list[str]
+    ) -> None:
+        """
+        Called by LogsTab — add one or more captured frames as new steps in
+        the Sequencer.
+
+        Only frames whose direction matches the *first* frame in *frame_ids*
+        are included, so a sequence always goes in a single direction.
+        """
+        if not frame_ids:
+            return
         session = self.api.get_session(session_id)
         if not session:
             return
-        frame = next((f for f in session.frames if f.id == frame_id), None)
-        if not frame:
+
+        # Resolve frames and determine the direction from the first one
+        frames_by_id = {f.id: f for f in session.frames}
+        first_frame = frames_by_id.get(frame_ids[0])
+        if first_frame is None:
             return
-        self.query_one("#sequencer-tab", SequencerTab).add_step_from_bytes(
-            raw_bytes=frame.raw_bytes,
-            label=f"From {session_id[:8]} seq={frame.sequence_number}",
-            host=session.info.server_host,
-            port=session.info.server_port,
-            tls=self.api.config.tls_upstream,
-            source_session_id=session_id,
+        anchor_direction = first_frame.direction
+
+        # Filter to frames matching that direction, in the order given
+        selected_frames = [
+            frames_by_id[fid]
+            for fid in frame_ids
+            if fid in frames_by_id and frames_by_id[fid].direction is anchor_direction
+        ]
+        if not selected_frames:
+            return
+
+        direction_str = (
+            "client_to_server"
+            if anchor_direction is Direction.CLIENT_TO_SERVER
+            else "server_to_client"
         )
+
+        seq_tab = self.query_one("#sequencer-tab", SequencerTab)
+        for frame in selected_frames:
+            seq_tab.add_step_from_bytes(
+                raw_bytes=frame.raw_bytes,
+                label=f"seq={frame.sequence_number}",
+                host=session.info.server_host,
+                port=session.info.server_port,
+                tls=self.api.config.tls_upstream,
+                source_session_id=session_id,
+                direction=direction_str,
+            )
+
         self._project.mark_dirty()
         self.action_switch_tab("sequencer")
-        self.notify(f"Frame added to Sequencer: {frame_id[:8]}")
+        skipped = len(frame_ids) - len(selected_frames)
+        msg = f"{len(selected_frames)} frame(s) added to Sequencer"
+        if skipped:
+            msg += f" ({skipped} skipped — wrong direction)"
+        self.notify(msg)
 
     def send_frame_to_repeater(self, session_id: str, frame_id: str) -> None:
         """Called by LogsTab — create a repeater request from a captured frame."""
