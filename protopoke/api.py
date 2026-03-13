@@ -205,6 +205,34 @@ class ProxyAPI:
         """Currently active sessions only."""
         return self.session_registry.active_sessions()
 
+    async def terminate_session(self, session_id: str) -> bool:
+        """
+        Forcefully close an active session.
+
+        Cancels the session's relay task, which closes both the client and
+        server TCP connections and marks the session CLOSED.  If the session
+        is already closed (or not found) this is a no-op and returns ``False``.
+
+        Returns:
+            ``True``  if the session was active and has been cancelled.
+            ``False`` if the session is already closed or does not exist.
+        """
+        return await self.engine.terminate_session(session_id)
+
+    def delete_session(self, session_id: str) -> bool:
+        """
+        Permanently remove a session (and all its frames) from the registry.
+
+        This only removes the in-memory record; it does **not** close the
+        underlying connection.  Terminate the session first if it is still
+        active, then call this to clean up the log.
+
+        Returns:
+            ``True``  if the session existed and was removed.
+            ``False`` if the session was not found.
+        """
+        return self.session_registry.delete(session_id)
+
     def get_frames(
         self,
         session_id: str,

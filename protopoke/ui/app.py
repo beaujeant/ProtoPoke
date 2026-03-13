@@ -379,6 +379,29 @@ class ProtoPoke(App):
         self._project.repeater_requests.append(req)
         self.call_after_refresh(self.action_switch_tab, "repeater")
 
+    def terminate_session(self, session_id: str) -> None:
+        """Terminate an active session (closes client + server connections)."""
+        self.run_worker(
+            self._terminate_session(session_id), exclusive=False, thread=False
+        )
+
+    async def _terminate_session(self, session_id: str) -> None:
+        terminated = await self.api.terminate_session(session_id)
+        if not terminated:
+            self.notify("Session is already closed.", severity="warning")
+
+    def delete_session(self, session_id: str) -> None:
+        """Delete a session from the registry and remove it from the Logs tab."""
+        deleted = self.api.delete_session(session_id)
+        if deleted:
+            self.query_one("#logs-tab", LogsTab).remove_session(session_id)
+            self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(
+                self.api.list_sessions()
+            )
+            self.query_one("#repeater-tab", RepeaterTab).refresh_session_dropdown()
+        else:
+            self.notify("Session not found.", severity="warning")
+
     def send_frames_to_sequencer(
         self, session_id: str, frame_ids: list[str]
     ) -> None:

@@ -331,6 +331,25 @@ class ProxyEngine:
     # Repeater injection
     # ------------------------------------------------------------------
 
+    async def terminate_session(self, session_id: str) -> bool:
+        """
+        Forcefully terminate an active session by cancelling its relay task.
+
+        Cancelling the task triggers the ``_run_session`` finally block, which
+        closes both the client and server TCP connections, marks the session
+        CLOSED, and publishes a SessionClosedEvent.
+
+        Returns:
+            ``True``  if the session task was found and cancelled.
+            ``False`` if the session is already closed (no task registered).
+        """
+        task = self._session_tasks.get(session_id)
+        if task is None:
+            return False
+        task.cancel()
+        logger.info("terminate_session: cancelled task for session %s", session_id[:8])
+        return True
+
     async def inject_to_client(self, session_id: str, data: bytes) -> bool:
         """
         Write *data* directly into an active session's client TCP connection.
