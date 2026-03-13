@@ -44,9 +44,10 @@ class ProxyConfig:
     Framing:
         framer_name:    Which framer to use. Must be a key in
                         protopoke.framing.FRAMER_REGISTRY.
-                        - "raw":          Passthrough; each read() chunk = one frame.
-                        - "delimiter":    Split on a byte sequence.
+                        - "raw":           Passthrough; each read() chunk = one frame.
+                        - "delimiter":     Split on a byte sequence.
                         - "length_prefix": Fixed-size integer length header.
+                        - "line":          Split on \\r\\n or \\n.
         framer_kwargs:  Extra kwargs forwarded to the framer constructor.
                         e.g. {"delimiter": b"\\r\\n"} for the delimiter framer.
 
@@ -121,18 +122,6 @@ class ProxyConfig:
     # a DefinitionBasedDecoder so that frames are automatically parsed.
     # The definition can also be loaded manually via api.set_protocol_file().
     protocol_definition_path: Optional[str] = None
-
-    # ------------------------------------------------------------------
-    # Custom framer
-    # ------------------------------------------------------------------
-
-    # Path to a Python file containing a custom Framer subclass.
-    # When set together with custom_framer_class, the framer is loaded
-    # dynamically from this file at proxy start.
-    custom_framer_path: Optional[str] = None
-
-    # Class name of the custom Framer subclass inside custom_framer_path.
-    custom_framer_class: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Sequencer script
