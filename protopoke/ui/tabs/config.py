@@ -39,8 +39,16 @@ def _framer_summary(
         pl = framer_kwargs.get("prefix_length", 4)
         bo = framer_kwargs.get("byte_order", "big")
         inc = framer_kwargs.get("include_prefix", True)
-        suffix = " (prefix included)" if inc else " (prefix stripped)"
-        return f"{pl}-byte {bo}-endian length prefix{suffix}"
+        offset = framer_kwargs.get("prefix_offset", 0)
+        add = framer_kwargs.get("length_add", 0)
+        parts = [f"{pl}-byte {bo}-endian length prefix"]
+        if offset:
+            parts.append(f"offset +{offset}")
+        if add:
+            parts.append(f"length {add:+d}")
+        if not inc:
+            parts.append("prefix stripped")
+        return "  ".join(parts)
     if framer_name == "line":
         return "line — split on \\r\\n or \\n"
     if framer_name == "custom":
