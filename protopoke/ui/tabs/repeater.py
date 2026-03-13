@@ -5,12 +5,14 @@ from __future__ import annotations
 import time as _time
 
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.widget import Widget
 from textual.widgets import DataTable, TextArea, Button, Label, Static, Input, Select, Switch
 from textual.containers import Horizontal, Vertical
 
 from ...models import Direction, Frame
 from ...replay.models import RepeaterRequest, SendRecord
+from ..modals.rename import RenameModal
 
 # Sentinel value used as the Select option for "Custom host:port"
 _CUSTOM = "custom"
@@ -22,24 +24,31 @@ class RepeaterTab(Widget):
 
     Layout:
       ┌─────────────────────────────────────────┐
-      │ Request tabs: [Tab 1] [Tab 2] [+ New]   │  tab strip
+      │ Request tabs: [1] [2] [+ New]           │  tab strip
       ├─────────────────────────────────────────┤
-      │ [Session ▼]  Host: <host>  Port: <port> │  per-request header
-      │ TLS: [switch]                           │
+      │ [Session ▼]  Host: <input>  Port: <in>  │  target bar
+      │ TLS: [sw]  Dir: [→ To Server ▼]         │
       ├──────────────────────┬──────────────────┤
       │ Hex editor (editable)│ Response packets  │  editor pane
       │                      │ ┌──────────────┐ │
-      │                      │ │ packet list  │ │  ← individual read() chunks
-      │                      │ │ (DataTable)  │ │    received within window
+      │                      │ │ packet list  │ │
       │                      │ ├──────────────┤ │
-      │                      │ │ hex viewer   │ │  ← selected packet bytes
+      │                      │ │ hex viewer   │ │
       │                      │ └──────────────┘ │
       ├──────────────────────┴──────────────────┤
       │ [Send]  [Clear]  Window(s): [1.0]        │  action bar
       ├─────────────────────────────────────────┤
       │ History (DataTable of send records)      │  history pane
       └─────────────────────────────────────────┘
+
+    Keyboard:
+      R       — rename the current request tab (when a text editor is not focused)
+      Ctrl+R  — send current Logs frame to Repeater (handled at app level)
     """
+
+    BINDINGS = [
+        Binding("r", "rename_request", "Rename tab", show=False),
+    ]
 
     DEFAULT_CSS = """
     RepeaterTab {
@@ -64,7 +73,7 @@ class RepeaterTab(Widget):
         margin-right: 1;
     }
     RepeaterTab .target-bar #session-select {
-        width: 32;
+        width: 30;
         margin-right: 2;
     }
     RepeaterTab .target-bar #target-host-input {
@@ -76,7 +85,10 @@ class RepeaterTab(Widget):
         margin-right: 1;
     }
     RepeaterTab .target-bar #target-tls-switch {
-        margin-right: 1;
+        margin-right: 2;
+    }
+    RepeaterTab .target-bar #direction-select {
+        width: 18;
     }
     RepeaterTab #editor-pane {
         height: 40%;
@@ -141,6 +153,8 @@ class RepeaterTab(Widget):
         self._current_idx: int = -1
         # Response packets for the currently displayed send record
         self._current_response_packets: list[bytes] = []
+        # Auto-incremented counter for new request labels
+        self._request_counter: int = 0
 
     def compose(self) -> ComposeResult:
         # Tab strip
@@ -148,7 +162,7 @@ class RepeaterTab(Widget):
             yield Label("Requests:", id="tab-label")
             yield Button("[+ New]", id="btn-new-request", variant="success", compact=True)
 
-        # Target bar — session dropdown + host/port/tls (editable in Custom mode)
+        # Target bar — session dropdown + host/port/tls + direction
         with Horizontal(classes="target-bar"):
             yield Select(
                 options=[("Custom (manual host:port)", _CUSTOM)],
@@ -162,6 +176,14 @@ class RepeaterTab(Widget):
             yield Input("", id="target-port-input", placeholder="port")
             yield Label("TLS:")
             yield Switch(False, id="target-tls-switch")
+            yield Select(
+                options=[
+                    ("→ To Server", "to_server"),
+                    ("← To Client", "to_client"),
+                ],
+                value="to_server",
+                id="direction-select",
+            )
 
         # Request / Response editors side by side
         with Horizontal(id="editor-pane"):
@@ -205,10 +227,17 @@ class RepeaterTab(Widget):
     # Request tab management
     # ------------------------------------------------------------------
 
-    def add_request(self, req: RepeaterRequest) -> None:
-        """Add a new repeater request and switch to it."""
+    def add_request(self, req: RepeaterRequest, _preserve_label: bool = False) -> None:
+        """Add a new repeater request and switch to it.
+
+        When *_preserve_label* is False (default), the request label is
+        overwritten with the next auto-incremented number.
+        """
+        if not _preserve_label:
+            self._request_counter += 1
+            req.label = str(self._request_counter)
+
         self._requests.append(req)
-        # Add a button for this tab in the strip
         idx = len(self._requests) - 1
         btn = Button(req.label, id=f"req-tab-{idx}", compact=True)
         self.query_one(".tab-strip", Horizontal).mount(btn, before="#btn-new-request")
@@ -221,10 +250,16 @@ class RepeaterTab(Widget):
         self._current_idx = idx
         req = self._requests[idx]
 
-        # Refresh session dropdown options
+        # Refresh session dropdown options and set correct value
         self._rebuild_session_dropdown(req)
 
-        # Sync the response-window input with this tab's configured value
+        # Direction
+        try:
+            self.query_one("#direction-select", Select).value = req.direction
+        except Exception:
+            pass
+
+        # Sync the response-window input
         self.query_one("#resp-window", Input).value = str(req.response_window)
 
         # Populate editor
@@ -258,7 +293,6 @@ class RepeaterTab(Widget):
         sel = self.query_one("#session-select", Select)
         sel.set_options(options)
 
-        # Set the dropdown value to match the request's source_session_id
         if req.source_session_id and any(v == req.source_session_id for _, v in options):
             sel.value = req.source_session_id
             self._apply_session_mode(req.source_session_id)
@@ -322,9 +356,8 @@ class RepeaterTab(Widget):
         """
         Repopulate the response-packet DataTable with *packets*.
 
-        Each row is one logical frame produced by the configured framer.
-        The first frame is auto-selected so the hex viewer populates immediately.
-        Arrow keys and single clicks navigate and display frames automatically.
+        Arrow keys and single clicks navigate immediately (RowHighlighted).
+        The first frame is auto-selected so the hex viewer populates at once.
         """
         rpt = self.query_one("#resp-packets-table", DataTable)
         rpt.clear()
@@ -368,14 +401,44 @@ class RepeaterTab(Widget):
 
     def load_requests(self, requests: list[RepeaterRequest]) -> None:
         """Reload all requests (e.g. after project open)."""
-        # Remove existing tab buttons
         for btn in self.query(".tab-strip Button"):
             if btn.id and btn.id.startswith("req-tab-"):
                 btn.remove()
         self._requests = []
         self._current_idx = -1
         for req in requests:
-            self.add_request(req)
+            self.add_request(req, _preserve_label=True)
+        # Sync counter so new requests continue from the highest saved number
+        max_num = 0
+        for req in self._requests:
+            try:
+                max_num = max(max_num, int(req.label))
+            except (ValueError, TypeError):
+                pass
+        self._request_counter = max(len(self._requests), max_num)
+
+    # ------------------------------------------------------------------
+    # Rename action (R key)
+    # ------------------------------------------------------------------
+
+    def action_rename_request(self) -> None:
+        """Open the rename modal for the current request tab."""
+        if self._current_idx < 0:
+            return
+        req = self._requests[self._current_idx]
+        self.app.push_screen(RenameModal(req.label), self._on_rename)
+
+    def _on_rename(self, new_name: str | None) -> None:
+        if not new_name:
+            return
+        req = self._requests[self._current_idx]
+        req.label = new_name
+        try:
+            self.query_one(f"#req-tab-{self._current_idx}", Button).label = new_name
+        except Exception:
+            pass
+        if hasattr(self.app, "mark_dirty"):
+            self.app.mark_dirty()
 
     # ------------------------------------------------------------------
     # Button handlers
@@ -420,35 +483,35 @@ class RepeaterTab(Widget):
     # ------------------------------------------------------------------
 
     def on_select_changed(self, event: Select.Changed) -> None:
-        """Session dropdown changed — switch between session mode and custom mode."""
-        if event.select.id != "session-select":
-            return
         if self._current_idx < 0:
             return
         req = self._requests[self._current_idx]
-        value = event.value
 
-        if value is Select.BLANK or value == _CUSTOM:
-            req.source_session_id = None
-            self._apply_custom_mode(req)
-        else:
-            # value is a session ID
-            req.source_session_id = str(value)
-            self._apply_session_mode(str(value))
+        if event.select.id == "session-select":
+            value = event.value
+            if value is Select.BLANK or value == _CUSTOM:
+                req.source_session_id = None
+                self._apply_custom_mode(req)
+            else:
+                req.source_session_id = str(value)
+                self._apply_session_mode(str(value))
+            if hasattr(self.app, "mark_dirty"):
+                self.app.mark_dirty()
 
-        if hasattr(self.app, "mark_dirty"):
-            self.app.mark_dirty()
+        elif event.select.id == "direction-select":
+            if event.value is not Select.BLANK:
+                req.direction = str(event.value)
+                if hasattr(self.app, "mark_dirty"):
+                    self.app.mark_dirty()
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        """Persist host/port/response_window values into the current request."""
         if self._current_idx < 0:
             return
         req = self._requests[self._current_idx]
 
         if event.input.id == "resp-window":
             try:
-                val = float(event.value)
-                req.response_window = max(0.0, val)
+                req.response_window = max(0.0, float(event.value))
             except ValueError:
                 pass
 
@@ -468,50 +531,48 @@ class RepeaterTab(Widget):
                     pass
 
     def on_switch_changed(self, event: Switch.Changed) -> None:
-        """Persist TLS toggle into the current request."""
         if event.switch.id != "target-tls-switch":
             return
-        if self._current_idx < 0:
+        if self._current_idx < 0 or event.switch.disabled:
             return
-        if event.switch.disabled:
-            return
-        req = self._requests[self._current_idx]
-        req.tls = event.value
+        self._requests[self._current_idx].tls = event.value
         if hasattr(self.app, "mark_dirty"):
             self.app.mark_dirty()
 
     # ------------------------------------------------------------------
-    # DataTable row navigation
+    # DataTable navigation — highlighted (arrow / single-click)
     # ------------------------------------------------------------------
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         """
-        Arrow key navigation and single-click selection in the response packets
-        table — display the highlighted packet immediately without pressing Enter.
+        Arrow key navigation and single-click selection — display content
+        immediately for both the response packets table and the history table.
+        No Enter / double-click required.
         """
         if event.row_key is None:
             return
+
         if event.data_table.id == "resp-packets-table":
             idx = int(str(event.row_key.value))
             self._show_packet(idx)
 
+        elif event.data_table.id == "history-table":
+            if self._current_idx < 0:
+                return
+            req = self._requests[self._current_idx]
+            record_id = str(event.row_key.value)
+            for record in req.history:
+                if record.id == record_id:
+                    pairs = [record.sent_bytes.hex()[i:i+2]
+                             for i in range(0, len(record.sent_bytes.hex()), 2)]
+                    self.query_one("#req-editor", TextArea).load_text(" ".join(pairs))
+                    self._display_record_response(record)
+                    break
+
+    # on_data_table_row_selected is no longer used for navigation (both tables
+    # respond to RowHighlighted); kept empty to avoid accidental double-loads.
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """History table — restore sent bytes and response packets on Enter/double-click."""
-        if event.data_table.id != "history-table":
-            return
-        if self._current_idx < 0:
-            return
-        req = self._requests[self._current_idx]
-        record_id = str(event.row_key.value)
-        for record in req.history:
-            if record.id == record_id:
-                # Show sent bytes in editor
-                pairs = [record.sent_bytes.hex()[i:i+2]
-                         for i in range(0, len(record.sent_bytes.hex()), 2)]
-                self.query_one("#req-editor", TextArea).load_text(" ".join(pairs))
-                # Restore response packets
-                self._display_record_response(record)
-                break
+        pass
 
     # ------------------------------------------------------------------
     # Send logic
@@ -531,12 +592,10 @@ class RepeaterTab(Widget):
             self.notify(f"Invalid hex: {exc}", severity="error")
             return
 
-        # Save current bytes to request
         req.current_bytes = data
         if hasattr(self.app, "mark_dirty"):
             self.app.mark_dirty()
 
-        # Run as a background worker
         self.run_worker(self._async_send(req, data), exclusive=True)
 
     async def _async_send(self, req: RepeaterRequest, data: bytes) -> None:
@@ -550,23 +609,33 @@ class RepeaterTab(Widget):
         if req.source_session_id:
             send_time = _t.time()
             injected = False
+            to_client = (req.direction == "to_client")
             try:
-                injected = await self.app.api.inject_to_server(
-                    req.source_session_id, data
-                )
+                if to_client:
+                    injected = await self.app.api.inject_to_client(
+                        req.source_session_id, data
+                    )
+                else:
+                    injected = await self.app.api.inject_to_server(
+                        req.source_session_id, data
+                    )
             except OSError:
                 pass
 
             if injected:
-                # Wait for the response window, then harvest SERVER_TO_CLIENT
-                # frames that the relay captured after our inject.
                 await __import__("asyncio").sleep(response_window)
                 session = self.app.api.get_session(req.source_session_id)
                 response_packets: list[bytes] = []
                 if session:
+                    # Collect the reply direction: if we injected to server, server
+                    # replies to client; if we injected to client, client replies to server.
+                    reply_direction = (
+                        Direction.CLIENT_TO_SERVER if to_client
+                        else Direction.SERVER_TO_CLIENT
+                    )
                     response_packets = [
                         f.raw_bytes for f in session.frames
-                        if f.direction is Direction.SERVER_TO_CLIENT
+                        if f.direction is reply_direction
                         and f.timestamp >= send_time
                     ]
                 record = SendRecord.create(
@@ -592,20 +661,17 @@ class RepeaterTab(Widget):
         # Path 2: custom host:port — use (or create) a persistent session
         # ------------------------------------------------------------------
         else:
-            # Check whether the existing persistent session is still alive
             if req.repeater_session_id:
                 session = self.app.api.get_session(req.repeater_session_id)
                 if not (session and session.is_active()):
                     req.repeater_session_id = None
 
-            # Open a new persistent session if we don't have one
             if not req.repeater_session_id:
                 try:
                     req.repeater_session_id = await self.app.api.open_repeater_session(
                         req.host, req.port, req.tls
                     )
                 except Exception as exc:
-                    # Could not connect — fall back to old one-shot behaviour
                     record = await self.app.api.send_frame(
                         data=data,
                         host=req.host,
@@ -625,18 +691,13 @@ class RepeaterTab(Widget):
                 receive_timeout=response_window,
             )
 
-            # If the session was closed by the server during this send, clear
-            # the reference so the next send opens a fresh connection
             if req.repeater_session_id:
                 session = self.app.api.get_session(req.repeater_session_id)
                 if session and not session.is_active():
                     req.repeater_session_id = None
 
         req.add_record(record)
-
-        # Update response pane
         self._display_record_response(record)
-
         self._refresh_history(req)
         n_frames = len(record.response_packets)
         status = "OK" if record.success else f"Error: {record.error}"
