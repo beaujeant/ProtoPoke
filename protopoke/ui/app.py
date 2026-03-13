@@ -88,6 +88,8 @@ class ProtoPoke(App):
         Binding("f4",           "switch_tab('repeater')",  "Repeater",  show=True),
         Binding("f5",           "switch_tab('fuzzer')",    "Fuzzer",    show=True),
         Binding("f6",           "switch_tab('sequencer')", "Sequencer", show=True),
+        Binding("ctrl+r",       "switch_tab('repeater')",  "Repeater",  show=False, priority=True),
+        Binding("ctrl+shift+r", "send_to_repeater",        "→Repeater", show=False, priority=True),
         Binding("ctrl+n",       "new_project",             "New",       show=False),
         Binding("ctrl+o",       "open_project",            "Open",      show=False),
         Binding("ctrl+s",       "save_project",            "Save",      show=False),
@@ -178,12 +180,14 @@ class ProtoPoke(App):
         if session:
             self.query_one("#logs-tab", LogsTab).add_session(session)
             self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
+            self.query_one("#repeater-tab", RepeaterTab).refresh_session_dropdown()
 
     def on__session_closed(self, msg: _SessionClosed) -> None:
         session = self.api.get_session(msg.session_id)
         if session:
             self.query_one("#logs-tab", LogsTab).update_session(session)
             self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
+            self.query_one("#repeater-tab", RepeaterTab).refresh_session_dropdown()
 
     def on__frame_captured(self, msg: _FrameCaptured) -> None:
         session = self.api.get_session(msg.session_id)
@@ -260,6 +264,16 @@ class ProtoPoke(App):
     def action_switch_tab(self, tab_id: str) -> None:
         tabs = self.query_one("#tabs", TabbedContent)
         tabs.active = tab_id
+
+    def action_send_to_repeater(self) -> None:
+        """Ctrl+Shift+R — send the selected Logs frame to the Repeater."""
+        logs_tab = self.query_one("#logs-tab", LogsTab)
+        if logs_tab._current_frame_id and logs_tab._current_session_id:
+            self.send_frame_to_repeater(
+                logs_tab._current_session_id, logs_tab._current_frame_id
+            )
+        else:
+            self.notify("Select a frame in the Logs tab first.", severity="warning")
 
     # ------------------------------------------------------------------
     # Project management actions
@@ -443,7 +457,10 @@ class ProtoPoke(App):
         )
         self.query_one("#repeater-tab", RepeaterTab).add_request(req)
         self._project.repeater_requests.append(req)
-        self.action_switch_tab("repeater")
+        # Use call_after_refresh so the tab switch happens after the new request
+        # button is mounted in the DOM — otherwise the mount may revert focus back
+        # to the Logs tab.
+        self.call_after_refresh(self.action_switch_tab, "repeater")
         self.notify(f"Frame sent to Repeater: {frame_id[:8]}")
 
     # ------------------------------------------------------------------
