@@ -63,11 +63,6 @@ class LengthPrefixFramer(Framer):
         prefix_length:  Width of the length field in bytes: 1, 2, 4, or 8.
                         Default: 4.
         byte_order:     ``'big'`` or ``'little'`` endian. Default: ``'big'``.
-        include_prefix: If True (default), the emitted Frame includes all
-                        bytes from the start of the frame (including any
-                        prefix_offset header bytes and the length field
-                        itself).  If False, only the payload bytes are
-                        emitted.
         prefix_offset:  Number of bytes before the length field. These are
                         part of the frame but are skipped when reading the
                         length integer.  Default: 0.
@@ -98,7 +93,6 @@ class LengthPrefixFramer(Framer):
         direction:      Direction,
         prefix_length:  int   = 4,
         byte_order:     str   = 'big',
-        include_prefix: bool  = True,
         prefix_offset:  int   = 0,
         length_add:     int   = 0,
         max_frame_size: int   = 16 * 1024 * 1024,  # 16 MB
@@ -117,7 +111,6 @@ class LengthPrefixFramer(Framer):
         self._prefix_offset  = prefix_offset
         self._prefix_length  = prefix_length
         self._struct         = struct.Struct(self._FORMATS[key])
-        self._include_prefix = include_prefix
         self._length_add     = length_add
         self._max_frame_size = max_frame_size
         self._buffer         = bytearray()
@@ -155,10 +148,7 @@ class LengthPrefixFramer(Framer):
                 # We have the header but not the full payload yet
                 break
 
-            if self._include_prefix:
-                frame_bytes = bytes(self._buffer[:total_length])
-            else:
-                frame_bytes = bytes(self._buffer[min_header:total_length])
+            frame_bytes = bytes(self._buffer[:total_length])
 
             frames.append(self._make_frame(frame_bytes))
             del self._buffer[:total_length]
