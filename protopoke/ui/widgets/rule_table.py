@@ -101,7 +101,7 @@ class RuleTable(Widget, Generic[R]):
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
         if event.button.id == "btn-add":
-            await self._on_add()
+            self.run_worker(self._on_add())
         elif event.button.id == "btn-remove":
             rid = self._selected_rule_id()
             if rid:
