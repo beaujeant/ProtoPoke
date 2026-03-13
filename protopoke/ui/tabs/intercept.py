@@ -63,6 +63,10 @@ class InterceptTab(Widget):
     InterceptTab DataTable {
         height: 1fr;
     }
+    InterceptTab #intercept-toggle {
+        padding: 0;
+        border: none;
+    }
     InterceptTab .action-bar {
         height: 3;
         align: left middle;

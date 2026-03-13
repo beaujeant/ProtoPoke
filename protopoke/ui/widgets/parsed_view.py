@@ -44,8 +44,7 @@ class ParsedView(Vertical):
     }
     ParsedView .view-toolbar Button {
         min-width: 8;
-        margin: 0;
-        padding: 0 1;
+        padding: 0;
     }
     ParsedView #detail-content {
         height: 1fr;
@@ -64,8 +63,8 @@ class ParsedView(Vertical):
     def compose(self) -> ComposeResult:
         with Horizontal(classes="view-toolbar"):
             yield Static(self._title, id="view-title")
-            yield Button("Hex",    id="btn-hex",    variant="primary",  compact=True)
-            yield Button("Parsed", id="btn-parsed", variant="default",  compact=True)
+            yield Button("Hex",    id="btn-hex",    variant="default")
+            yield Button("Parsed", id="btn-parsed", variant="primary")
         yield Static("", id="detail-content", markup=False)
 
     def on_mount(self) -> None:
@@ -102,13 +101,13 @@ class ParsedView(Vertical):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-hex":
             self._mode = "hex"
-            self.query_one("#btn-hex",    Button).variant = "primary"
-            self.query_one("#btn-parsed", Button).variant = "default"
+            self.query_one("#btn-hex",    Button).variant = "default"
+            self.query_one("#btn-parsed", Button).variant = "primary"
             self._refresh_content()
         elif event.button.id == "btn-parsed":
             self._mode = "parsed"
-            self.query_one("#btn-hex",    Button).variant = "default"
-            self.query_one("#btn-parsed", Button).variant = "primary"
+            self.query_one("#btn-hex",    Button).variant = "primary"
+            self.query_one("#btn-parsed", Button).variant = "default"
             self._refresh_content()
 
     def _refresh_content(self) -> None:
