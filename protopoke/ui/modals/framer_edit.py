@@ -6,7 +6,7 @@ from typing import TypedDict
 
 from textual.app import ComposeResult
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, Select, Switch, Static
+from textual.widgets import Button, Input, Label, Select, Static
 from textual.containers import Horizontal, Vertical
 
 
@@ -106,11 +106,9 @@ class FramerEditModal(ModalScreen):
         # Derive initial field values from existing settings
         delim_bytes = kwargs.get("delimiter", b"\n")
         delim_hex = delim_bytes.hex() if isinstance(delim_bytes, bytes) else str(delim_bytes)
-        delim_include = kwargs.get("include_delimiter", True)
 
         prefix_len = str(kwargs.get("prefix_length", 4))
         byte_order = kwargs.get("byte_order", "big")
-        lp_include = kwargs.get("include_prefix", True)
         prefix_offset = str(kwargs.get("prefix_offset", 0))
         length_add = str(kwargs.get("length_add", 0))
 
@@ -144,9 +142,6 @@ class FramerEditModal(ModalScreen):
                         placeholder="e.g. 0d0a for \\r\\n, 00 for null byte",
                         classes="field-input",
                     )
-                with Horizontal(classes="field-row"):
-                    yield Label("Include delimiter:", classes="field-label")
-                    yield Switch(value=delim_include, id="delim-include")
 
             # ---- length_prefix ----
             with Vertical(id="section-length_prefix", classes="section"):
@@ -193,9 +188,6 @@ class FramerEditModal(ModalScreen):
                             "Use -N if the length encodes the total frame size."
                         ),
                     )
-                with Horizontal(classes="field-row"):
-                    yield Label("Include prefix:", classes="field-label")
-                    yield Switch(value=lp_include, id="lp-include-prefix")
 
             # ---- line ----
             with Vertical(id="section-line", classes="section"):
@@ -280,7 +272,6 @@ class FramerEditModal(ModalScreen):
             except ValueError:
                 delim_bytes = b"\n"
             kwargs["delimiter"] = delim_bytes
-            kwargs["include_delimiter"] = self.query_one("#delim-include", Switch).value
 
         elif framer_name == "length_prefix":
             prefix_len_val = self.query_one("#lp-prefix-length", Select).value
@@ -295,7 +286,6 @@ class FramerEditModal(ModalScreen):
                 kwargs["length_add"] = int(self.query_one("#lp-length-add", Input).value.strip() or "0")
             except ValueError:
                 kwargs["length_add"] = 0
-            kwargs["include_prefix"] = self.query_one("#lp-include-prefix", Switch).value
 
         elif framer_name == "custom":
             path = self.query_one("#custom-path", Input).value.strip()

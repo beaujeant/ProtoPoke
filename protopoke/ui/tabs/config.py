@@ -32,13 +32,10 @@ def _framer_summary(
     if framer_name == "delimiter":
         delim = framer_kwargs.get("delimiter", b"\n")
         hex_str = delim.hex() if isinstance(delim, (bytes, bytearray)) else str(delim)
-        inc = framer_kwargs.get("include_delimiter", True)
-        suffix = " (delimiter included)" if inc else " (delimiter stripped)"
-        return f"delimiter on 0x{hex_str}{suffix}"
+        return f"delimiter on 0x{hex_str}"
     if framer_name == "length_prefix":
         pl = framer_kwargs.get("prefix_length", 4)
         bo = framer_kwargs.get("byte_order", "big")
-        inc = framer_kwargs.get("include_prefix", True)
         offset = framer_kwargs.get("prefix_offset", 0)
         add = framer_kwargs.get("length_add", 0)
         parts = [f"{pl}-byte {bo}-endian length prefix"]
@@ -46,8 +43,6 @@ def _framer_summary(
             parts.append(f"offset +{offset}")
         if add:
             parts.append(f"length {add:+d}")
-        if not inc:
-            parts.append("prefix stripped")
         return "  ".join(parts)
     if framer_name == "line":
         return "line — split on \\r\\n or \\n"
