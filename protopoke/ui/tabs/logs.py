@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.events import Key
+from textual.events import Click, Key
 from textual.widget import Widget
 from textual.widgets import DataTable, Static, Button
 from textual.containers import Horizontal, Vertical
@@ -274,6 +274,27 @@ class LogsTab(Widget):
                 self._extending_selection = True
             else:
                 self._extending_selection = False
+
+    def on_click(self, event: Click) -> None:
+        """
+        Detect Shift+click on the frames table to extend the selection range.
+
+        Flow (why this works):
+          1. User shift+clicks a row in the frames DataTable.
+          2. DataTable.on_click fires first → moves cursor → posts RowHighlighted
+             to the message queue (not yet dispatched).
+          3. The Click event bubbles up to LogsTab (this handler).
+             We set _extending_selection = event.shift.
+          4. RowHighlighted is later dequeued and dispatched.
+          5. on_data_table_row_highlighted sees _extending_selection=True
+             and extends the selection from the anchor to the new row.
+
+        A plain click (no shift) always resets the flag to False so the next
+        RowHighlighted does a normal single-row selection.
+        """
+        focused = self.app.focused
+        if focused and getattr(focused, "id", None) == "frames-table":
+            self._extending_selection = event.shift
 
     # ------------------------------------------------------------------
     # Event handlers
