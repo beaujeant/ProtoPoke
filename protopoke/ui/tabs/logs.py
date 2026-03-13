@@ -108,7 +108,10 @@ class LogsTab(Widget):
     def compose(self) -> ComposeResult:
         # Sessions pane
         with Vertical(id="sessions-pane"):
-            yield Static("  Sessions", classes="pane-header")
+            with Horizontal(classes="toolbar"):
+                yield Static("  Sessions")
+                yield Button("✖ Terminate", id="btn-terminate-session", variant="warning")
+                yield Button("✗ Delete",    id="btn-delete-session",    variant="error")
             yield DataTable(id="sessions-table", cursor_type="row")
 
         # Frames pane
@@ -340,8 +343,39 @@ class LogsTab(Widget):
             self._extending_selection = False
             self._update_frames_label()
 
+    def remove_session(self, session_id: str) -> None:
+        """Remove a session row (and clear frames/detail if it was selected)."""
+        dt = self.query_one("#sessions-table", DataTable)
+        try:
+            dt.remove_row(session_id)
+        except Exception:
+            pass
+        if self._current_session_id == session_id:
+            self._current_session_id = None
+            self._current_frame_id   = None
+            self._frame_rows         = []
+            self._selected_frame_ids = []
+            self._anchor_frame_idx   = -1
+            self.query_one("#frames-table", DataTable).clear()
+            self.query_one("#parsed-view", ParsedView).clear()
+            self._update_frames_label()
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-to-repeater":
+        if event.button.id == "btn-terminate-session":
+            event.stop()
+            if self._current_session_id:
+                self.app.terminate_session(self._current_session_id)
+            else:
+                self.notify("Select a session first.", severity="warning")
+
+        elif event.button.id == "btn-delete-session":
+            event.stop()
+            if self._current_session_id:
+                self.app.delete_session(self._current_session_id)
+            else:
+                self.notify("Select a session first.", severity="warning")
+
+        elif event.button.id == "btn-to-repeater":
             event.stop()
             if self._current_frame_id and self._current_session_id:
                 self.app.send_frame_to_repeater(

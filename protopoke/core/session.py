@@ -163,6 +163,20 @@ class SessionRegistry:
                 session_id, len(session.frames),
             )
 
+    def delete(self, session_id: str) -> bool:
+        """
+        Permanently remove a session from the registry.
+
+        The session must be closed first; callers should terminate it before
+        deleting.  Returns ``True`` if the session existed and was removed,
+        ``False`` if it was not found.
+        """
+        if session_id in self._sessions:
+            del self._sessions[session_id]
+            logger.info("Session deleted from registry: %s", session_id)
+            return True
+        return False
+
     # ------------------------------------------------------------------
     # Queries
     # ------------------------------------------------------------------
