@@ -13,6 +13,7 @@ from textual.containers import Horizontal, Vertical
 class FramerSettings(TypedDict):
     framer_name: str
     framer_kwargs: dict
+    custom_framer_path: str | None
 
 
 _FRAMER_OPTIONS: list[tuple[str, str]] = [
@@ -20,6 +21,7 @@ _FRAMER_OPTIONS: list[tuple[str, str]] = [
     ("delimiter — split on byte sequence", "delimiter"),
     ("length_prefix — fixed-size length header", "length_prefix"),
     ("line — split on \\r\\n or \\n", "line"),
+    ("custom — load from Python file", "custom"),
 ]
 
 _PREFIX_LENGTH_OPTIONS: list[tuple[str, str]] = [
@@ -99,6 +101,7 @@ class FramerEditModal(ModalScreen):
         if framer_name not in _VALID_FRAMER_NAMES:
             framer_name = "raw"
         kwargs = s["framer_kwargs"]
+        custom_path = s.get("custom_framer_path") or ""
 
         # Derive initial field values from existing settings
         delim_bytes = kwargs.get("delimiter", b"\n")
@@ -193,6 +196,17 @@ class FramerEditModal(ModalScreen):
                     classes="info-text",
                 )
 
+            # ---- custom ----
+            with Vertical(id="section-custom", classes="section"):
+                with Horizontal(classes="field-row"):
+                    yield Label("Script path:", classes="field-label")
+                    yield Input(
+                        value=custom_path,
+                        id="custom-path",
+                        placeholder="/path/to/my_framer.py",
+                        classes="field-input",
+                    )
+
             # ---- buttons ----
             with Horizontal(classes="buttons"):
                 yield Button("Cancel", variant="default", id="btn-cancel")
@@ -210,7 +224,7 @@ class FramerEditModal(ModalScreen):
 
     def _show_section(self, framer_name: str) -> None:
         """Show only the section matching *framer_name*, hide the others."""
-        for name in ("raw", "delimiter", "length_prefix", "line"):
+        for name in ("raw", "delimiter", "length_prefix", "line", "custom"):
             self.query_one(f"#section-{name}").display = (name == framer_name)
 
     # ------------------------------------------------------------------
@@ -240,6 +254,7 @@ class FramerEditModal(ModalScreen):
     def _build_result(self) -> FramerSettings:
         framer_name = str(self.query_one("#modal-framer-type", Select).value)
         kwargs: dict = {}
+        custom_path: str | None = None
 
         if framer_name == "delimiter":
             delim_hex = self.query_one("#delim-bytes", Input).value.strip()
@@ -263,7 +278,11 @@ class FramerEditModal(ModalScreen):
             except ValueError:
                 kwargs["length_add"] = 0
 
+        elif framer_name == "custom":
+            custom_path = self.query_one("#custom-path", Input).value.strip() or None
+
         return {
             "framer_name": framer_name,
             "framer_kwargs": kwargs,
+            "custom_framer_path": custom_path,
         }

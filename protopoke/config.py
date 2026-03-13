@@ -124,6 +124,15 @@ class ProxyConfig:
     protocol_definition_path: Optional[str] = None
 
     # ------------------------------------------------------------------
+    # Custom framer
+    # ------------------------------------------------------------------
+
+    # Path to a Python file containing a custom Framer subclass.
+    # The first Framer subclass found in the file is used automatically —
+    # no class name is required.  When set, framer_name is ignored.
+    custom_framer_path: Optional[str] = None
+
+    # ------------------------------------------------------------------
     # Sequencer script
     # ------------------------------------------------------------------
 

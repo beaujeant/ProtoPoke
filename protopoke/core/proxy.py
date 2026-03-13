@@ -38,7 +38,7 @@ from typing import Optional, TYPE_CHECKING
 from ..config import ProxyConfig
 from ..models import Direction
 from ..events.bus import EventBus, SessionOpenedEvent, SessionClosedEvent
-from ..framing import create_framer
+from ..framing import create_framer, load_framer_from_file
 from ..intercept.controller import InterceptController, PassthroughController
 from ..tls.handler import TLSHandler
 from .session import SessionRegistry, Session
@@ -264,20 +264,26 @@ class ProxyEngine:
         self._session_client_writers[session.id] = client_writer
         await self.event_bus.publish(SessionOpenedEvent(session=session.info))
 
-        # Create one framer per direction
-        # framer_kwargs let the user pass extra config (e.g. delimiter bytes)
-        client_framer = create_framer(
-            self.config.framer_name,
-            session_id=session.id,
-            direction=Direction.CLIENT_TO_SERVER,
-            **self.config.framer_kwargs,
-        )
-        server_framer = create_framer(
-            self.config.framer_name,
-            session_id=session.id,
-            direction=Direction.SERVER_TO_CLIENT,
-            **self.config.framer_kwargs,
-        )
+        # Create one framer per direction.
+        # If a custom framer file is configured, load its class and instantiate
+        # directly; otherwise fall back to the built-in registry.
+        if self.config.custom_framer_path:
+            framer_class = load_framer_from_file(self.config.custom_framer_path)
+            client_framer = framer_class(session_id=session.id, direction=Direction.CLIENT_TO_SERVER)
+            server_framer = framer_class(session_id=session.id, direction=Direction.SERVER_TO_CLIENT)
+        else:
+            client_framer = create_framer(
+                self.config.framer_name,
+                session_id=session.id,
+                direction=Direction.CLIENT_TO_SERVER,
+                **self.config.framer_kwargs,
+            )
+            server_framer = create_framer(
+                self.config.framer_name,
+                session_id=session.id,
+                direction=Direction.SERVER_TO_CLIENT,
+                **self.config.framer_kwargs,
+            )
 
         relay = BidirectionalRelay(
             session=session,
