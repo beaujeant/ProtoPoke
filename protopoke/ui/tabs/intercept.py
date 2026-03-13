@@ -237,13 +237,11 @@ class InterceptTab(Widget):
         self.query_one("#intercept-rules", RuleTable).refresh_rules(rules)
 
     async def _add_intercept_rule(self) -> None:
-        def on_result(rule: InterceptRule | None) -> None:
-            if rule is None:
-                return
-            self.app.api.add_intercept_rule(rule)
-            self.refresh_intercept_rules(self.app.api.list_intercept_rules())
-
-        await self.app.push_screen_wait(AddInterceptRuleModal(), callback=on_result)
+        rule: InterceptRule | None = await self.app.push_screen_wait(AddInterceptRuleModal())
+        if rule is None:
+            return
+        self.app.api.add_intercept_rule(rule)
+        self.refresh_intercept_rules(self.app.api.list_intercept_rules())
 
     def _remove_intercept_rule(self, rule_id: str) -> None:
         self.app.api.remove_intercept_rule(rule_id)
@@ -281,13 +279,11 @@ class InterceptTab(Widget):
         self.query_one("#replace-rules", RuleTable).refresh_rules(rules)
 
     async def _add_replace_rule(self) -> None:
-        def on_result(rule: ReplaceRule | None) -> None:
-            if rule is None:
-                return
-            self.app.api.add_replace_rule(rule)
-            self.refresh_replace_rules(self.app.api.list_replace_rules())
-
-        await self.app.push_screen_wait(AddReplaceRuleModal(), callback=on_result)
+        rule: ReplaceRule | None = await self.app.push_screen_wait(AddReplaceRuleModal())
+        if rule is None:
+            return
+        self.app.api.add_replace_rule(rule)
+        self.refresh_replace_rules(self.app.api.list_replace_rules())
 
     def _remove_replace_rule(self, rule_id: str) -> None:
         self.app.api.remove_replace_rule(rule_id)
