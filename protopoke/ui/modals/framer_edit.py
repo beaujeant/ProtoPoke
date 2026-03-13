@@ -111,6 +111,8 @@ class FramerEditModal(ModalScreen):
         prefix_len = str(kwargs.get("prefix_length", 4))
         byte_order = kwargs.get("byte_order", "big")
         lp_include = kwargs.get("include_prefix", True)
+        prefix_offset = str(kwargs.get("prefix_offset", 0))
+        length_add = str(kwargs.get("length_add", 0))
 
         with Vertical():
             yield Label("Edit Framer", classes="modal-title")
@@ -163,6 +165,33 @@ class FramerEditModal(ModalScreen):
                         value=byte_order,
                         id="lp-byte-order",
                         classes="field-input",
+                    )
+                with Horizontal(classes="field-row"):
+                    yield Label("Prefix offset:", classes="field-label")
+                    yield Input(
+                        value=prefix_offset,
+                        id="lp-prefix-offset",
+                        restrict=r"\d*",
+                        placeholder="0",
+                        classes="field-input",
+                        tooltip=(
+                            "Bytes before the length field. E.g. if the header is "
+                            "[type 1B][flags 2B][length 4B] set offset to 3."
+                        ),
+                    )
+                with Horizontal(classes="field-row"):
+                    yield Label("Length adjust:", classes="field-label")
+                    yield Input(
+                        value=length_add,
+                        id="lp-length-add",
+                        restrict=r"-?\d*",
+                        placeholder="0",
+                        classes="field-input",
+                        tooltip=(
+                            "Added to the decoded length value to get actual payload size. "
+                            "Use +N if a fixed footer is not counted in the length field. "
+                            "Use -N if the length encodes the total frame size."
+                        ),
                     )
                 with Horizontal(classes="field-row"):
                     yield Label("Include prefix:", classes="field-label")
@@ -258,6 +287,14 @@ class FramerEditModal(ModalScreen):
             byte_order_val = self.query_one("#lp-byte-order", Select).value
             kwargs["prefix_length"] = int(str(prefix_len_val))
             kwargs["byte_order"] = str(byte_order_val)
+            try:
+                kwargs["prefix_offset"] = int(self.query_one("#lp-prefix-offset", Input).value.strip() or "0")
+            except ValueError:
+                kwargs["prefix_offset"] = 0
+            try:
+                kwargs["length_add"] = int(self.query_one("#lp-length-add", Input).value.strip() or "0")
+            except ValueError:
+                kwargs["length_add"] = 0
             kwargs["include_prefix"] = self.query_one("#lp-include-prefix", Switch).value
 
         elif framer_name == "custom":

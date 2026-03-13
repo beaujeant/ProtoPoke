@@ -1,23 +1,42 @@
 """
 Length-prefix framer.
 
-Handles the common pattern where each message is preceded by a fixed-size
-integer that encodes the length of the following payload.
+Handles the common pattern where each message contains a fixed-size integer
+field that encodes the length of the following payload.
 
-    [N-byte big-endian uint][payload bytes of that length]
+General frame layout
+--------------------
 
-This pattern appears in many binary protocols: custom game protocols,
-database wire formats, message queue protocols, etc.
+    [  prefix_offset bytes  ][  prefix_length bytes  ][  payload  ]
+    |<------- skipped ------>|<-- length field ------>|<- N bytes->|
 
-Configuration:
-    prefix_length: 1, 2, 4, or 8 bytes (default: 4)
-    byte_order:    'big' or 'little' endian (default: 'big')
-    include_prefix: Whether the emitted Frame includes the prefix bytes.
-                    True  → frame.raw_bytes = prefix + payload (default)
-                    False → frame.raw_bytes = payload only
+where N  =  length_field_value  +  length_add
 
-Safety:
-    If the declared payload length exceeds max_frame_size, the framer emits
+So the total bytes consumed per frame:
+
+    total = prefix_offset + prefix_length + length_field_value + length_add
+
+Common configurations
+---------------------
+Simple payload-only length at byte 0 (most common):
+    prefix_offset=0, prefix_length=4, length_add=0
+    → frame = [4-byte length][payload of that many bytes]
+
+Length field buried inside a fixed header:
+    prefix_offset=3, prefix_length=2, length_add=0
+    → frame = [3 header bytes][2-byte length][payload]
+
+Length encodes "remaining bytes after this field" with a fixed footer:
+    prefix_offset=0, prefix_length=2, length_add=4
+    → frame = [2-byte length][payload][4-byte footer]  (footer counted in length_add)
+
+Length encodes the total frame size (self-describing):
+    prefix_offset=0, prefix_length=4, length_add=-4
+    → length_field = total frame size; subtract prefix to get payload size
+
+Safety
+------
+    If the computed total_length exceeds max_frame_size, the framer emits
     whatever it has and resets. This catches misconfigured framers or corrupt
     data early.
 """
@@ -34,8 +53,31 @@ class LengthPrefixFramer(Framer):
     """
     Framer for length-prefix-delimited binary protocols.
 
-    Reads a fixed-size integer header, then collects exactly that many
-    payload bytes before emitting a Frame.
+    Reads a fixed-size integer field at *prefix_offset* bytes into the
+    stream, then collects exactly ``length_field_value + length_add``
+    additional bytes before emitting a Frame.
+
+    Args:
+        session_id:     Session this framer belongs to.
+        direction:      Direction of the stream.
+        prefix_length:  Width of the length field in bytes: 1, 2, 4, or 8.
+                        Default: 4.
+        byte_order:     ``'big'`` or ``'little'`` endian. Default: ``'big'``.
+        include_prefix: If True (default), the emitted Frame includes all
+                        bytes from the start of the frame (including any
+                        prefix_offset header bytes and the length field
+                        itself).  If False, only the payload bytes are
+                        emitted.
+        prefix_offset:  Number of bytes before the length field. These are
+                        part of the frame but are skipped when reading the
+                        length integer.  Default: 0.
+        length_add:     Integer added to the decoded length field value to
+                        obtain the actual payload byte count.  Use a positive
+                        value when the length encodes fewer bytes than the
+                        real payload (e.g. a fixed footer is not counted), or
+                        a negative value when the length is self-describing
+                        (encodes the total frame size).  Default: 0.
+        max_frame_size: Safety cap. Default: 16 MiB.
     """
 
     # struct format strings for supported (prefix_length, byte_order) combos
@@ -57,6 +99,8 @@ class LengthPrefixFramer(Framer):
         prefix_length:  int   = 4,
         byte_order:     str   = 'big',
         include_prefix: bool  = True,
+        prefix_offset:  int   = 0,
+        length_add:     int   = 0,
         max_frame_size: int   = 16 * 1024 * 1024,  # 16 MB
     ) -> None:
         super().__init__(session_id, direction)
@@ -67,10 +111,14 @@ class LengthPrefixFramer(Framer):
                 f"Unsupported (prefix_length, byte_order): {key}. "
                 f"Supported: {list(self._FORMATS.keys())}"
             )
+        if prefix_offset < 0:
+            raise ValueError(f"prefix_offset must be >= 0, got {prefix_offset}")
 
+        self._prefix_offset  = prefix_offset
         self._prefix_length  = prefix_length
         self._struct         = struct.Struct(self._FORMATS[key])
         self._include_prefix = include_prefix
+        self._length_add     = length_add
         self._max_frame_size = max_frame_size
         self._buffer         = bytearray()
 
@@ -88,12 +136,16 @@ class LengthPrefixFramer(Framer):
         self._buffer.extend(data)
         frames: list[Frame] = []
 
-        while len(self._buffer) >= self._prefix_length:
-            # Parse the length header
-            (payload_length,) = self._struct.unpack_from(self._buffer, 0)
-            total_length = self._prefix_length + payload_length
+        # Minimum bytes needed before we can even read the length field
+        min_header = self._prefix_offset + self._prefix_length
 
-            if payload_length > self._max_frame_size:
+        while len(self._buffer) >= min_header:
+            # Decode the length field at its offset
+            (length_value,) = self._struct.unpack_from(self._buffer, self._prefix_offset)
+            payload_length = length_value + self._length_add
+            total_length = min_header + payload_length
+
+            if payload_length < 0 or total_length > self._max_frame_size:
                 # Corrupt data or wrong framer config — emit and reset
                 frames.append(self._make_frame(bytes(self._buffer)))
                 self._buffer.clear()
@@ -106,7 +158,7 @@ class LengthPrefixFramer(Framer):
             if self._include_prefix:
                 frame_bytes = bytes(self._buffer[:total_length])
             else:
-                frame_bytes = bytes(self._buffer[self._prefix_length:total_length])
+                frame_bytes = bytes(self._buffer[min_header:total_length])
 
             frames.append(self._make_frame(frame_bytes))
             del self._buffer[:total_length]
