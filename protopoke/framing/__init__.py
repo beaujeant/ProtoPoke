@@ -17,6 +17,46 @@ FRAMER_REGISTRY: dict[str, type[Framer]] = {
 }
 
 
+def load_framer_from_file(path: str) -> type[Framer]:
+    """
+    Dynamically load a custom :class:`Framer` subclass from a Python file.
+
+    The file is executed in its own module namespace.  The first
+    :class:`Framer` subclass defined in the file is returned automatically —
+    no class name is required.
+
+    Args:
+        path: Absolute or relative path to the ``.py`` file.
+
+    Returns:
+        The class object (not an instance).
+
+    Raises:
+        FileNotFoundError: *path* does not exist.
+        TypeError:         No ``Framer`` subclass was found in the file.
+    """
+    import importlib.util
+    from pathlib import Path as _Path
+
+    file_path = _Path(path)
+    if not file_path.exists():
+        raise FileNotFoundError(f"Custom framer file not found: {path}")
+
+    spec = importlib.util.spec_from_file_location("_protopoke_custom_framer", file_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load spec from {path}")
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+
+    for attr_name in dir(module):
+        cls = getattr(module, attr_name)
+        if isinstance(cls, type) and issubclass(cls, Framer) and cls is not Framer:
+            return cls
+
+    raise TypeError(f"No Framer subclass found in {path}")
+
+
 def create_framer(name: str, session_id: str, direction, **kwargs) -> Framer:
     """
     Instantiate a framer by name.

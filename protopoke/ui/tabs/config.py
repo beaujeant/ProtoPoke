@@ -20,7 +20,11 @@ _LOG_LEVEL_OPTIONS = [
 ]
 
 
-def _framer_summary(framer_name: str, framer_kwargs: dict) -> str:
+def _framer_summary(
+    framer_name: str,
+    framer_kwargs: dict,
+    custom_path: str | None = None,
+) -> str:
     """Return a one-line human-readable description of the current framer settings."""
     if framer_name == "raw":
         return "raw — pass raw read() chunks"
@@ -41,6 +45,8 @@ def _framer_summary(framer_name: str, framer_kwargs: dict) -> str:
         return "  ".join(parts)
     if framer_name == "line":
         return "line — split on \\r\\n or \\n"
+    if framer_name == "custom":
+        return f"custom: {custom_path}" if custom_path else "custom — path not set"
     return framer_name
 
 
@@ -142,6 +148,7 @@ class ConfigTab(Widget):
         # Local framer state — kept in sync with config on Apply/load_config
         self._framer_name: str = config.framer_name
         self._framer_kwargs: dict = dict(config.framer_kwargs)
+        self._custom_framer_path: str | None = config.custom_framer_path
 
     def compose(self) -> ComposeResult:
         cfg = self.config
@@ -202,7 +209,7 @@ class ConfigTab(Widget):
                 yield Label("Framer:", classes="field-label")
                 yield Button("Edit", id="btn-framer-edit", classes="btn-framer-edit")
                 yield Static(
-                    _framer_summary(self._framer_name, self._framer_kwargs),
+                    _framer_summary(self._framer_name, self._framer_kwargs, self._custom_framer_path),
                     id="framer-summary",
                     classes="framer-summary",
                 )
@@ -254,7 +261,7 @@ class ConfigTab(Widget):
     def _update_framer_summary(self) -> None:
         """Refresh the framer summary Static widget from current instance vars."""
         self.query_one("#framer-summary", Static).update(
-            _framer_summary(self._framer_name, self._framer_kwargs)
+            _framer_summary(self._framer_name, self._framer_kwargs, self._custom_framer_path)
         )
 
     def _read_form(self) -> None:
@@ -295,8 +302,9 @@ class ConfigTab(Widget):
         cfg.tls_cert_path      = _str("tls-cert") or None
         cfg.tls_key_path       = _str("tls-key") or None
         # Framer settings come from instance vars (edited via FramerEditModal)
-        cfg.framer_name   = self._framer_name
-        cfg.framer_kwargs = dict(self._framer_kwargs)
+        cfg.framer_name        = self._framer_name
+        cfg.framer_kwargs      = dict(self._framer_kwargs)
+        cfg.custom_framer_path = self._custom_framer_path
         cfg.protocol_definition_path = _str("proto-def") or None
         cfg.sequencer_script         = _str("sequencer-script") or None
         cfg.log_level          = _sel("log-level") or "INFO"
@@ -311,6 +319,7 @@ class ConfigTab(Widget):
             settings: FramerSettings = {
                 "framer_name": self._framer_name,
                 "framer_kwargs": dict(self._framer_kwargs),
+                "custom_framer_path": self._custom_framer_path,
             }
             self.app.push_screen(FramerEditModal(settings), self._on_framer_edit_result)
         elif event.button.id == "btn-apply":
@@ -329,6 +338,7 @@ class ConfigTab(Widget):
             return
         self._framer_name = result["framer_name"]
         self._framer_kwargs = dict(result["framer_kwargs"])
+        self._custom_framer_path = result.get("custom_framer_path")
         self._update_framer_summary()
 
     # ------------------------------------------------------------------
@@ -363,6 +373,7 @@ class ConfigTab(Widget):
         # Update framer instance vars and refresh summary
         self._framer_name = cfg.framer_name
         self._framer_kwargs = dict(cfg.framer_kwargs)
+        self._custom_framer_path = cfg.custom_framer_path
         self._update_framer_summary()
         _set("proto-def",         cfg.protocol_definition_path or "")
         _set("sequencer-script",  cfg.sequencer_script or "")
