@@ -88,8 +88,7 @@ class ProtoPoke(App):
         Binding("f4",           "switch_tab('repeater')",  "Repeater",  show=True),
         Binding("f5",           "switch_tab('fuzzer')",    "Fuzzer",    show=True),
         Binding("f6",           "switch_tab('sequencer')", "Sequencer", show=True),
-        Binding("ctrl+r",       "switch_tab('repeater')",  "Repeater",  show=False, priority=True),
-        Binding("ctrl+shift+r", "send_to_repeater",        "→Repeater", show=False, priority=True),
+        Binding("ctrl+r",       "send_to_repeater",        "→Repeater", show=False, priority=True),
         Binding("ctrl+n",       "new_project",             "New",       show=False),
         Binding("ctrl+o",       "open_project",            "Open",      show=False),
         Binding("ctrl+s",       "save_project",            "Save",      show=False),
@@ -366,7 +365,6 @@ class ProtoPoke(App):
         if result is None:
             return
         req = RepeaterRequest.create(
-            label=result.label,
             host=result.host,
             port=result.port,
             tls=result.tls,
@@ -379,7 +377,7 @@ class ProtoPoke(App):
                 req.current_bytes = session.frames[0].raw_bytes
         self.query_one("#repeater-tab", RepeaterTab).add_request(req)
         self._project.repeater_requests.append(req)
-        self.action_switch_tab("repeater")
+        self.call_after_refresh(self.action_switch_tab, "repeater")
 
     def send_frames_to_sequencer(
         self, session_id: str, frame_ids: list[str]
@@ -447,13 +445,18 @@ class ProtoPoke(App):
         frame = next((f for f in session.frames if f.id == frame_id), None)
         if not frame:
             return
+        direction = (
+            "to_server"
+            if frame.direction is Direction.CLIENT_TO_SERVER
+            else "to_client"
+        )
         req = RepeaterRequest.create(
-            label=f"From {session_id[:8]}",
             host=session.info.server_host,
             port=session.info.server_port,
             tls=self.api.config.tls_upstream,
             current_bytes=frame.raw_bytes,
             source_session_id=session_id,
+            direction=direction,
         )
         self.query_one("#repeater-tab", RepeaterTab).add_request(req)
         self._project.repeater_requests.append(req)

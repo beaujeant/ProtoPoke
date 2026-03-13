@@ -137,6 +137,9 @@ class RepeaterRequest:
     source_session_id:   Optional[str]     = None
     # Seconds to wait for server packets after a send (configurable per-tab).
     response_window:     float             = 1.0
+    # "to_server" (inject/send toward the server) or "to_client" (inject toward
+    # the client side of an existing proxy session).
+    direction:           str               = "to_server"
     # ID of the persistent TCP session created for custom host:port sends.
     # Not persisted to disk — connections don't survive restarts.
     repeater_session_id: Optional[str]     = field(default=None, compare=False)
@@ -144,12 +147,13 @@ class RepeaterRequest:
     @classmethod
     def create(
         cls,
-        label:             str,
         host:              str,
         port:              int,
+        label:             str  = "",
         tls:               bool  = False,
         current_bytes:     bytes = b"",
         source_session_id: Optional[str] = None,
+        direction:         str  = "to_server",
     ) -> "RepeaterRequest":
         return cls(
             id=str(uuid.uuid4()),
@@ -159,6 +163,7 @@ class RepeaterRequest:
             tls=tls,
             current_bytes=current_bytes,
             source_session_id=source_session_id,
+            direction=direction,
         )
 
     def add_record(self, record: SendRecord) -> None:
@@ -176,6 +181,7 @@ class RepeaterRequest:
             "history":           [r.to_dict() for r in self.history],
             "source_session_id": self.source_session_id,
             "response_window":   self.response_window,
+            "direction":         self.direction,
         }
 
     @classmethod
@@ -190,4 +196,5 @@ class RepeaterRequest:
             history=[SendRecord.from_dict(r) for r in d.get("history", [])],
             source_session_id=d.get("source_session_id"),
             response_window=d.get("response_window", 1.0),
+            direction=d.get("direction", "to_server"),
         )
