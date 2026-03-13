@@ -9,14 +9,8 @@ from textual.containers import Horizontal, Vertical, ScrollableContainer
 from textual.message import Message
 
 from ...config import ProxyConfig
+from ..modals.framer_edit import FramerEditModal, FramerSettings
 
-
-_FRAMER_OPTIONS = [
-    ("raw — pass raw read() chunks", "raw"),
-    ("delimiter — split on byte sequence", "delimiter"),
-    ("length_prefix — fixed-size length header", "length_prefix"),
-    ("line — split on \\r\\n or \\n", "line"),
-]
 
 _LOG_LEVEL_OPTIONS = [
     ("DEBUG", "DEBUG"),
@@ -24,6 +18,38 @@ _LOG_LEVEL_OPTIONS = [
     ("WARNING", "WARNING"),
     ("ERROR", "ERROR"),
 ]
+
+
+def _framer_summary(
+    framer_name: str,
+    framer_kwargs: dict,
+    custom_path: str | None,
+    custom_class: str | None,
+) -> str:
+    """Return a one-line human-readable description of the current framer settings."""
+    if framer_name == "raw":
+        return "raw — pass raw read() chunks"
+    if framer_name == "delimiter":
+        delim = framer_kwargs.get("delimiter", b"\n")
+        hex_str = delim.hex() if isinstance(delim, (bytes, bytearray)) else str(delim)
+        inc = framer_kwargs.get("include_delimiter", True)
+        suffix = " (delimiter included)" if inc else " (delimiter stripped)"
+        return f"delimiter on 0x{hex_str}{suffix}"
+    if framer_name == "length_prefix":
+        pl = framer_kwargs.get("prefix_length", 4)
+        bo = framer_kwargs.get("byte_order", "big")
+        inc = framer_kwargs.get("include_prefix", True)
+        suffix = " (prefix included)" if inc else " (prefix stripped)"
+        return f"{pl}-byte {bo}-endian length prefix{suffix}"
+    if framer_name == "line":
+        return "line — split on \\r\\n or \\n"
+    if framer_name == "custom":
+        if custom_path and custom_class:
+            return f"custom: {custom_class}  ←  {custom_path}"
+        if custom_path:
+            return f"custom: {custom_path} (class not set)"
+        return "custom — not configured"
+    return framer_name
 
 
 class ConfigTab(Widget):
@@ -97,6 +123,18 @@ class ConfigTab(Widget):
     ConfigTab Switch {
         margin: 0;
     }
+    ConfigTab .btn-framer-edit {
+        width: 8;
+        min-width: 8;
+        margin-right: 1;
+    }
+    ConfigTab .framer-summary {
+        width: 1fr;
+        padding: 0 1;
+        color: $text-muted;
+        content-align: left middle;
+        height: 3;
+    }
     """
 
     def __init__(
@@ -109,6 +147,11 @@ class ConfigTab(Widget):
     ) -> None:
         super().__init__(name=name, id=id, classes=classes)
         self.config = config
+        # Local framer state — kept in sync with config on Apply/load_config
+        self._framer_name: str = config.framer_name
+        self._framer_kwargs: dict = dict(config.framer_kwargs)
+        self._custom_framer_path: str | None = config.custom_framer_path
+        self._custom_framer_class: str | None = config.custom_framer_class
 
     def compose(self) -> ComposeResult:
         cfg = self.config
@@ -167,26 +210,16 @@ class ConfigTab(Widget):
             yield Static("  Framing", classes="section-header")
             with Horizontal(classes="field-row"):
                 yield Label("Framer:", classes="field-label")
-                yield Select(
-                    [(lbl, val) for lbl, val in _FRAMER_OPTIONS],
-                    value=cfg.framer_name,
-                    id="framer-name",
-                )
-            with Horizontal(classes="field-row"):
-                yield Label("Custom framer path:", classes="field-label")
-                yield Input(value=cfg.custom_framer_path or "", id="custom-framer-path",
-                            placeholder="/path/to/my_framer.py", classes="field-input")
-            with Horizontal(classes="field-row"):
-                yield Label("Custom framer class:", classes="field-label")
-                yield Input(value=cfg.custom_framer_class or "", id="custom-framer-class",
-                            placeholder="MyFramer", classes="field-input")
-            with Horizontal(classes="field-row"):
-                yield Label("Framer kwargs (JSON):", classes="field-label")
-                yield Input(
-                    value=self._framer_kwargs_to_str(cfg.framer_kwargs),
-                    id="framer-kwargs",
-                    placeholder='e.g. {"delimiter": "0d0a"} or {"header_size": 4}',
-                    classes="field-input",
+                yield Button("Edit", id="btn-framer-edit", classes="btn-framer-edit")
+                yield Static(
+                    _framer_summary(
+                        self._framer_name,
+                        self._framer_kwargs,
+                        self._custom_framer_path,
+                        self._custom_framer_class,
+                    ),
+                    id="framer-summary",
+                    classes="framer-summary",
                 )
 
             # ---- Protocol ----
@@ -225,7 +258,6 @@ class ConfigTab(Widget):
                 variant="primary",
                 id="btn-apply",
                 classes="btn-small",
-                #compact=True,
             )
             yield Button("▶ Start Proxy", variant="success", id="btn-start")
             yield Button("■ Stop Proxy", variant="error", id="btn-stop")
@@ -234,39 +266,16 @@ class ConfigTab(Widget):
     # Helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _framer_kwargs_to_str(kwargs: dict) -> str:
-        """Serialise framer_kwargs to a JSON string for display in the Input."""
-        import json
-        if not kwargs:
-            return ""
-        # bytes values are stored as hex strings in to_dict(); show them as-is
-        display: dict = {}
-        for k, v in kwargs.items():
-            display[k] = v.hex() if isinstance(v, (bytes, bytearray)) else v
-        return json.dumps(display)
-
-    @staticmethod
-    def _parse_framer_kwargs(text: str) -> dict:
-        """Parse the framer_kwargs JSON input back to a dict (bytes values as hex → bytes)."""
-        import json
-        text = text.strip()
-        if not text:
-            return {}
-        try:
-            raw = json.loads(text)
-        except json.JSONDecodeError:
-            return {}
-        result: dict = {}
-        for k, v in raw.items():
-            if isinstance(v, str):
-                try:
-                    result[k] = bytes.fromhex(v)
-                except ValueError:
-                    result[k] = v
-            else:
-                result[k] = v
-        return result
+    def _update_framer_summary(self) -> None:
+        """Refresh the framer summary Static widget from current instance vars."""
+        self.query_one("#framer-summary", Static).update(
+            _framer_summary(
+                self._framer_name,
+                self._framer_kwargs,
+                self._custom_framer_path,
+                self._custom_framer_class,
+            )
+        )
 
     def _read_form(self) -> None:
         """Write all form values back into self.config."""
@@ -305,10 +314,11 @@ class ConfigTab(Widget):
         cfg.ca_key_path        = _str("ca-key") or None
         cfg.tls_cert_path      = _str("tls-cert") or None
         cfg.tls_key_path       = _str("tls-key") or None
-        cfg.framer_name         = _sel("framer-name") or "raw"
-        cfg.framer_kwargs       = self._parse_framer_kwargs(_str("framer-kwargs"))
-        cfg.custom_framer_path  = _str("custom-framer-path") or None
-        cfg.custom_framer_class = _str("custom-framer-class") or None
+        # Framer settings come from instance vars (edited via FramerEditModal)
+        cfg.framer_name         = self._framer_name
+        cfg.framer_kwargs       = dict(self._framer_kwargs)
+        cfg.custom_framer_path  = self._custom_framer_path
+        cfg.custom_framer_class = self._custom_framer_class
         cfg.protocol_definition_path = _str("proto-def") or None
         cfg.sequencer_script         = _str("sequencer-script") or None
         cfg.log_level          = _sel("log-level") or "INFO"
@@ -319,7 +329,15 @@ class ConfigTab(Widget):
     # ------------------------------------------------------------------
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-apply":
+        if event.button.id == "btn-framer-edit":
+            settings: FramerSettings = {
+                "framer_name": self._framer_name,
+                "framer_kwargs": dict(self._framer_kwargs),
+                "custom_framer_path": self._custom_framer_path,
+                "custom_framer_class": self._custom_framer_class,
+            }
+            self.app.push_screen(FramerEditModal(settings), self._on_framer_edit_result)
+        elif event.button.id == "btn-apply":
             self._read_form()
             self.post_message(self.Applied())
         elif event.button.id == "btn-start":
@@ -328,6 +346,16 @@ class ConfigTab(Widget):
             self.post_message(self.StartProxy())
         elif event.button.id == "btn-stop":
             self.post_message(self.StopProxy())
+
+    def _on_framer_edit_result(self, result: FramerSettings | None) -> None:
+        """Callback invoked when FramerEditModal is dismissed."""
+        if result is None:
+            return
+        self._framer_name = result["framer_name"]
+        self._framer_kwargs = dict(result["framer_kwargs"])
+        self._custom_framer_path = result["custom_framer_path"]
+        self._custom_framer_class = result["custom_framer_class"]
+        self._update_framer_summary()
 
     # ------------------------------------------------------------------
     # Public API
@@ -358,10 +386,12 @@ class ConfigTab(Widget):
         _set("ca-key", cfg.ca_key_path or "")
         _set("tls-cert", cfg.tls_cert_path or "")
         _set("tls-key", cfg.tls_key_path or "")
-        _sel("framer-name", cfg.framer_name)
-        _set("framer-kwargs", self._framer_kwargs_to_str(cfg.framer_kwargs))
-        _set("custom-framer-path", cfg.custom_framer_path or "")
-        _set("custom-framer-class", cfg.custom_framer_class or "")
+        # Update framer instance vars and refresh summary
+        self._framer_name = cfg.framer_name
+        self._framer_kwargs = dict(cfg.framer_kwargs)
+        self._custom_framer_path = cfg.custom_framer_path
+        self._custom_framer_class = cfg.custom_framer_class
+        self._update_framer_summary()
         _set("proto-def",         cfg.protocol_definition_path or "")
         _set("sequencer-script",  cfg.sequencer_script or "")
         _sel("log-level",         cfg.log_level)
