@@ -4,6 +4,7 @@ from .base import Framer
 from .raw import RawFramer
 from .delimiter import DelimiterFramer
 from .length_prefix import LengthPrefixFramer
+from .line import LineFramer
 
 # Registry of built-in framers.
 # To add a custom framer, import create_framer and extend this dict,
@@ -12,6 +13,7 @@ FRAMER_REGISTRY: dict[str, type[Framer]] = {
     "raw": RawFramer,
     "delimiter": DelimiterFramer,
     "length_prefix": LengthPrefixFramer,
+    "line": LineFramer,
 }
 
 
