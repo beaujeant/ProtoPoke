@@ -349,7 +349,8 @@ class RepeaterTab(Widget):
 
         # Save current bytes to request
         req.current_bytes = data
-        self.app.api.mark_dirty() if hasattr(self.app, "mark_dirty") else None
+        if hasattr(self.app, "mark_dirty"):
+            self.app.mark_dirty()
 
         # Run as a background worker
         self.run_worker(self._async_send(req, data), exclusive=True)
