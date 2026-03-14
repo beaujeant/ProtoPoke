@@ -550,24 +550,348 @@ The script just defines two functions — no imports from ProtoPoke needed. See 
 
 ---
 
-### Step 2 — Dissect the protocol
+### Step 2 — Build the parser
 
-Once frames are correct (each frame = one complete, atomic message), you can teach ProtoPoke what the bytes *mean* by writing a protocol definition.
+Once framing is correct (each `Frame` contains exactly one complete message), the second phase of reverse engineering begins: **understanding what the bytes mean**. You do this incrementally — start with just the header fields, then add more message types as you identify them, until the protocol is fully mapped.
 
-A **dissector** maps raw bytes to named, typed fields: opcode, username, payload length, flags. Once loaded, every captured frame is automatically decoded, and you can intercept by field name rather than raw offset.
+A **parser definition** is a YAML (or JSON) file that describes the structure of each message type. ProtoPoke feeds every captured frame through the definition and converts raw bytes into named, typed fields — displayed in a Wireshark-style tree with a hex dump.
 
-#### Write a YAML definition
+#### The incremental approach
 
-Create a file `myproto.yaml` describing each message type:
+Reverse engineering a protocol takes multiple passes. Don't try to define everything at once:
+
+1. **Observe raw traffic** — use `framer_name="raw"` and capture several sessions. Look for repeating structures, length fields, opcode bytes.
+2. **Fix framing** — get each frame to be exactly one atomic message (Step 1).
+3. **Start with the header** — most binary protocols have a fixed-size header. Define those fields first (magic bytes, opcode, length field).
+4. **Identify message types** — look for a type/opcode byte that routes to different payload layouts. Define a `match` rule for each type you find.
+5. **Flesh out payloads** — add fields for each message type as you understand them. Use `type: bytes, length: -1` as a placeholder for parts you haven't decoded yet.
+6. **Map enums and flags** — once you know what status codes and flag bits mean, add `enum` and `bitfield` definitions.
+7. **Tackle composite structures** — add `array` and `tlv_sequence` when you spot repeating sub-structures or TLV-encoded blocks.
+
+---
+
+#### Definition file format
+
+Create a `.yaml` (or `.json`) file:
 
 ```yaml
 protocol:
-  name: "MyProto"
+  name: "MyProto"     # arbitrary label shown in the UI
+  version: "1.0"      # optional
+  endianness: big     # big or little — applies to all integer fields by default
+
+  messages:
+    - ...             # list of message type definitions, evaluated top-to-bottom
+```
+
+---
+
+#### Message type definition
+
+Each entry in `messages` describes one packet type:
+
+```yaml
+- name: "MessageTypeName"         # shown in UI / ParsedMessage.message_type
+  description: "Optional note"    # shown in UI tooltip
+  direction: client_to_server     # optional filter: client_to_server | server_to_client | both
+  match:
+    type: magic                   # magic | sequence | always
+    ...                           # match-type-specific keys
+  fields:
+    - name: field_name
+      type: field_type
+      ...                         # type-specific options
+```
+
+---
+
+#### Match types
+
+There are three strategies for identifying a message type. The matcher evaluates definitions **top-to-bottom** and uses the first match — put specific rules before catch-alls.
+
+**`magic` — match bytes at a fixed offset**
+
+The most common strategy. Identify packets by a fixed opcode or magic sequence at a known position:
+
+```yaml
+match:
+  type: magic
+  offset: 0       # byte offset from the start of the frame
+  value: "0x10"   # accepted formats: "0x10", 16, [0x10], "0x10 0x00", [0x10, 0x00]
+```
+
+Example — two-byte magic at offset 0:
+
+```yaml
+match:
+  type: magic
+  offset: 0
+  value: [0xDE, 0xAD]
+```
+
+**`sequence` — match by stream position**
+
+Use when the first N frames in a session have a known structure regardless of content (e.g., a banner or handshake):
+
+```yaml
+match:
+  type: sequence
+  direction: server_to_client   # required: which direction to count
+  index: 0                      # 0-based: 0 = first frame in that direction
+```
+
+**`always` — catch-all**
+
+Always matches. Use as the **last** entry to capture anything not handled by earlier definitions:
+
+```yaml
+match:
+  type: always
+```
+
+---
+
+#### Field types
+
+All fields share these common keys:
+
+| Key | Required | Description |
+|---|---|---|
+| `name` | yes | Unique identifier within the message; referenced in length expressions |
+| `type` | yes | Field type (see below) |
+| `display` | no | Rendering hint: `auto` (default), `hex`, `ascii`, `decimal`, `enum` |
+
+**Integer**
+
+```yaml
+- name: opcode
+  type: uint8     # uint8 | uint16 | uint32 | uint64 | int8 | int16 | int32 | int64
+  display: hex    # optional; default is decimal
+```
+
+Sizes: `uint8`/`int8` = 1 B, `uint16`/`int16` = 2 B, `uint32`/`int32` = 4 B, `uint64`/`int64` = 8 B. All respect the top-level `endianness`.
+
+**Float**
+
+```yaml
+- name: temperature
+  type: float32   # float32 (4 B) | float64 (8 B)
+```
+
+**Bytes** — raw byte sequence
+
+```yaml
+- name: payload
+  type: bytes
+  length: "{payload_len}"   # required (see Length expressions below)
+  display: hex
+```
+
+**String** — decoded text
+
+```yaml
+- name: username
+  type: string
+  length: "{username_len}"  # length in bytes (not characters)
+  encoding: utf8            # utf8 (default) | ascii | utf16
+  display: ascii
+
+# Or null-terminated:
+- name: hostname
+  type: string
+  null_terminated: true
+  encoding: ascii
+```
+
+**Padding** — skip alignment or reserved bytes
+
+```yaml
+- name: reserved
+  type: padding
+  length: 3     # bytes to skip; value is not parsed or displayed
+```
+
+**Enum** — integer with named values
+
+Any integer field can carry an `enum` map. Use `display: enum` to show the label instead of the raw number:
+
+```yaml
+- name: status
+  type: uint8
+  display: enum
+  enum:
+    0x00: "Success"
+    0x01: "Not Found"
+    0x02: "Permission Denied"
+    0xFF: "Unknown Error"
+```
+
+**Bitfield** — integer decoded as individually named bits
+
+```yaml
+- name: flags
+  type: bitfield
+  bits:
+    0: syn      # bit 0 (LSB)
+    1: ack
+    2: fin
+    7: urgent   # bit 7
+```
+
+Each named bit becomes a child `ParsedField` with value `0` or `1`. The integer width is inferred from the highest bit index (rounds up to the nearest byte).
+
+**Array** — counted sequence of identical sub-structures
+
+```yaml
+- name: records
+  type: array
+  array:
+    count: "{record_count}"     # iterations; field reference or literal integer
+    item:                       # sub-fields per iteration (same syntax as message fields)
+      - { name: id,       type: uint32 }
+      - { name: name_len, type: uint8  }
+      - { name: name,     type: string, length: "{name_len}", encoding: utf8 }
+      - name: flags
+        type: bitfield
+        bits:
+          0: active
+          1: admin
+```
+
+**TLV sequence** — stream of Type-Length-Value triples
+
+```yaml
+- name: attributes
+  type: tlv_sequence
+  length: "{total_length - 5}"    # bytes the entire TLV block spans
+  tlv:
+    type_size: 2                  # bytes for the type field (1, 2, or 4)
+    length_size: 2                # bytes for the length field (1, 2, or 4)
+    endianness: big               # byte order for type/length fields
+    tags:
+      0x0001:
+        name: "UserID"
+        value_type: uint32
+      0x0002:
+        name: "Username"
+        value_type: string
+        encoding: utf8
+      0x0003:
+        name: "Blob"
+        value_type: bytes
+        display: hex
+```
+
+---
+
+#### Length expressions
+
+The `length` and `count` keys accept several formats:
+
+| Format | Example | Meaning |
+|---|---|---|
+| Fixed integer | `4` | Always 4 bytes |
+| Field reference | `"{payload_len}"` | Value of a previously parsed field |
+| Arithmetic expression | `"{total_length - 5}"` | `total_length` minus 5 |
+| Rest of frame | `-1` | Consume all remaining bytes |
+| Null terminated | `null_terminated: true` | Scan until `\x00` byte |
+
+Expressions support `+`, `-`, `*`, `//` and builtins `min()`, `max()`, `abs()`, `int()`. Field names in `{}` are substituted by their parsed integer value. Evaluation is sandboxed (no imports, no attribute access).
+
+---
+
+#### Configure the parser in the app
+
+**Via config (recommended):**
+
+```python
+from protopoke.api import ProxyAPI
+from protopoke.config import ProxyConfig
+
+config = ProxyConfig(
+    listen_port=8080,
+    upstream_host="10.0.0.1",
+    upstream_port=9090,
+    framer_name="length_prefix",
+    framer_kwargs={"prefix_length": 2, "byte_order": "big"},
+    protocol_definition_path="myproto.yaml",   # .yaml, .yml, or .json
+)
+api = ProxyAPI(config)
+await api.start()
+```
+
+The definition is loaded automatically when `start()` is called. Every frame captured from that point on is parsed against it.
+
+**Via TUI:**
+
+Open the **Config** tab, set `Protocol Definition File` to the path of your `.yaml` file, and click **Apply**. The parser takes effect immediately for new sessions.
+
+**Hot-swap at runtime (API):**
+
+```python
+# Load from file
+api.set_protocol_file("myproto.yaml")
+
+# Load from a dict (useful in tests / scripts)
+api.set_protocol_dict({
+    "name": "MyProto",
+    "endianness": "big",
+    "messages": [...],
+})
+```
+
+---
+
+#### Working with parsed messages
+
+```python
+# Intercept — get both the raw intercept unit and the parsed message
+unit, msg = await api.get_next_intercepted_parsed()
+
+print(msg.message_type)           # e.g. "LoginRequest"
+print(msg.protocol_name)          # e.g. "MyProto"
+
+# Access a field by name
+f = msg.field_by_name("username")
+print(f.value)           # Python value: str, int, bytes, list[ParsedField]
+print(f.display_value)   # pre-rendered string, e.g. "0x4142" or "AB"
+print(f.offset)          # byte offset in the frame
+print(f.size)            # bytes consumed
+
+# All fields as a flat dict
+print(msg.as_dict())     # {"opcode": 1, "username": "admin", ...}
+
+# Forward after editing one field (length fields are auto-recomputed)
+api.modify_field_and_forward(unit.id, {"username": "hacker"})
+```
+
+---
+
+#### Building a definition iteratively: worked example
+
+Suppose you have frames and can see (in hex) that each starts with a 1-byte opcode. Start minimal and expand:
+
+**Pass 1 — skeleton: just split the opcode from the rest**
+
+```yaml
+protocol:
+  name: "Unknown"
   endianness: big
 
   messages:
+    - name: "Packet"
+      match:
+        type: always
+      fields:
+        - { name: opcode, type: uint8,  display: hex }
+        - { name: rest,   type: bytes,  length: -1,  display: hex }
+```
 
-    # Client login — identified by opcode 0x01 at byte 0
+Now every captured frame shows its opcode. Once you identify opcode `0x01` as a login request, add it:
+
+**Pass 2 — add a named message type**
+
+```yaml
     - name: "LoginRequest"
       direction: client_to_server
       match:
@@ -575,68 +899,35 @@ protocol:
         offset: 0
         value: "0x01"
       fields:
+        - { name: opcode, type: uint8, display: hex }
+        - { name: rest,   type: bytes, length: -1,  display: hex }   # placeholder
+
+    - name: "Packet"   # fallback
+      match:
+        type: always
+      fields:
+        - { name: opcode, type: uint8, display: hex }
+        - { name: rest,   type: bytes, length: -1,  display: hex }
+```
+
+**Pass 3 — flesh out the payload**
+
+Look at the `rest` bytes in `LoginRequest` frames. If bytes 1–2 look like a big-endian length followed by that many bytes of ASCII text, add:
+
+```yaml
+      fields:
         - { name: opcode,        type: uint8  }
         - { name: username_len,  type: uint16 }
         - { name: username,      type: string, length: "{username_len}", encoding: utf8 }
         - { name: password_len,  type: uint16 }
         - { name: password,      type: bytes,  length: "{password_len}", display: hex }
-
-    # Server response — identified by opcode 0x02 at byte 0
-    - name: "LoginResponse"
-      direction: server_to_client
-      match:
-        type: magic
-        offset: 0
-        value: "0x02"
-      fields:
-        - { name: opcode,  type: uint8 }
-        - name: status
-          type: uint8
-          enum:
-            0x00: "Success"
-            0x01: "Invalid credentials"
-            0x02: "Account locked"
-        - { name: session_token, type: bytes, length: 16, display: hex }
-
-    # First packet from server has no magic bytes — identify by position
-    - name: "ServerBanner"
-      match:
-        type: sequence
-        direction: server_to_client
-        index: 0          # 0-based: the very first server→client frame
-      fields:
-        - { name: banner, type: string, length: -1, encoding: ascii }
-
-    # Anything not matched above
-    - name: "Unknown"
-      match:
-        type: always
-      fields:
-        - { name: raw, type: bytes, length: -1, display: hex }
+        # no more "rest" — the whole frame is accounted for
 ```
 
-#### Load it and decode frames
+Repeat this process for every message type until no `rest` placeholders remain.
 
-```python
-config = ProxyConfig(
-    listen_port=8080,
-    upstream_host="10.0.0.1",
-    upstream_port=9090,
-    framer_name="length_prefix",
-    framer_kwargs={"prefix_length": 2, "byte_order": "big"},
-    protocol_definition_path="myproto.yaml",
-)
-api = ProxyAPI(config)
-await api.start()
-
-# Intercept and inspect by field name
-unit, msg = await api.get_next_intercepted_parsed()
-print(msg.message_type)                             # "LoginRequest"
-print(msg.field_by_name("username").value)          # "admin"
-
-# Edit one field — length fields are auto-recomputed on re-encode
-api.modify_field_and_forward(unit.id, {"username": "hacker"})
-```
+A complete working example covering all field types (enum, bitfield, array, TLV) is at `examples/protocols/chat.proto.yaml`.
+A DNS over TCP example is at `examples/protocols/dns.proto.yaml`.
 
 ---
 
