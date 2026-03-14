@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.events import Click
+from textual.events import MouseDown
 from textual.widget import Widget
 from textual.widgets import DataTable, Static, Button
 from textual.containers import Horizontal, Vertical
@@ -261,21 +261,21 @@ class LogsTab(Widget):
         except Exception:
             pass
 
-    def on_click(self, event: Click) -> None:
+    def on_mouse_down(self, event: MouseDown) -> None:
         """
         Detect Shift+click on the frames table to extend the selection range.
 
-        Flow (why this works):
+        Flow (why this works and why we use MouseDown instead of Click):
           1. User shift+clicks a row in the frames DataTable.
-          2. DataTable.on_click fires first → moves cursor → posts RowHighlighted
-             to the message queue (not yet dispatched).
-          3. The Click event bubbles up to LogsTab (this handler).
-             We set _extending_selection = event.shift.
-          4. RowHighlighted is later dequeued and dispatched.
-          5. on_data_table_row_highlighted sees _extending_selection=True
-             and extends the selection from the anchor to the new row.
+          2. MouseDown bubbles up to LogsTab (DataTable has no _on_mouse_down,
+             so it does not stop propagation). We set _extending_selection here.
+          3. User releases mouse → Click is dispatched to DataTable.
+          4. DataTable._on_click moves cursor → posts RowHighlighted to the
+             message queue → calls event.stop() (Click never bubbles further).
+          5. RowHighlighted is dequeued. on_data_table_row_highlighted sees
+             _extending_selection=True and extends the selection.
 
-        A plain click (no shift) always resets the flag to False so the next
+        A plain click (no shift) sets the flag to False so the next
         RowHighlighted does a normal single-row selection.
         """
         focused = self.app.focused
