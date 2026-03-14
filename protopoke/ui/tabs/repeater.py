@@ -13,6 +13,7 @@ from textual.containers import Horizontal, Vertical
 from ...models import Direction, Frame
 from ...replay.models import RepeaterRequest, SendRecord
 from ..modals.rename import RenameModal
+from ..utils.frame_codec import bytes_to_str, str_to_bytes, hex_pairs_to_str, str_to_hex_pairs
 
 # Direction mapping for replace-rule scope application
 _DIR_MAP = {
@@ -105,6 +106,16 @@ class RepeaterTab(Widget):
         width: 1fr;
         border-right: solid $primary-darken-2;
     }
+    RepeaterTab #request-editor .pane-header {
+        height: 1;
+        align: left middle;
+    }
+    RepeaterTab #request-editor .pane-header Static {
+        width: 1fr;
+    }
+    RepeaterTab #request-editor .pane-header Button {
+        width: 5;
+    }
     RepeaterTab #response-view {
         width: 1fr;
         layout: vertical;
@@ -161,6 +172,8 @@ class RepeaterTab(Widget):
         self._current_response_packets: list[bytes] = []
         # Auto-incremented counter for new request labels
         self._request_counter: int = 0
+        # "hex" or "str" — controls how the request editor displays / parses content
+        self._editor_mode: str = "hex"
 
     def compose(self) -> ComposeResult:
         # Tab strip
@@ -194,7 +207,9 @@ class RepeaterTab(Widget):
         # Request / Response editors side by side
         with Horizontal(id="editor-pane"):
             with Vertical(id="request-editor"):
-                yield Static("  Request (hex — editable)", classes="pane-header")
+                with Horizontal(classes="pane-header"):
+                    yield Static("  Request (editable)", markup=False)
+                    yield Button("HEX", id="btn-req-mode", compact=True)
                 yield TextArea("", id="req-editor", theme="monokai")
             with Vertical(id="response-view"):
                 yield Static("  Response frames  ↓ server→client", classes="pane-header")
@@ -270,8 +285,7 @@ class RepeaterTab(Widget):
 
         # Populate editor
         if req.current_bytes:
-            pairs = [req.current_bytes.hex()[i:i+2] for i in range(0, len(req.current_bytes.hex()), 2)]
-            self.query_one("#req-editor", TextArea).load_text(" ".join(pairs))
+            self._load_bytes_into_editor(req.current_bytes)
         else:
             self.query_one("#req-editor", TextArea).load_text("")
 
@@ -457,6 +471,11 @@ class RepeaterTab(Widget):
             event.stop()
             self.app.open_new_request_modal()
 
+        elif bid == "btn-req-mode":
+            event.stop()
+            self._toggle_editor_mode()
+            return
+
         elif bid.startswith("req-tab-"):
             event.stop()
             idx = int(bid.removeprefix("req-tab-"))
@@ -569,9 +588,7 @@ class RepeaterTab(Widget):
             record_id = str(event.row_key.value)
             for record in req.history:
                 if record.id == record_id:
-                    pairs = [record.sent_bytes.hex()[i:i+2]
-                             for i in range(0, len(record.sent_bytes.hex()), 2)]
-                    self.query_one("#req-editor", TextArea).load_text(" ".join(pairs))
+                    self._load_bytes_into_editor(record.sent_bytes)
                     self._display_record_response(record)
                     break
 
@@ -584,18 +601,57 @@ class RepeaterTab(Widget):
     # Send logic
     # ------------------------------------------------------------------
 
+    def _load_bytes_into_editor(self, data: bytes) -> None:
+        """Display *data* in the request editor respecting the current mode."""
+        if self._editor_mode == "str":
+            text = bytes_to_str(data)
+        else:
+            text = " ".join(f"{b:02x}" for b in data)
+        self.query_one("#req-editor", TextArea).load_text(text)
+
+    def _read_bytes_from_editor(self) -> bytes:
+        """Parse the request editor content and return bytes. Raises ValueError on bad input."""
+        text = self.query_one("#req-editor", TextArea).text
+        if self._editor_mode == "str":
+            return str_to_bytes(text)
+        hex_clean = text.replace(" ", "").replace("\n", "").strip()
+        return bytes.fromhex(hex_clean) if hex_clean else b""
+
+    def _toggle_editor_mode(self) -> None:
+        """Switch the request editor between HEX and STR (python-like) display."""
+        editor = self.query_one("#req-editor", TextArea)
+        current_text = editor.text
+
+        if self._editor_mode == "hex":
+            try:
+                new_text = hex_pairs_to_str(current_text)
+            except ValueError as exc:
+                self.notify(f"Cannot switch to STR: {exc}", severity="error")
+                return
+            self._editor_mode = "str"
+            self.query_one("#btn-req-mode", Button).label = "STR"
+        else:
+            try:
+                new_text = str_to_hex_pairs(current_text)
+            except ValueError as exc:
+                self.notify(f"Cannot switch to HEX: {exc}", severity="error")
+                return
+            self._editor_mode = "hex"
+            self.query_one("#btn-req-mode", Button).label = "HEX"
+
+        editor.load_text(new_text)
+
     def _do_send(self) -> None:
         if self._current_idx < 0:
             self.notify("No request selected. Create one with [+ New].", severity="warning")
             return
 
         req = self._requests[self._current_idx]
-        hex_text = self.query_one("#req-editor", TextArea).text
-        hex_clean = hex_text.replace(" ", "").replace("\n", "").strip()
         try:
-            data = bytes.fromhex(hex_clean)
+            data = self._read_bytes_from_editor()
         except ValueError as exc:
-            self.notify(f"Invalid hex: {exc}", severity="error")
+            mode = "STR" if self._editor_mode == "str" else "hex"
+            self.notify(f"Invalid {mode}: {exc}", severity="error")
             return
 
         req.current_bytes = data

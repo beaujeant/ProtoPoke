@@ -3,7 +3,7 @@ Data models for the Sequencer feature.
 
 SequenceStep
 ------------
-One packet slot in a sequence. Stores the hex content (with optional ##VAR##
+One packet slot in a sequence. Stores the hex content (with optional {{VAR}}
 placeholders) and a human label.
 
 SequencerSession
@@ -38,8 +38,8 @@ class SequenceStep:
     Attributes:
         id:        Unique ID (UUID4).
         label:     Human-readable name shown in the step list.
-        raw_hex:   Space-separated hex pairs, may contain ##VAR## placeholders.
-                   Example: ``"01 02 ##SESS_ID## 0a 0b"``
+        raw_hex:   Space-separated hex pairs, may contain {{VAR}} placeholders.
+                   Example: ``"01 02 {{SESS_ID}} 0a 0b"``
         direction: Traffic direction for this step.
                    ``"client_to_server"`` — send bytes toward the upstream server
                    (normal client request).
@@ -72,7 +72,7 @@ class SequenceStep:
         shown: list[str] = []
         byte_count = 0
         for tok in tokens:
-            if tok.startswith("##"):
+            if tok.startswith("{{") and tok.endswith("}}"):
                 shown.append(tok)
                 # Treat placeholder as 1 display token, not adding to byte count
             elif len(tok) == 2:
@@ -85,7 +85,7 @@ class SequenceStep:
 
     def byte_length(self) -> int:
         """Approximate byte count (placeholders contribute 0)."""
-        cleaned = re.sub(r"##[^#]+##", "", self.raw_hex)
+        cleaned = re.sub(r"\{\{[^{}]+\}\}", "", self.raw_hex)
         hex_only = cleaned.replace(" ", "").replace("\n", "")
         return len(hex_only) // 2
 

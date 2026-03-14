@@ -12,6 +12,7 @@ from ...models import InterceptedUnit, Direction
 from ...rules.rule import InterceptRule, ReplaceRule, RuleAction
 from ..widgets.rule_table import RuleTable
 from ..modals.add_rule import AddInterceptRuleModal, AddReplaceRuleModal
+from ..utils.frame_codec import bytes_to_str, str_to_bytes, hex_pairs_to_str, str_to_hex_pairs
 
 
 class InterceptTab(Widget):
@@ -80,6 +81,16 @@ class InterceptTab(Widget):
     InterceptTab #hex-editor-pane {
         height: 20%;
     }
+    InterceptTab #hex-editor-pane .pane-header {
+        height: 1;
+        align: left middle;
+    }
+    InterceptTab #hex-editor-pane .pane-header Static {
+        width: 1fr;
+    }
+    InterceptTab #hex-editor-pane .pane-header Button {
+        width: 5;
+    }
     InterceptTab TextArea {
         height: 1fr;
     }
@@ -98,6 +109,8 @@ class InterceptTab(Widget):
         super().__init__(*args, **kwargs)
         self._units: dict[str, InterceptedUnit] = {}
         self._selected_unit_id: str | None = None
+        # "hex" or "str" — controls how the hex editor displays / parses content
+        self._editor_mode: str = "hex"
 
     def compose(self) -> ComposeResult:
         # Top control bar
@@ -124,10 +137,12 @@ class InterceptTab(Widget):
 
         # Hex editor
         with Vertical(id="hex-editor-pane"):
-            yield Static(
-                "  Edit (hex pairs, space-separated) — modify before forwarding",
-                classes="pane-header",
-            )
+            with Horizontal(classes="pane-header"):
+                yield Static(
+                    "  Edit — modify before forwarding",
+                    markup=False,
+                )
+                yield Button("HEX", id="btn-intercept-mode", compact=True)
             yield TextArea(id="hex-editor", language=None, theme="monokai")
 
         # Intercept rules
@@ -366,11 +381,55 @@ class InterceptTab(Widget):
         if unit:
             self._selected_unit_id = unit_id
             data = unit.effective_bytes()
-            pairs = [data.hex()[i:i+2] for i in range(0, len(data.hex()), 2)]
-            self.query_one("#hex-editor", TextArea).load_text(" ".join(pairs))
+            self._load_bytes_into_editor(data)
+
+    def _load_bytes_into_editor(self, data: bytes) -> None:
+        """Display *data* in the hex editor respecting the current mode."""
+        if self._editor_mode == "str":
+            text = bytes_to_str(data)
+        else:
+            text = " ".join(f"{b:02x}" for b in data)
+        self.query_one("#hex-editor", TextArea).load_text(text)
+
+    def _read_bytes_from_editor(self) -> bytes:
+        """Parse the hex editor content and return bytes. Raises ValueError on bad input."""
+        text = self.query_one("#hex-editor", TextArea).text
+        if self._editor_mode == "str":
+            return str_to_bytes(text)
+        hex_clean = text.replace(" ", "").replace("\n", "").strip()
+        return bytes.fromhex(hex_clean)
+
+    def _toggle_editor_mode(self) -> None:
+        """Switch the hex editor between HEX and STR (python-like) display."""
+        editor = self.query_one("#hex-editor", TextArea)
+        current_text = editor.text
+
+        if self._editor_mode == "hex":
+            try:
+                new_text = hex_pairs_to_str(current_text)
+            except ValueError as exc:
+                self.notify(f"Cannot switch to STR: {exc}", severity="error")
+                return
+            self._editor_mode = "str"
+            self.query_one("#btn-intercept-mode", Button).label = "STR"
+        else:
+            try:
+                new_text = str_to_hex_pairs(current_text)
+            except ValueError as exc:
+                self.notify(f"Cannot switch to HEX: {exc}", severity="error")
+                return
+            self._editor_mode = "hex"
+            self.query_one("#btn-intercept-mode", Button).label = "HEX"
+
+        editor.load_text(new_text)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         bid = event.button.id
+
+        if bid == "btn-intercept-mode":
+            event.stop()
+            self._toggle_editor_mode()
+            return
 
         if bid == "dir-both":
             self.app.api.intercept_direction_filter = None
@@ -415,12 +474,11 @@ class InterceptTab(Widget):
         if not uid:
             self.notify("Select a frame to modify.", severity="warning")
             return
-        hex_text = self.query_one("#hex-editor", TextArea).text
-        hex_clean = hex_text.replace(" ", "").replace("\n", "").strip()
         try:
-            new_data = bytes.fromhex(hex_clean)
+            new_data = self._read_bytes_from_editor()
         except ValueError as exc:
-            self.notify(f"Invalid hex: {exc}", severity="error")
+            mode = "STR" if self._editor_mode == "str" else "hex"
+            self.notify(f"Invalid {mode}: {exc}", severity="error")
             return
         if self.app.api.modify_and_forward(uid, new_data):
             self.remove_unit(uid)
