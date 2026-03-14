@@ -268,9 +268,9 @@ class ProxyEngine:
         # If a custom framer file is configured, load its class and instantiate
         # directly; otherwise fall back to the built-in registry.
         if self.config.custom_framer_path:
-            framer_class = load_framer_from_file(self.config.custom_framer_path)
-            client_framer = framer_class(session_id=session.id, direction=Direction.CLIENT_TO_SERVER)
-            server_framer = framer_class(session_id=session.id, direction=Direction.SERVER_TO_CLIENT)
+            framer_factory = load_framer_from_file(self.config.custom_framer_path)
+            client_framer = framer_factory(session.id, Direction.CLIENT_TO_SERVER)
+            server_framer = framer_factory(session.id, Direction.SERVER_TO_CLIENT)
         else:
             client_framer = create_framer(
                 self.config.framer_name,
