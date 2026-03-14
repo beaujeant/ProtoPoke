@@ -32,26 +32,30 @@ class DelimiterFramer(Framer):
     Splits the byte stream on a fixed byte sequence.
 
     Args:
-        session_id:     Session this framer belongs to.
-        direction:      Direction of the stream.
-        delimiter:      Byte sequence to split on. Default: newline (b'\\n').
-        max_frame_size: Safety limit: emit and clear the buffer if it grows
-                        this large without finding a delimiter. Default: 1 MB.
+        session_id:        Session this framer belongs to.
+        direction:         Direction of the stream.
+        delimiter:         Byte sequence to split on. Default: newline (b'\\n').
+        include_delimiter: If True, the delimiter is included at the end of
+                           each emitted frame. Default: True.
+        max_frame_size:    Safety limit: emit and clear the buffer if it grows
+                           this large without finding a delimiter. Default: 1 MB.
     """
 
     def __init__(
         self,
-        session_id:     str,
-        direction:      Direction,
-        delimiter:      bytes = b'\n',
-        max_frame_size: int   = 1024 * 1024,
+        session_id:        str,
+        direction:         Direction,
+        delimiter:         bytes = b'\n',
+        include_delimiter: bool  = True,
+        max_frame_size:    int   = 1024 * 1024,
     ) -> None:
         super().__init__(session_id, direction)
         if not delimiter:
             raise ValueError("delimiter must be a non-empty byte sequence")
-        self._delimiter      = delimiter
-        self._max_frame_size = max_frame_size
-        self._buffer         = bytearray()
+        self._delimiter        = delimiter
+        self._include_delimiter = include_delimiter
+        self._max_frame_size   = max_frame_size
+        self._buffer           = bytearray()
 
     @property
     def name(self) -> str:
@@ -73,7 +77,10 @@ class DelimiterFramer(Framer):
                 break  # No complete frame yet
 
             end = idx + len(self._delimiter)
-            frame_bytes = bytes(self._buffer[:end])
+            if self._include_delimiter:
+                frame_bytes = bytes(self._buffer[:end])
+            else:
+                frame_bytes = bytes(self._buffer[:idx])
 
             frames.append(self._make_frame(frame_bytes))
             del self._buffer[:end]
