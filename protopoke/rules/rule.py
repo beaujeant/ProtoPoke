@@ -28,14 +28,20 @@ Examples::
 
 from __future__ import annotations
 
+import codecs
+import importlib.util
+import logging
 import re
 import time
+import types
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
 from ..models import Direction
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +230,97 @@ def _token_to_regex(token: str) -> bytes:
     raise PatternError(f"Cannot convert token to bytes regex: {token!r}")
 
 
+def _decode_pattern_bytes(s: str) -> bytes:
+    """
+    Convert a user-typed bytes-regex pattern string to bytes.
+
+    Handles ``\\xNN``, ``\\n``, ``\\r``, ``\\t`` escape sequences.  Used
+    when compiling a ``"regex"``-type rule pattern.
+    """
+    try:
+        # unicode_escape handles \\xNN / \\n / \\r / \\t → Unicode code points;
+        # latin-1 encodes them back to bytes (works for \\x00–\\xFF).
+        return codecs.decode(s, "unicode_escape").encode("latin-1")
+    except (ValueError, UnicodeDecodeError, UnicodeEncodeError):
+        return s.encode("latin-1", errors="replace")
+
+
+def _decode_replacement_str(s: str) -> bytes:
+    """
+    Decode a regex replacement string to bytes for ``re.sub``.
+
+    Interprets ``\\xNN``, ``\\n``, ``\\r``, ``\\t`` as their byte values.
+    Keeps ``\\g<N>``, ``\\g<name>``, and ``\\N`` (digit backreferences)
+    intact as raw byte sequences so that ``re.sub`` can resolve them.
+    """
+    result = bytearray()
+    i = 0
+    while i < len(s):
+        if s[i] == "\\" and i + 1 < len(s):
+            c = s[i + 1]
+            if c == "x" and i + 3 < len(s):
+                try:
+                    result.append(int(s[i + 2 : i + 4], 16))
+                    i += 4
+                    continue
+                except ValueError:
+                    pass
+            elif c == "n":
+                result.append(0x0A)
+                i += 2
+                continue
+            elif c == "r":
+                result.append(0x0D)
+                i += 2
+                continue
+            elif c == "t":
+                result.append(0x09)
+                i += 2
+                continue
+            elif c == "\\":
+                result.append(ord("\\"))
+                result.append(ord("\\"))
+                i += 2
+                continue
+            # \\g<...> and \\N digit backreferences: keep as-is for re.sub
+            result.append(ord("\\"))
+            result.append(ord(c))
+            i += 2
+            continue
+        result.append(ord(s[i]))
+        i += 1
+    return bytes(result)
+
+
+def compile_regex_pattern(pattern_str: str) -> "re.Pattern[bytes]":
+    """
+    Compile a Python bytes-regex string to a compiled pattern.
+
+    The pattern string uses Python escape sequences (e.g. ``\\x01\\x00``)
+    and standard regex metacharacters.  ``re.DOTALL`` is always enabled.
+
+    Raises:
+        PatternError: If the compiled regex is invalid.
+    """
+    try:
+        pattern_bytes = _decode_pattern_bytes(pattern_str)
+        return re.compile(pattern_bytes, re.DOTALL)
+    except re.error as exc:
+        raise PatternError(
+            f"Invalid regex pattern {pattern_str!r}: {exc}"
+        ) from exc
+
+
+def _load_replace_script(path: str) -> types.ModuleType:
+    """Dynamically load a replacement script from *path*."""
+    spec = importlib.util.spec_from_file_location("_replace_script", path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"Cannot create module spec for: {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod
+
+
 def pattern_to_display(pattern_str: str) -> str:
     """
     Normalise and return the canonical display form of a pattern string.
@@ -260,37 +357,71 @@ class RuleAction(Enum):
 @dataclass
 class ReplaceRule:
     """
-    A find-and-replace rule applied to frame bytes before forwarding.
+    A find-and-replace rule applied to frame bytes.
 
-    The ``pattern_str`` is compiled to a Python bytes regex.  All non-
-    overlapping matches are replaced with ``replacement`` (like
-    ``re.sub``).  Multiple rules can be stacked; they are applied in the
-    order they appear in the RulesEngine list.
+    Three rule types are supported, selected by ``rule_type``:
 
-    Attributes:
-        id:          Unique ID (UUID4 string).
-        label:       Human-readable name shown in the UI.
-        pattern_str: Binary hex pattern (see module docstring).
-        replacement: Bytes to substitute for each match.  May use
-                     regex backreferences (e.g. ``b'\\g<0>'``).
-        direction:   Direction filter.  ``None`` = apply to both directions.
-        enabled:     When ``False``, the rule is skipped entirely.
-        created_at:  Unix timestamp; used to preserve insertion order.
-        compiled:    Compiled regex — set automatically, not serialised.
+    ``"binary"``
+        The original binary hex pattern + hex replacement (see module
+        docstring for pattern syntax).  ``pattern_str`` and
+        ``replacement`` are used.
+
+    ``"regex"``
+        A Python bytes-regex pattern.  ``regex_pattern`` holds the
+        pattern string (with ``\\xNN`` escapes) and ``regex_replacement``
+        holds the replacement string (may use ``\\g<N>`` backreferences
+        and ``\\xNN`` escapes).
+
+    ``"script"``
+        A Python script at ``script_path`` that exports an
+        ``apply(data: bytes) -> bytes`` function.
+
+    Scope flags control which pipeline stages apply the rule:
+
+        ``apply_to_intercept``  — relay (before intercept/forward)
+        ``apply_to_repeater``   — Repeater tab (before send)
+        ``apply_to_sequencer``  — Sequencer (before each step send)
+
+    All three default to ``True``.
     """
 
     id:          str
     label:       str
-    pattern_str: str
-    replacement: bytes
-    direction:   Optional[Direction]        = None
-    enabled:     bool                       = True
-    created_at:  float                      = field(default_factory=time.time)
-    compiled:    Optional["re.Pattern[bytes]"] = field(default=None, repr=False)
+
+    # ---- Binary type -------------------------------------------------------
+    pattern_str: str   = ""
+    replacement: bytes = b""
+
+    # ---- Regex type --------------------------------------------------------
+    regex_pattern:     str = ""
+    regex_replacement: str = ""
+
+    # ---- Script type -------------------------------------------------------
+    script_path: str = ""
+
+    # ---- Common ------------------------------------------------------------
+    rule_type:          str              = "binary"   # "binary" | "regex" | "script"
+    direction:          Optional[Direction] = None
+    enabled:            bool             = True
+    created_at:         float            = field(default_factory=time.time)
+
+    # ---- Scope flags -------------------------------------------------------
+    apply_to_intercept: bool = True
+    apply_to_repeater:  bool = True
+    apply_to_sequencer: bool = True
+
+    # ---- Runtime (not serialised) -----------------------------------------
+    compiled:       Optional["re.Pattern[bytes]"] = field(default=None, repr=False)
+    regex_compiled: Optional["re.Pattern[bytes]"] = field(default=None, repr=False)
+    _script_module: Optional[types.ModuleType]   = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        if self.compiled is None and self.pattern_str:
-            self.compiled = compile_binary_pattern(self.pattern_str)
+        if self.rule_type == "binary":
+            if self.compiled is None and self.pattern_str:
+                self.compiled = compile_binary_pattern(self.pattern_str)
+        elif self.rule_type == "regex":
+            if self.regex_compiled is None and self.regex_pattern:
+                self.regex_compiled = compile_regex_pattern(self.regex_pattern)
 
     @classmethod
     def create(
@@ -300,44 +431,144 @@ class ReplaceRule:
         replacement: bytes,
         direction:   Optional[Direction] = None,
         enabled:     bool = True,
+        *,
+        rule_type:          str  = "binary",
+        regex_pattern:      str  = "",
+        regex_replacement:  str  = "",
+        script_path:        str  = "",
+        apply_to_intercept: bool = True,
+        apply_to_repeater:  bool = True,
+        apply_to_sequencer: bool = True,
     ) -> "ReplaceRule":
         """Factory: generates a unique ID and compiles the pattern."""
         return cls(
             id=str(uuid.uuid4()),
             label=label,
+            rule_type=rule_type,
             pattern_str=pattern_str,
             replacement=replacement,
+            regex_pattern=regex_pattern,
+            regex_replacement=regex_replacement,
+            script_path=script_path,
             direction=direction,
             enabled=enabled,
+            apply_to_intercept=apply_to_intercept,
+            apply_to_repeater=apply_to_repeater,
+            apply_to_sequencer=apply_to_sequencer,
         )
 
-    def apply(self, data: bytes) -> bytes:
+    # ------------------------------------------------------------------
+    # Apply
+    # ------------------------------------------------------------------
+
+    def apply(self, data: bytes, scope: Optional[str] = None) -> bytes:
         """
         Apply the substitution to *data*.
 
-        Returns modified bytes if the pattern matches; otherwise returns
-        *data* unchanged.
+        Args:
+            data:  The bytes to transform.
+            scope: Optional scope name — ``"intercept"``, ``"repeater"``,
+                   or ``"sequencer"``.  When set and the corresponding
+                   ``apply_to_*`` flag is ``False``, the rule is skipped.
+
+        Returns modified bytes, or *data* unchanged if the rule does not
+        apply or does not match.
         """
-        if not self.enabled or self.compiled is None:
+        if not self.enabled:
             return data
-        return self.compiled.sub(self.replacement, data)
+        if scope == "intercept" and not self.apply_to_intercept:
+            return data
+        if scope == "repeater" and not self.apply_to_repeater:
+            return data
+        if scope == "sequencer" and not self.apply_to_sequencer:
+            return data
+
+        if self.rule_type == "binary":
+            if self.compiled is None:
+                return data
+            return self.compiled.sub(self.replacement, data)
+
+        elif self.rule_type == "regex":
+            if self.regex_compiled is None:
+                return data
+            repl_bytes = _decode_replacement_str(self.regex_replacement)
+            return self.regex_compiled.sub(repl_bytes, data)
+
+        elif self.rule_type == "script":
+            return self._apply_script(data)
+
+        return data
+
+    def _apply_script(self, data: bytes) -> bytes:
+        """Run the ``apply(data)`` hook in the configured script."""
+        if not self.script_path:
+            return data
+        if self._script_module is None:
+            try:
+                self._script_module = _load_replace_script(self.script_path)
+            except Exception as exc:
+                logger.error(
+                    "Replace rule %r: failed to load script %s: %s",
+                    self.label, self.script_path, exc,
+                )
+                return data
+        try:
+            fn = getattr(self._script_module, "apply", None)
+            if fn is None:
+                return data
+            result = fn(data)
+            return bytes(result) if isinstance(result, (bytes, bytearray)) else data
+        except Exception as exc:
+            logger.error("Replace rule %r: script apply() raised: %s", self.label, exc)
+            return data
+
+    def reset_script_state(self) -> None:
+        """
+        Unload the cached script module.
+
+        The next call to ``apply()`` will reload the script from disk,
+        re-running all module-level initialisation.  Useful when the script
+        carries state (e.g. a counter) that the operator wants to reset.
+        """
+        self._script_module = None
+
+    # ------------------------------------------------------------------
+    # Matching (binary / regex only)
+    # ------------------------------------------------------------------
 
     def matches(self, data: bytes) -> bool:
         """Return ``True`` if the pattern matches anywhere in *data*."""
-        if self.compiled is None:
-            return False
-        return bool(self.compiled.search(data))
+        if self.rule_type == "binary":
+            if self.compiled is None:
+                return False
+            return bool(self.compiled.search(data))
+        elif self.rule_type == "regex":
+            if self.regex_compiled is None:
+                return False
+            return bool(self.regex_compiled.search(data))
+        return False
+
+    # ------------------------------------------------------------------
+    # Serialisation
+    # ------------------------------------------------------------------
 
     def to_dict(self) -> dict:
         """Serialise to a JSON-compatible dict."""
         return {
-            "id":          self.id,
-            "label":       self.label,
-            "pattern_str": self.pattern_str,
-            "replacement": self.replacement.hex(),
-            "direction":   self.direction.value if self.direction else None,
-            "enabled":     self.enabled,
-            "created_at":  self.created_at,
+            "id":                self.id,
+            "label":             self.label,
+            "rule_type":         self.rule_type,
+            "pattern_str":       self.pattern_str,
+            "replacement":       self.replacement.hex(),
+            "regex_pattern":     self.regex_pattern,
+            "regex_replacement": self.regex_replacement,
+            "script_path":       self.script_path,
+            "direction":         self.direction.value if self.direction else None,
+            "enabled":           self.enabled,
+            "created_at":        self.created_at,
+            "apply_to_intercept": self.apply_to_intercept,
+            "apply_to_repeater":  self.apply_to_repeater,
+            "apply_to_sequencer": self.apply_to_sequencer,
         }
 
     @classmethod
@@ -346,16 +577,23 @@ class ReplaceRule:
         direction: Optional[Direction] = None
         if d.get("direction"):
             direction = Direction(d["direction"])
-        raw = d["replacement"]
+        raw = d.get("replacement", "")
         replacement = bytes.fromhex(raw) if isinstance(raw, str) else bytes(raw)
         return cls(
             id=d["id"],
             label=d["label"],
-            pattern_str=d["pattern_str"],
+            rule_type=d.get("rule_type", "binary"),
+            pattern_str=d.get("pattern_str", ""),
             replacement=replacement,
+            regex_pattern=d.get("regex_pattern", ""),
+            regex_replacement=d.get("regex_replacement", ""),
+            script_path=d.get("script_path", ""),
             direction=direction,
             enabled=d.get("enabled", True),
             created_at=d.get("created_at", time.time()),
+            apply_to_intercept=d.get("apply_to_intercept", True),
+            apply_to_repeater=d.get("apply_to_repeater", True),
+            apply_to_sequencer=d.get("apply_to_sequencer", True),
         )
 
 

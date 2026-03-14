@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from ..models import Frame
+from ..models import Direction, Frame
 from .rule import ReplaceRule, InterceptRule, RuleAction
 
 logger = logging.getLogger(__name__)
@@ -85,9 +85,15 @@ class RulesEngine:
                 return True
         return False
 
-    def apply(self, frame: Frame) -> bytes:
+    def apply(self, frame: Frame, scope: str = "intercept") -> bytes:
         """
         Apply all matching rules to *frame* and return the resulting bytes.
+
+        Args:
+            frame: The frame whose bytes will be transformed.
+            scope: Pipeline stage — ``"intercept"`` (default), ``"repeater"``,
+                   or ``"sequencer"``.  Rules whose corresponding
+                   ``apply_to_*`` flag is ``False`` are skipped.
 
         Returns the original ``frame.raw_bytes`` if no enabled rule matches.
         """
@@ -98,11 +104,45 @@ class RulesEngine:
             if rule.direction is not None and rule.direction is not frame.direction:
                 continue
             before = data
-            data = rule.apply(data)
+            data = rule.apply(data, scope=scope)
             if data != before:
                 logger.debug(
                     "Replace rule %r fired on frame %s (session %s)",
                     rule.label, frame.id[:8], frame.session_id[:8],
+                )
+        return data
+
+    def apply_bytes(
+        self,
+        data:      bytes,
+        direction: "Optional[Direction]",
+        scope:     str,
+    ) -> bytes:
+        """
+        Apply all matching rules to raw *data* (no Frame object).
+
+        Used by the Repeater and Sequencer pipelines where frames are
+        not yet (or not) tracked in a session.
+
+        Args:
+            data:      Bytes to transform.
+            direction: Direction the data will be sent in, used for
+                       per-direction rule filters.  Pass ``None`` to
+                       match rules that have no direction filter.
+            scope:     ``"repeater"`` or ``"sequencer"``.
+
+        Returns the (possibly modified) bytes.
+        """
+        for rule in self._rules:
+            if not rule.enabled:
+                continue
+            if rule.direction is not None and rule.direction is not direction:
+                continue
+            before = data
+            data = rule.apply(data, scope=scope)
+            if data != before:
+                logger.debug(
+                    "Replace rule %r fired (scope=%s)", rule.label, scope
                 )
         return data
 

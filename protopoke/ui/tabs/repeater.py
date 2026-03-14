@@ -14,6 +14,12 @@ from ...models import Direction, Frame
 from ...replay.models import RepeaterRequest, SendRecord
 from ..modals.rename import RenameModal
 
+# Direction mapping for replace-rule scope application
+_DIR_MAP = {
+    "to_server": Direction.CLIENT_TO_SERVER,
+    "to_client": Direction.SERVER_TO_CLIENT,
+}
+
 # Sentinel value used as the Select option for "Custom host:port"
 _CUSTOM = "custom"
 
@@ -595,6 +601,13 @@ class RepeaterTab(Widget):
         req.current_bytes = data
         if hasattr(self.app, "mark_dirty"):
             self.app.mark_dirty()
+
+        # Apply replace rules (repeater scope) before sending
+        try:
+            _direction = _DIR_MAP.get(req.direction, Direction.CLIENT_TO_SERVER)
+            data = self.app.api.rules_engine.apply_bytes(data, _direction, scope="repeater")
+        except Exception:
+            pass  # Don't block the send if rule application fails
 
         self.run_worker(self._async_send(req, data), exclusive=True)
 

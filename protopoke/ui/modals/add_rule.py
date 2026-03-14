@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, Select, Switch, Static
+from textual.widgets import Button, Input, Label, Select, Switch, Static, Checkbox
 from textual.containers import Horizontal, Vertical
 
 from ...rules.rule import (
@@ -12,6 +12,7 @@ from ...rules.rule import (
     InterceptRule,
     RuleAction,
     compile_binary_pattern,
+    compile_regex_pattern,
     PatternError,
 )
 from ...models import Direction
@@ -28,6 +29,12 @@ _ACTION_OPTIONS = [
     ("Forward (bypass queue)", "forward"),
 ]
 
+_RULE_TYPE_OPTIONS = [
+    ("Binary pattern replacement", "binary"),
+    ("Regex replacement", "regex"),
+    ("Custom script", "script"),
+]
+
 
 # ---------------------------------------------------------------------------
 # AddReplaceRuleModal
@@ -35,15 +42,19 @@ _ACTION_OPTIONS = [
 
 class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
     """
-    Modal form to create a new ReplaceRule.
+    Modal form to create or edit a ReplaceRule.
 
-    Dismisses with the new rule, or None if cancelled.
+    Supports three rule types (binary pattern, regex, custom script) with
+    scope checkboxes controlling which pipeline stages apply the rule.
+
+    Dismisses with the rule object, or None if cancelled.
     """
 
     DEFAULT_CSS = """
     AddReplaceRuleModal > Vertical {
-        width: 72;
+        width: 80;
         height: auto;
+        max-height: 90vh;
         border: thick $primary;
         padding: 1 2;
         background: $surface;
@@ -58,10 +69,18 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
         color: $text-muted;
         margin-bottom: 0;
     }
-    AddReplaceRuleModal .tls-row {
+    AddReplaceRuleModal .switch-row {
         height: 3;
         margin-top: 1;
         align: left middle;
+    }
+    AddReplaceRuleModal .scope-row {
+        height: 3;
+        margin-top: 1;
+        align: left middle;
+    }
+    AddReplaceRuleModal .scope-row Checkbox {
+        margin-right: 2;
     }
     AddReplaceRuleModal .buttons {
         height: 3;
@@ -76,6 +95,11 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
         color: $error;
         height: 1;
     }
+    AddReplaceRuleModal .section-divider {
+        color: $text-muted;
+        margin-top: 1;
+        height: 1;
+    }
     """
 
     def __init__(self, existing: ReplaceRule | None = None) -> None:
@@ -84,30 +108,74 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
 
     def compose(self) -> ComposeResult:
         ex = self._existing
+        rule_type = ex.rule_type if ex else "binary"
+
         with Vertical():
             yield Label("Replace Rule", classes="modal-title")
 
+            # ---- Label ----
             yield Label("Label:")
             yield Input(value=ex.label if ex else "", placeholder="My replace rule", id="r-label")
 
-            yield Label("Pattern (hex binary syntax):")
-            yield Input(
-                value=ex.pattern_str if ex else "",
-                placeholder='e.g.  01 00 ??  or  FF [03-09]  or  (01|02) 00',
-                id="r-pattern",
-            )
-            yield Static(
-                "Tokens: AB=literal  ??=any byte  [AB-CD]=range  .{N}=N bytes  (AB|CD)=alt",
-                classes="hint",
+            # ---- Rule type ----
+            yield Label("Mechanism:")
+            yield Select(
+                [(lbl, val) for lbl, val in _RULE_TYPE_OPTIONS],
+                value=rule_type,
+                id="r-type",
             )
 
-            yield Label("Replacement (hex bytes, e.g. DEADBEEF):")
-            yield Input(
-                value=ex.replacement.hex() if ex else "",
-                placeholder="00 or deadbeef or 0d0a",
-                id="r-replacement",
-            )
+            # ---- Binary fields ----
+            with Vertical(id="binary-fields"):
+                yield Label("Pattern (hex binary syntax):")
+                yield Input(
+                    value=ex.pattern_str if ex else "",
+                    placeholder='e.g.  01 00 ??  or  FF [03-09]  or  (01|02) 00',
+                    id="r-pattern",
+                )
+                yield Static(
+                    "Tokens: AB=literal  ??=any byte  [AB-CD]=range  .{N}=N bytes  (AB|CD)=alt",
+                    classes="hint",
+                )
+                yield Label("Replacement (hex bytes, e.g. DEADBEEF):")
+                yield Input(
+                    value=ex.replacement.hex() if ex else "",
+                    placeholder="00 or deadbeef or 0d0a",
+                    id="r-replacement",
+                )
 
+            # ---- Regex fields ----
+            with Vertical(id="regex-fields"):
+                yield Label("Regex pattern (Python bytes regex, e.g. \\x01\\x00.{2}):")
+                yield Input(
+                    value=ex.regex_pattern if ex else "",
+                    placeholder=r"e.g.  \x01\x00.{2}  or  (\xff[\x00-\x09])",
+                    id="r-regex-pattern",
+                )
+                yield Static(
+                    "Uses Python bytes regex syntax with \\xNN escapes (re.DOTALL enabled)",
+                    classes="hint",
+                )
+                yield Label("Replacement (\\xNN bytes and \\g<N> backreferences):")
+                yield Input(
+                    value=ex.regex_replacement if ex else "",
+                    placeholder=r"e.g.  \g<1>\x00\xff  or  \x00",
+                    id="r-regex-replacement",
+                )
+
+            # ---- Script fields ----
+            with Vertical(id="script-fields"):
+                yield Label("Script path (must export apply(data: bytes) -> bytes):")
+                with Horizontal(classes="switch-row"):
+                    yield Input(
+                        value=ex.script_path if ex else "",
+                        placeholder="/path/to/replace_script.py",
+                        id="r-script-path",
+                    )
+                    yield Button("Browse", id="btn-browse-script", compact=True)
+
+            # ---- Direction (common) ----
+            yield Static("─" * 60, classes="section-divider")
             yield Label("Direction:")
             direction_val = ex.direction.value if (ex and ex.direction) else ""
             yield Select(
@@ -116,9 +184,29 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
                 id="r-direction",
             )
 
-            with Horizontal(classes="tls-row"):
+            # ---- Enabled toggle ----
+            with Horizontal(classes="switch-row"):
                 yield Label("Enabled: ")
                 yield Switch(value=ex.enabled if ex else True, id="r-enabled")
+
+            # ---- Scope checkboxes ----
+            yield Label("Apply in:")
+            with Horizontal(classes="scope-row"):
+                yield Checkbox(
+                    "Intercept (relay)",
+                    value=ex.apply_to_intercept if ex else True,
+                    id="r-scope-intercept",
+                )
+                yield Checkbox(
+                    "Repeater",
+                    value=ex.apply_to_repeater if ex else True,
+                    id="r-scope-repeater",
+                )
+                yield Checkbox(
+                    "Sequencer",
+                    value=ex.apply_to_sequencer if ex else True,
+                    id="r-scope-sequencer",
+                )
 
             yield Static("", id="validation-msg")
 
@@ -128,10 +216,37 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
 
     def on_mount(self) -> None:
         self.query_one("#r-label", Input).focus()
+        # Show/hide sections based on current rule type
+        rule_type = self._existing.rule_type if self._existing else "binary"
+        self._show_type_fields(rule_type)
+
+    def _show_type_fields(self, rule_type: str) -> None:
+        """Show/hide field sections based on the selected rule type."""
+        self.query_one("#binary-fields").display = (rule_type == "binary")
+        self.query_one("#regex-fields").display  = (rule_type == "regex")
+        self.query_one("#script-fields").display = (rule_type == "script")
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "r-type" and event.value is not Select.BLANK:
+            self._show_type_fields(str(event.value))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-cancel":
             self.dismiss(None)
+            return
+        if event.button.id == "btn-browse-script":
+            event.stop()
+            current = self.query_one("#r-script-path", Input).value.strip() or None
+            def _on_pick(path: str | None) -> None:
+                if path is not None:
+                    self.query_one("#r-script-path", Input).value = path
+            self.app.push_screen(
+                __import__(
+                    "protopoke.ui.modals.file_picker",
+                    fromlist=["FilePickerModal"],
+                ).FilePickerModal(current),
+                _on_pick,
+            )
             return
         self._try_save()
 
@@ -139,50 +254,137 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
         self._try_save()
 
     def _try_save(self) -> None:
-        label = self.query_one("#r-label", Input).value.strip() or "Rule"
-        pattern = self.query_one("#r-pattern", Input).value.strip()
-        replacement_raw = self.query_one("#r-replacement", Input).value.replace(" ", "").strip()
-        dir_val = str(self.query_one("#r-direction", Select).value)
-        enabled = self.query_one("#r-enabled", Switch).value
         msg_widget = self.query_one("#validation-msg", Static)
 
-        # Validate pattern
-        if pattern:
-            try:
-                compile_binary_pattern(pattern)
-            except PatternError as exc:
-                msg_widget.update(f"Pattern error: {exc}")
-                return
+        label    = self.query_one("#r-label", Input).value.strip() or "Rule"
+        dir_val  = str(self.query_one("#r-direction", Select).value)
+        enabled  = self.query_one("#r-enabled", Switch).value
+        rule_type_val = str(self.query_one("#r-type", Select).value)
 
-        # Validate replacement
-        try:
-            replacement = bytes.fromhex(replacement_raw) if replacement_raw else b""
-        except ValueError:
-            msg_widget.update("Replacement must be valid hex (spaces are stripped).")
-            return
+        scope_intercept = self.query_one("#r-scope-intercept", Checkbox).value
+        scope_repeater  = self.query_one("#r-scope-repeater",  Checkbox).value
+        scope_sequencer = self.query_one("#r-scope-sequencer", Checkbox).value
 
         direction: Direction | None = None
-        if dir_val:
+        if dir_val and dir_val != "Select.BLANK":
             try:
                 direction = Direction(dir_val)
             except ValueError:
                 pass
 
-        msg_widget.update("")
+        # ---- Type-specific validation ----
+        if rule_type_val == "binary":
+            pattern = self.query_one("#r-pattern", Input).value.strip()
+            replacement_raw = self.query_one("#r-replacement", Input).value.replace(" ", "").strip()
 
-        if self._existing:
-            # Mutate and return the same object
-            rule = self._existing
-            rule.label = label
-            rule.pattern_str = pattern
-            rule.replacement = replacement
-            rule.direction = direction
-            rule.enabled = enabled
-            # Recompile
-            from ...rules.rule import compile_binary_pattern as _compile
-            rule.compiled = _compile(pattern) if pattern else None
+            if pattern:
+                try:
+                    compile_binary_pattern(pattern)
+                except PatternError as exc:
+                    msg_widget.update(f"Pattern error: {exc}")
+                    return
+
+            try:
+                replacement = bytes.fromhex(replacement_raw) if replacement_raw else b""
+            except ValueError:
+                msg_widget.update("Replacement must be valid hex (spaces are stripped).")
+                return
+
+            msg_widget.update("")
+            if self._existing:
+                rule = self._existing
+                rule.label      = label
+                rule.rule_type  = "binary"
+                rule.pattern_str = pattern
+                rule.replacement = replacement
+                rule.direction  = direction
+                rule.enabled    = enabled
+                rule.apply_to_intercept = scope_intercept
+                rule.apply_to_repeater  = scope_repeater
+                rule.apply_to_sequencer = scope_sequencer
+                rule.compiled = compile_binary_pattern(pattern) if pattern else None
+                rule.regex_compiled = None
+            else:
+                rule = ReplaceRule.create(
+                    label, pattern, replacement,
+                    direction=direction, enabled=enabled,
+                    rule_type="binary",
+                    apply_to_intercept=scope_intercept,
+                    apply_to_repeater=scope_repeater,
+                    apply_to_sequencer=scope_sequencer,
+                )
+
+        elif rule_type_val == "regex":
+            regex_pattern = self.query_one("#r-regex-pattern", Input).value.strip()
+            regex_replacement = self.query_one("#r-regex-replacement", Input).value
+
+            if regex_pattern:
+                try:
+                    compile_regex_pattern(regex_pattern)
+                except PatternError as exc:
+                    msg_widget.update(f"Regex error: {exc}")
+                    return
+
+            msg_widget.update("")
+            if self._existing:
+                rule = self._existing
+                rule.label            = label
+                rule.rule_type        = "regex"
+                rule.regex_pattern    = regex_pattern
+                rule.regex_replacement = regex_replacement
+                rule.direction        = direction
+                rule.enabled          = enabled
+                rule.apply_to_intercept = scope_intercept
+                rule.apply_to_repeater  = scope_repeater
+                rule.apply_to_sequencer = scope_sequencer
+                rule.regex_compiled = compile_regex_pattern(regex_pattern) if regex_pattern else None
+                rule.compiled = None
+            else:
+                rule = ReplaceRule.create(
+                    label, "", b"",
+                    direction=direction, enabled=enabled,
+                    rule_type="regex",
+                    regex_pattern=regex_pattern,
+                    regex_replacement=regex_replacement,
+                    apply_to_intercept=scope_intercept,
+                    apply_to_repeater=scope_repeater,
+                    apply_to_sequencer=scope_sequencer,
+                )
+
+        elif rule_type_val == "script":
+            script_path = self.query_one("#r-script-path", Input).value.strip()
+            if not script_path:
+                msg_widget.update("Script path is required.")
+                return
+
+            msg_widget.update("")
+            if self._existing:
+                rule = self._existing
+                rule.label       = label
+                rule.rule_type   = "script"
+                rule.script_path = script_path
+                rule.direction   = direction
+                rule.enabled     = enabled
+                rule.apply_to_intercept = scope_intercept
+                rule.apply_to_repeater  = scope_repeater
+                rule.apply_to_sequencer = scope_sequencer
+                rule.compiled = None
+                rule.regex_compiled = None
+                rule._script_module = None  # force reload on next apply
+            else:
+                rule = ReplaceRule.create(
+                    label, "", b"",
+                    direction=direction, enabled=enabled,
+                    rule_type="script",
+                    script_path=script_path,
+                    apply_to_intercept=scope_intercept,
+                    apply_to_repeater=scope_repeater,
+                    apply_to_sequencer=scope_sequencer,
+                )
+
         else:
-            rule = ReplaceRule.create(label, pattern, replacement, direction=direction, enabled=enabled)
+            msg_widget.update("Please select a rule type.")
+            return
 
         self.dismiss(rule)
 

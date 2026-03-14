@@ -794,6 +794,13 @@ class ProxyAPI:
             _src_id = seq.source_session_id
 
             async def send_fn(data: bytes, direction: str = "client_to_server") -> list[bytes]:
+                # Apply replace rules with sequencer scope before sending
+                _dir = (
+                    Direction.CLIENT_TO_SERVER
+                    if direction == "client_to_server"
+                    else Direction.SERVER_TO_CLIENT
+                )
+                data = self.rules_engine.apply_bytes(data, _dir, scope="sequencer")
                 send_time = _time.time()
                 if direction == "server_to_client":
                     ok = await self.inject_to_client(_src_id, data)
@@ -844,6 +851,10 @@ class ProxyAPI:
                         "session (set Session ID in the run bar); skipping step."
                     )
                     return []
+
+                # Apply replace rules with sequencer scope before sending
+                _dir = Direction.CLIENT_TO_SERVER
+                data = self.rules_engine.apply_bytes(data, _dir, scope="sequencer")
 
                 # Verify the persistent connection is still alive
                 if _conn_id[0]:
