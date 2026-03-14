@@ -652,6 +652,35 @@ class ProxyAPI:
             receive_timeout=recv_timeout,
         )
 
+        # Add sent and received frames to the session so they appear in the Logs tab.
+        session = self.session_registry.get(session_id)
+        if session and record.sent_bytes:
+            sent_frame = Frame.create(
+                session_id=session_id,
+                direction=Direction.CLIENT_TO_SERVER,
+                raw_bytes=record.sent_bytes,
+                sequence_number=len(session.frames),
+                framer_name="repeater",
+            )
+            session.add_frame(sent_frame)
+            await self.event_bus.publish(
+                FrameCapturedEvent(frame=sent_frame, session=session.info)
+            )
+        for pkt in record.response_packets:
+            session = self.session_registry.get(session_id)
+            if session and pkt:
+                recv_frame = Frame.create(
+                    session_id=session_id,
+                    direction=Direction.SERVER_TO_CLIENT,
+                    raw_bytes=pkt,
+                    sequence_number=len(session.frames),
+                    framer_name="repeater",
+                )
+                session.add_frame(recv_frame)
+                await self.event_bus.publish(
+                    FrameCapturedEvent(frame=recv_frame, session=session.info)
+                )
+
         # If the session transitioned to CLOSED during the send, fire the event
         session_after = self.session_registry.get(session_id)
         if was_active and session_after is not None and not session_after.is_active():
@@ -674,7 +703,22 @@ class ProxyAPI:
             ``False`` if the session has no active client writer (closed or
                       not found).
         """
-        return await self.engine.inject_to_client(session_id, data)
+        ok = await self.engine.inject_to_client(session_id, data)
+        if ok:
+            session = self.session_registry.get(session_id)
+            if session and data:
+                frame = Frame.create(
+                    session_id=session_id,
+                    direction=Direction.SERVER_TO_CLIENT,
+                    raw_bytes=data,
+                    sequence_number=len(session.frames),
+                    framer_name="injected",
+                )
+                session.add_frame(frame)
+                await self.event_bus.publish(
+                    FrameCapturedEvent(frame=frame, session=session.info)
+                )
+        return ok
 
     async def inject_to_server(self, session_id: str, data: bytes) -> bool:
         """
@@ -691,7 +735,22 @@ class ProxyAPI:
                       not found) — callers should fall back to
                       :meth:`send_frame` in this case.
         """
-        return await self.engine.inject_to_server(session_id, data)
+        ok = await self.engine.inject_to_server(session_id, data)
+        if ok:
+            session = self.session_registry.get(session_id)
+            if session and data:
+                frame = Frame.create(
+                    session_id=session_id,
+                    direction=Direction.CLIENT_TO_SERVER,
+                    raw_bytes=data,
+                    sequence_number=len(session.frames),
+                    framer_name="injected",
+                )
+                session.add_frame(frame)
+                await self.event_bus.publish(
+                    FrameCapturedEvent(frame=frame, session=session.info)
+                )
+        return ok
 
     async def send_frame(
         self,
@@ -723,7 +782,17 @@ class ProxyAPI:
             :class:`~protopoke.replay.models.SendRecord` with sent bytes,
             response bytes, success flag, and any error message.
         """
-        return await self.replay_engine.send_frame(
+        # Create a one-shot session so the sent/received frames appear in the Logs tab.
+        session = self.session_registry.create(
+            client_host="repeater",
+            client_port=0,
+            server_host=host,
+            server_port=port,
+        )
+        self.session_registry.mark_active(session.id)
+        await self.event_bus.publish(SessionOpenedEvent(session=session.info))
+
+        record = await self.replay_engine.send_frame(
             data=data,
             host=host,
             port=port,
@@ -731,6 +800,37 @@ class ProxyAPI:
             connect_timeout=connect_timeout,
             receive_timeout=receive_timeout,
         )
+
+        if record.sent_bytes:
+            sent_frame = Frame.create(
+                session_id=session.id,
+                direction=Direction.CLIENT_TO_SERVER,
+                raw_bytes=record.sent_bytes,
+                sequence_number=len(session.frames),
+                framer_name="repeater",
+            )
+            session.add_frame(sent_frame)
+            await self.event_bus.publish(
+                FrameCapturedEvent(frame=sent_frame, session=session.info)
+            )
+        for pkt in record.response_packets:
+            if pkt:
+                recv_frame = Frame.create(
+                    session_id=session.id,
+                    direction=Direction.SERVER_TO_CLIENT,
+                    raw_bytes=pkt,
+                    sequence_number=len(session.frames),
+                    framer_name="repeater",
+                )
+                session.add_frame(recv_frame)
+                await self.event_bus.publish(
+                    FrameCapturedEvent(frame=recv_frame, session=session.info)
+                )
+
+        self.session_registry.mark_closed(session.id)
+        await self.event_bus.publish(SessionClosedEvent(session=session.info))
+
+        return record
 
     # ------------------------------------------------------------------
     # Sequencer

@@ -203,6 +203,23 @@ class DirectionalRelay:
             return
 
         data_to_send = unit.effective_bytes()
+
+        # If the operator modified the frame in the intercept tab, log the
+        # modified bytes as a separate frame so the Logs tab shows what was
+        # actually sent alongside the original capture.
+        if unit.action is InterceptAction.MODIFIED:
+            modified_frame = Frame.create(
+                session_id=frame.session_id,
+                direction=frame.direction,
+                raw_bytes=data_to_send,
+                sequence_number=len(self._session.frames),
+                framer_name="intercept",
+            )
+            self._session.add_frame(modified_frame)
+            await self._event_bus.publish(
+                FrameCapturedEvent(frame=modified_frame, session=self._session.info)
+            )
+
         try:
             self._dest_writer.write(data_to_send)
             await self._dest_writer.drain()
