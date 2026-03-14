@@ -133,7 +133,7 @@ class InterceptTab(Widget):
         # Intercept rules
         with Vertical(id="intercept-rules-pane"):
             yield Static(
-                "  Intercept Rules  [first match wins · no rules → intercept all]",
+                "  Intercept Rules  \[first match wins · no rules → intercept all]",
                 classes="pane-header",
             )
             yield RuleTable(
@@ -155,7 +155,7 @@ class InterceptTab(Widget):
         # Replace rules
         with Vertical(id="replace-rules-pane"):
             yield Static(
-                "  Replace Rules  [applied in order — scopes: I=Intercept R=Repeater S=Sequencer]",
+                "  Replace Rules  \[applied in order — scopes: I=Intercept R=Repeater S=Sequencer]",
                 classes="pane-header",
             )
             yield RuleTable(
