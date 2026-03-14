@@ -84,8 +84,8 @@ def render_field_tree(
     if msg.protocol_name:
         title = f" {msg.protocol_name} / {msg.message_type} "
 
-    top = "┌─" + title + "─" * max(0, width - 2 - len(title)) + "┐"
-    bot = "└" + "─" * (width - 2) + "┘"
+    top = "┌─" + title + "─" * max(0, width - 1 - len(title)) + "┐"
+    bot = "└" + "─" * width + "┘"
 
     lines = [top]
 
