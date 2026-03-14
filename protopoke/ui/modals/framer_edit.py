@@ -9,6 +9,8 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Static
 from textual.containers import Horizontal, Vertical
 
+from .file_picker import FilePickerModal
+
 
 class FramerSettings(TypedDict):
     framer_name: str
@@ -88,6 +90,10 @@ class FramerEditModal(ModalScreen):
     }
     FramerEditModal Button {
         margin-left: 1;
+    }
+    FramerEditModal .btn-browse {
+        width: 10;
+        min-width: 10;
     }
     """
 
@@ -206,6 +212,7 @@ class FramerEditModal(ModalScreen):
                         placeholder="/path/to/my_framer.py",
                         classes="field-input",
                     )
+                    yield Button("Browse", id="browse-custom-path", classes="btn-browse")
 
             # ---- buttons ----
             with Horizontal(classes="buttons"):
@@ -238,7 +245,13 @@ class FramerEditModal(ModalScreen):
                 self._show_section(str(val))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-ok":
+        if event.button.id == "browse-custom-path":
+            current = self.query_one("#custom-path", Input).value.strip() or None
+            def _on_pick(path: str | None) -> None:
+                if path is not None:
+                    self.query_one("#custom-path", Input).value = path
+            self.app.push_screen(FilePickerModal(current), _on_pick)
+        elif event.button.id == "btn-ok":
             self.dismiss(self._build_result())
         else:
             self.dismiss(None)
