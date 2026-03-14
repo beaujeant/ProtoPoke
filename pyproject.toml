@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "cryptography>=41",  # TLS MITM: CA generation, cert signing
     "textual>=0.80",     # TUI framework
+    "pyyaml>=6.0",       # YAML parsing in protocol parser
 ]
 
 [project.scripts]
