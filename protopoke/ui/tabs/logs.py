@@ -200,6 +200,8 @@ class LogsTab(Widget):
         """Append a new frame if it belongs to the currently displayed session."""
         if self._current_session_id != frame.session_id:
             return
+        if frame.id in self._frame_rows:
+            return
         dt = self.query_one("#frames-table", DataTable)
         is_first = dt.row_count == 0
         self._add_frame_row(dt, frame)
