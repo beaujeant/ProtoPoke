@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.events import Click, Key
+from textual.events import Click
 from textual.widget import Widget
 from textual.widgets import DataTable, Static, Button
 from textual.containers import Horizontal, Vertical
@@ -30,7 +30,8 @@ class LogsTab(Widget):
       • Single click or arrow keys highlight a row → auto-selects it.
       • First session created is selected automatically.
       • First frame captured for the current session is selected automatically.
-      • Shift + ↑/↓ in the Frames table extends the selection (range).
+      • Shift+click in the Frames table extends the selection range from the
+        anchor row to the clicked row.
         The direction of the first selected frame determines which direction is
         sent when using "→ Sequencer".
     """
@@ -260,26 +261,6 @@ class LogsTab(Widget):
         except Exception:
             pass
 
-    # ------------------------------------------------------------------
-    # Key events — detect shift for range selection
-    # ------------------------------------------------------------------
-
-    def on_key(self, event: Key) -> None:
-        """
-        Set _extending_selection before the frames DataTable processes the key.
-
-        Because Textual dispatches Key messages before internal widget handling,
-        this flag is visible in the subsequent DataTable.RowHighlighted event
-        (which is posted to the queue after the key handler runs).
-        """
-        focused = self.app.focused
-        if focused and getattr(focused, "id", None) == "frames-table":
-            if event.key in ("shift+up", "shift+down", "shift+home", "shift+end",
-                             "shift+pageup", "shift+pagedown"):
-                self._extending_selection = True
-            else:
-                self._extending_selection = False
-
     def on_click(self, event: Click) -> None:
         """
         Detect Shift+click on the frames table to extend the selection range.
@@ -309,8 +290,8 @@ class LogsTab(Widget):
         """
         Single click or arrow key navigation selects a row immediately.
 
-        For the frames table, shift+arrow extends the selection range from the
-        anchor row to the newly highlighted row.
+        For the frames table, shift+click extends the selection range from the
+        anchor row to the clicked row.
         """
         if event.row_key is None:
             return
