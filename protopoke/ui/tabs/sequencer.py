@@ -10,11 +10,12 @@ from textual.widgets import Button, DataTable, Input, Label, Static, Switch, Tex
 from textual.containers import Horizontal, Vertical
 
 from ...sequencer.models import HistoryEntry, SequencerSession, SequenceStep
+from ..utils.frame_codec import hex_template_to_str, str_to_hex_template
 
 
 class SequencerTab(Widget):
     """
-    Tab 6 — Sequencer: send ordered packet chains with ##VAR## variable
+    Tab 6 — Sequencer: send ordered packet chains with {{VAR}} variable
     substitution and an optional Python script for response-driven extraction.
 
     Layout (all panes 100% width, stacked vertically):
@@ -25,14 +26,14 @@ class SequencerTab(Widget):
       │ PACKET LIST  (~25%)                                     │
       │  #   Label      Len   Preview                           │
       │  1   Handshake  12    01 02 03 04 05 …                  │
-      │  2   Login      40    01 0a ##SESS_ID## …               │
+      │  2   Login      40    01 0a {{SESS_ID}} …               │
       ├─────────────────────────────────────────────────────────┤
       │ [↑ Up] [↓ Down] [+ Add] [- Remove]         h=3         │
       ├─────────────────────────────────────────────────────────┤
       │ STEP EDITOR  (~20%)                                     │
-      │  Label: [___________________]                           │
+      │  Label: [___________________]          [HEX] / [STR]   │
       │  ┌─────────────────────────────────────────────────┐   │
-      │  │ hex content with ##VAR## placeholders           │   │
+      │  │ hex content with {{VAR}} placeholders           │   │
       │  └─────────────────────────────────────────────────┘   │
       ├─────────────────────────────────────────────────────────┤
       │ SEND / RECV HISTORY  (1fr)                              │
@@ -98,6 +99,10 @@ class SequencerTab(Widget):
     SequencerTab #step-label-bar Input {
         width: 1fr;
     }
+    SequencerTab #btn-step-mode {
+        width: 5;
+        margin-left: 1;
+    }
     SequencerTab #step-hex-editor {
         height: 1fr;
     }
@@ -146,6 +151,8 @@ class SequencerTab(Widget):
         self._current_idx: int = -1
         self._selected_step_idx: int = -1
         self._running: bool = False
+        # "hex" or "str" — controls how the step editor displays / parses content
+        self._step_editor_mode: str = "hex"
 
     # ------------------------------------------------------------------
     # Compose
@@ -171,10 +178,15 @@ class SequencerTab(Widget):
 
         # Step editor
         with Vertical(id="step-editor-pane"):
-            yield Static("  Step Editor  (hex pairs · ##VAR## · ##VAR:uint32be_add(1)##)", classes="pane-header")
+            yield Static(
+                "  Step Editor  ({{VAR}} · {{VAR:uint32be_add(1)}} · {{VAR:xor(ff)}} · {{VAR:script(expr)}})",
+                classes="pane-header",
+                markup=False,
+            )
             with Horizontal(id="step-label-bar"):
                 yield Label("Label:")
                 yield Input("", id="step-label-input", placeholder="step name")
+                yield Button("HEX", id="btn-step-mode", compact=True)
             yield TextArea("", id="step-hex-editor", theme="monokai")
 
         # History
@@ -287,7 +299,11 @@ class SequencerTab(Widget):
 
     def _load_step_into_editor(self, step: SequenceStep) -> None:
         self.query_one("#step-label-input", Input).value = step.label
-        self.query_one("#step-hex-editor",  TextArea).load_text(step.raw_hex)
+        if self._step_editor_mode == "str":
+            content = hex_template_to_str(step.raw_hex)
+        else:
+            content = step.raw_hex
+        self.query_one("#step-hex-editor", TextArea).load_text(content)
 
     def _clear_step_editor(self) -> None:
         self.query_one("#step-label-input", Input).value = ""
@@ -301,8 +317,16 @@ class SequencerTab(Widget):
         if self._selected_step_idx >= len(seq.steps):
             return
         step = seq.steps[self._selected_step_idx]
-        step.label   = self.query_one("#step-label-input", Input).value
-        step.raw_hex = self.query_one("#step-hex-editor",  TextArea).text
+        step.label = self.query_one("#step-label-input", Input).value
+        raw_text   = self.query_one("#step-hex-editor",  TextArea).text
+        if self._step_editor_mode == "str":
+            try:
+                step.raw_hex = str_to_hex_template(raw_text)
+            except ValueError as exc:
+                self.notify(f"STR parse error: {exc}", severity="error")
+                return
+        else:
+            step.raw_hex = raw_text
         # Update the row in the table
         try:
             dt = self.query_one("#step-table", DataTable)
@@ -384,6 +408,10 @@ class SequencerTab(Widget):
             event.stop()
             self._do_new_sequence()
 
+        elif bid == "btn-step-mode":
+            event.stop()
+            self._toggle_step_editor_mode()
+
         elif bid.startswith("seq-tab-"):
             event.stop()
             idx = int(bid.removeprefix("seq-tab-"))
@@ -419,6 +447,32 @@ class SequencerTab(Widget):
             if 0 <= self._current_idx < len(self._sequences):
                 self._sequences[self._current_idx].history.clear()
                 self.query_one("#history-table", DataTable).clear()
+
+    def _toggle_step_editor_mode(self) -> None:
+        """Switch the step editor between HEX and STR (python-like) display."""
+        editor = self.query_one("#step-hex-editor", TextArea)
+        current_text = editor.text
+
+        if self._step_editor_mode == "hex":
+            # Convert current HEX content → STR and switch mode
+            try:
+                new_text = hex_template_to_str(current_text)
+            except ValueError as exc:
+                self.notify(f"Cannot switch to STR: {exc}", severity="error")
+                return
+            self._step_editor_mode = "str"
+            self.query_one("#btn-step-mode", Button).label = "STR"
+        else:
+            # Convert current STR content → HEX and switch mode
+            try:
+                new_text = str_to_hex_template(current_text)
+            except ValueError as exc:
+                self.notify(f"Cannot switch to HEX: {exc}", severity="error")
+                return
+            self._step_editor_mode = "hex"
+            self.query_one("#btn-step-mode", Button).label = "HEX"
+
+        editor.load_text(new_text)
 
     def _do_new_sequence(self) -> None:
         from ...sequencer.models import SequencerSession
@@ -545,14 +599,17 @@ class SequencerTab(Widget):
             seq = self._sequences[self._current_idx]
             for entry in seq.history:
                 if entry.id == entry_id:
-                    # Show the raw bytes in the hex editor (read-only preview)
-                    pairs = [
+                    # Show the raw bytes in the editor (respects current mode)
+                    hex_pairs = " ".join(
                         entry.raw_bytes.hex()[i : i + 2]
                         for i in range(0, len(entry.raw_bytes.hex()), 2)
-                    ]
-                    self.query_one("#step-hex-editor", TextArea).load_text(
-                        " ".join(pairs)
                     )
+                    if self._step_editor_mode == "str":
+                        from ..utils.frame_codec import hex_template_to_str as _h2s
+                        display = _h2s(hex_pairs)
+                    else:
+                        display = hex_pairs
+                    self.query_one("#step-hex-editor", TextArea).load_text(display)
                     self.query_one("#step-label-input", Input).value = (
                         f"[{entry.direction}] {entry.step_label}"
                     )

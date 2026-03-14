@@ -1,26 +1,26 @@
 """
-Variable substitution for ##VAR## placeholders in sequencer hex strings.
+Variable substitution for {{VAR}} placeholders in sequencer hex templates.
 
-Placeholder syntax (embedded as whitespace-separated tokens in a hex string):
+Placeholder syntax (embedded as whitespace-separated tokens in a hex template):
 
-    ##VARNAME##
+    {{VARNAME}}
         Direct substitution — replaces the token with the raw bytes stored
         under VARNAME in the variable store (hex-encoded).
 
-    ##VARNAME:uint8_add(1)##
-    ##VARNAME:uint16le_add(1)##
-    ##VARNAME:uint16be_add(1)##
-    ##VARNAME:uint32le_add(1)##
-    ##VARNAME:uint32be_add(1)##
-    ##VARNAME:uint64le_add(1)##
-    ##VARNAME:uint64be_add(1)##
+    {{VARNAME:uint8_add(1)}}
+    {{VARNAME:uint16le_add(1)}}
+    {{VARNAME:uint16be_add(1)}}
+    {{VARNAME:uint32le_add(1)}}
+    {{VARNAME:uint32be_add(1)}}
+    {{VARNAME:uint64le_add(1)}}
+    {{VARNAME:uint64be_add(1)}}
         Decode the stored bytes as the given unsigned integer type, apply the
         arithmetic (add, sub, or xor), re-encode, and substitute.
 
-    ##VARNAME:xor(ff)##
+    {{VARNAME:xor(ff)}}
         XOR every byte of the variable with the single hex byte argument.
 
-    ##VARNAME:script(value[::-1])##
+    {{VARNAME:script(value[::-1])}}
         Evaluate the Python expression with ``value`` bound to the variable's
         bytes.  The expression must return ``bytes``.
 
@@ -37,17 +37,18 @@ import re
 import struct
 from typing import Dict
 
-# Matches a complete placeholder token: ##NAME## or ##NAME:transform##
-_PLACEHOLDER_RE = re.compile(r"^##([^#]+)##$")
+# Matches a complete placeholder token: {{NAME}} or {{NAME:transform}}
+# The token must be the *entire* whitespace-separated token in the hex template.
+_PLACEHOLDER_RE = re.compile(r"^\{\{([^{}]+)\}\}$")
 
 
 def resolve_hex(raw_hex: str, variables: Dict[str, str]) -> bytes:
     """
-    Resolve all ``##VAR##`` placeholders in *raw_hex* and return the final bytes.
+    Resolve all ``{{VAR}}`` placeholders in *raw_hex* and return the final bytes.
 
     The hex string is split on whitespace.  Each token is either:
       - A 2-character hex pair  → kept as-is.
-      - A ``##NAME[:{transform}]##`` placeholder → replaced with the variable's
+      - A ``{{NAME[:{transform}]}}`` placeholder → replaced with the variable's
         bytes (after optional transform), expanded as space-separated hex pairs.
 
     Args:
@@ -83,7 +84,7 @@ def resolve_hex(raw_hex: str, variables: Dict[str, str]) -> bytes:
 
 def _resolve_placeholder(inner: str, variables: Dict[str, str]) -> str:
     """
-    Resolve one placeholder (the text between the ``##`` delimiters).
+    Resolve one placeholder (the text between the ``{{`` and ``}}`` delimiters).
 
     Returns:
         Hex string of the resolved (and optionally transformed) bytes.
@@ -101,7 +102,7 @@ def _resolve_placeholder(inner: str, variables: Dict[str, str]) -> str:
 
     if name not in variables:
         raise ValueError(
-            f"Sequencer variable '##{ name }##' is not defined. "
+            f"Sequencer variable '{{{{ {name} }}}}' is not defined. "
             f"Define it in the variable store or capture it via the script."
         )
 
