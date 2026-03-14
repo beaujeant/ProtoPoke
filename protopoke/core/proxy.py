@@ -265,12 +265,14 @@ class ProxyEngine:
         await self.event_bus.publish(SessionOpenedEvent(session=session.info))
 
         # Create one framer per direction.
-        # If a custom framer file is configured, load its class and instantiate
-        # directly; otherwise fall back to the built-in registry.
+        # If a custom framer file is configured, load the factory and
+        # instantiate both adapters with a shared state dict so the user
+        # script can correlate client→server and server→client parsing.
         if self.config.custom_framer_path:
             framer_factory = load_framer_from_file(self.config.custom_framer_path)
-            client_framer = framer_factory(session.id, Direction.CLIENT_TO_SERVER)
-            server_framer = framer_factory(session.id, Direction.SERVER_TO_CLIENT)
+            shared_state: dict = {}
+            client_framer = framer_factory(session.id, Direction.CLIENT_TO_SERVER, shared_state)
+            server_framer = framer_factory(session.id, Direction.SERVER_TO_CLIENT, shared_state)
         else:
             client_framer = create_framer(
                 self.config.framer_name,

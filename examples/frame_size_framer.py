@@ -17,88 +17,74 @@ Config tab → Edit Framer → Custom, then set:
 
   Script path : /path/to/this/file/frame_size_framer.py
 
-That is all — no class name needed.  ProtoPoke discovers the class
-automatically and wraps it.
+That is all.
 
-Writing your own framer
------------------------
-A custom framer is just a plain Python class.  No protopoke imports, no
-inheritance.  Implement two methods:
+How a custom framer works
+--------------------------
+A custom framer is two plain functions — no class, no imports from ProtoPoke:
 
-    class MyFramer:
-        def on_data(self, data: bytes) -> list[bytes]:
-            # called for every raw chunk from the socket
-            # return a list of complete message payloads (may be empty)
-            ...
+    def on_data(data: bytes, state: dict, direction: str) -> list[bytes]:
+        ...
 
-        def on_flush(self) -> list[bytes]:
-            # called when the connection closes
-            # return any partially buffered bytes (or an empty list)
-            ...
+    def on_flush(state: dict, direction: str) -> list[bytes]:
+        ...
 
-ProtoPoke handles session attribution, direction, and sequence numbers.
+``state`` is a plain dict shared between BOTH directions for the lifetime
+of the session.  Use ``direction`` ("c2s" or "s2c") as a key to keep
+per-direction buffers separate:
+
+    buf = state.setdefault(direction, bytearray())
+
+Cross-direction correlation is free — anything written under a plain key in
+one direction call is visible in the next call for the other direction.
 """
 
 from __future__ import annotations
 
 import struct
 
+_HEADER_SIZE   = 5       # must have at least 5 bytes before reading the length field
+_LENGTH_OFFSET = 3       # byte offset of the uint16 total-length field
+_MAX_FRAME     = 64 * 1024
 
-class FrameSizeFramer:
+
+def on_data(data: bytes, state: dict, direction: str) -> list[bytes]:
     """
-    Custom framer that derives the total frame size from bytes 3–4 of the frame.
+    Accumulate *data* and return complete frames.
 
-    Bytes at offset 3 and 4 (0-indexed) are interpreted as a big-endian
-    unsigned 16-bit integer (*total* frame length, inclusive of the header).
+    Reads the big-endian uint16 at bytes 3–4 of the frame header to
+    determine total frame length (header + payload), then buffers until
+    that many bytes have arrived.
     """
+    buf = state.setdefault(direction, bytearray())
+    buf.extend(data)
+    frames: list[bytes] = []
 
-    _HEADER_SIZE   = 5       # must have at least 5 bytes before reading the length field
-    _LENGTH_OFFSET = 3       # byte offset of the uint16 length field
-    _MAX_FRAME     = 64 * 1024
+    while True:
+        if len(buf) < _HEADER_SIZE:
+            break
 
-    def __init__(self) -> None:
-        self._buffer: bytearray = bytearray()
+        (total_length,) = struct.unpack_from(">H", buf, _LENGTH_OFFSET)
 
-    def on_data(self, data: bytes) -> list[bytes]:
-        """
-        Accumulate *data* and return complete frames.
+        if total_length > _MAX_FRAME or total_length < _HEADER_SIZE:
+            # Corrupt / implausible length — emit everything and restart.
+            frames.append(bytes(buf))
+            buf.clear()
+            break
 
-        Returns an empty list if more bytes are needed to complete a frame.
-        """
-        self._buffer.extend(data)
-        frames: list[bytes] = []
+        if len(buf) < total_length:
+            break  # incomplete frame — wait for more data
 
-        while True:
-            if len(self._buffer) < self._HEADER_SIZE:
-                break
+        frames.append(bytes(buf[:total_length]))
+        del buf[:total_length]
 
-            (total_length,) = struct.unpack_from(">H", self._buffer, self._LENGTH_OFFSET)
+    return frames
 
-            if total_length > self._MAX_FRAME or total_length < self._HEADER_SIZE:
-                # Corrupt / implausible length — emit everything and restart.
-                frames.append(bytes(self._buffer))
-                self._buffer.clear()
-                break
 
-            if len(self._buffer) < total_length:
-                break  # incomplete frame — wait for more data
-
-            frames.append(bytes(self._buffer[:total_length]))
-            del self._buffer[:total_length]
-
-        return frames
-
-    def on_flush(self) -> list[bytes]:
-        """Emit any remaining buffered bytes when the connection closes."""
-        if self._buffer:
-            data = bytes(self._buffer)
-            self._buffer.clear()
-            return [data]
-        return []
-
-    def reset(self) -> None:
-        """Clear internal buffer (used by the smoke-test below)."""
-        self._buffer.clear()
+def on_flush(state: dict, direction: str) -> list[bytes]:
+    """Emit any remaining buffered bytes when the connection closes."""
+    buf = state.pop(direction, bytearray())
+    return [bytes(buf)] if buf else []
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +93,8 @@ class FrameSizeFramer:
 if __name__ == "__main__":
     import sys
 
-    framer = FrameSizeFramer()
+    DIR = "c2s"
+    state: dict = {}
 
     # Build a 20-byte frame: header (5 bytes) + 15-byte payload.
     # Bytes 3-4 carry the total length: 0x00 0x14 = 20.
@@ -117,13 +104,20 @@ if __name__ == "__main__":
     assert len(raw) == 20
 
     # Feed in two chunks to exercise buffering.
-    assert framer.on_data(raw[:10]) == []
-    result = framer.on_data(raw[10:])
-    assert len(result) == 1 and result[0] == raw, f"T1 failed: {result}"
+    assert on_data(raw[:10], state, DIR) == [], "T1a: should buffer partial frame"
+    result = on_data(raw[10:], state, DIR)
+    assert len(result) == 1 and result[0] == raw, f"T1b failed: {result}"
 
     # Two back-to-back frames in one call.
-    framer.reset()
-    result = framer.on_data(raw + raw)
+    state.pop(DIR, None)
+    result = on_data(raw + raw, state, DIR)
     assert len(result) == 2, f"T2 failed: {result}"
+
+    # Shared state between directions.
+    shared: dict = {}
+    on_data(raw, shared, "c2s")
+    shared["seq"] = 1
+    on_data(raw, shared, "s2c")
+    assert shared.get("seq") == 1, "T3: shared state not visible cross-direction"
 
     print("All tests passed.", file=sys.stderr)

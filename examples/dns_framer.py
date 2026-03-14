@@ -23,26 +23,38 @@ Config tab → Edit Framer → Custom, then set:
 
   Script path : /path/to/examples/dns_framer.py
 
-That is all — no class name needed.  ProtoPoke discovers the class
-automatically and wraps it.
+That is all.
 
-Writing your own framer
------------------------
-A custom framer is just a plain Python class.  No protopoke imports, no
-inheritance.  Implement two methods:
+How a custom framer works
+--------------------------
+A custom framer is two plain functions — no class, no imports from ProtoPoke:
 
-    class MyFramer:
-        def on_data(self, data: bytes) -> list[bytes]:
-            # called for every raw chunk from the socket
-            # return a list of complete message payloads (may be empty)
+    def on_data(data: bytes, state: dict, direction: str) -> list[bytes]:
+        ...
+
+    def on_flush(state: dict, direction: str) -> list[bytes]:
+        ...
+
+``state`` is a plain dict that is created once per proxied connection and
+passed to every call for **both** directions.  This means cross-direction
+state is trivially possible: whatever you store under a key in one direction
+is readable in the other.
+
+``direction`` is the string ``"c2s"`` (client → server) or ``"s2c"``
+(server → client).  Use it to keep per-direction buffers separate:
+
+    buf = state.setdefault(direction, bytearray())
+
+For a correlated protocol (server response depends on client command):
+
+    def on_data(data, state, direction):
+        buf = state.setdefault(direction, bytearray())
+        buf.extend(data)
+        if direction == "c2s":
+            state["last_cmd"] = ...      # record for response parsing
+        else:
+            cmd = state.get("last_cmd")  # read what the client sent
             ...
-
-        def on_flush(self) -> list[bytes]:
-            # called when the connection closes
-            # return any partially buffered bytes (or an empty list)
-            ...
-
-ProtoPoke handles session attribution, direction, and sequence numbers.
 """
 
 from __future__ import annotations
@@ -54,69 +66,50 @@ _DNS_MIN_MSG = 12   # minimum valid DNS payload (fixed 12-byte header)
 _PREFIX_LEN  = 2    # TCP length prefix is always 2 bytes
 
 
-class DnsFramer:
+def on_data(data: bytes, state: dict, direction: str) -> list[bytes]:
     """
-    Framer for DNS over TCP (RFC 1035 §4.2.2).
+    Accumulate *data* and return complete DNS-over-TCP message chunks.
 
-    Reads the 2-byte big-endian length prefix that precedes each DNS message
-    and buffers data until the full message has arrived, then emits one chunk
-    containing both the prefix and the DNS message bytes.
+    Uses ``state[direction]`` as the per-direction accumulation buffer.
+    Each returned ``bytes`` value contains the 2-byte length prefix followed
+    by the DNS message — exactly the bytes that appeared on the wire.
 
-    Desync recovery: if the declared length is implausible (< 12 or > 65535)
-    the entire buffer is flushed as a raw chunk and framing restarts on the
-    next incoming data.
+    Desync recovery: if the declared length is implausible the entire buffer
+    is emitted as a raw chunk and parsing restarts on the next data arrival.
     """
+    buf = state.setdefault(direction, bytearray())
+    buf.extend(data)
+    frames: list[bytes] = []
 
-    def __init__(self) -> None:
-        self._buffer: bytearray = bytearray()
+    while len(buf) >= _PREFIX_LEN:
+        (msg_len,) = struct.unpack_from(">H", buf, 0)
 
-    def on_data(self, data: bytes) -> list[bytes]:
-        """
-        Accumulate *data* and return complete DNS-over-TCP message chunks.
+        if msg_len < _DNS_MIN_MSG or msg_len > 0xFFFF:
+            # Implausible length — desynced.  Flush and restart.
+            frames.append(bytes(buf))
+            buf.clear()
+            break
 
-        Each returned bytes value contains the 2-byte length prefix followed
-        by the DNS message — exactly the bytes that appeared on the wire.
-        Returns an empty list if more data is needed.
-        """
-        self._buffer.extend(data)
-        frames: list[bytes] = []
+        total = _PREFIX_LEN + msg_len
+        if len(buf) < total:
+            break  # incomplete — wait for more data
 
-        while len(self._buffer) >= _PREFIX_LEN:
-            (msg_len,) = struct.unpack_from(">H", self._buffer, 0)
+        frames.append(bytes(buf[:total]))
+        del buf[:total]
 
-            if msg_len < _DNS_MIN_MSG or msg_len > 0xFFFF:
-                # Implausible length — we are desynced.
-                # Emit the whole buffer as a raw chunk and restart.
-                frames.append(bytes(self._buffer))
-                self._buffer.clear()
-                break
+    return frames
 
-            total = _PREFIX_LEN + msg_len
-            if len(self._buffer) < total:
-                break  # incomplete — wait for more data
 
-            frames.append(bytes(self._buffer[:total]))
-            del self._buffer[:total]
+def on_flush(state: dict, direction: str) -> list[bytes]:
+    """
+    Emit any remaining buffered bytes when the connection closes.
 
-        return frames
-
-    def on_flush(self) -> list[bytes]:
-        """
-        Emit any remaining buffered bytes when the connection closes.
-
-        If a DNS message arrived incomplete (e.g. the sender crashed
-        mid-transmission), whatever bytes were buffered are still returned
-        so nothing is silently discarded.
-        """
-        if self._buffer:
-            data = bytes(self._buffer)
-            self._buffer.clear()
-            return [data]
-        return []
-
-    def reset(self) -> None:
-        """Clear internal buffer (used by the smoke-test below)."""
-        self._buffer.clear()
+    If a DNS message arrived incomplete (e.g. the sender crashed
+    mid-transmission), whatever bytes were buffered are still returned
+    so nothing is silently discarded.
+    """
+    buf = state.pop(direction, bytearray())
+    return [bytes(buf)] if buf else []
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +118,8 @@ class DnsFramer:
 if __name__ == "__main__":
     import sys
 
-    framer = DnsFramer()
+    DIR = "c2s"
+    state: dict = {}
 
     def _wrap(dns_msg: bytes) -> bytes:
         return struct.pack(">H", len(dns_msg)) + dns_msg
@@ -146,27 +140,34 @@ if __name__ == "__main__":
 
     # Test 1: single frame split across two feeds
     half = len(frame_a) // 2
-    assert framer.on_data(frame_a[:half]) == []
-    result = framer.on_data(frame_a[half:])
-    assert len(result) == 1 and result[0] == frame_a, f"T1 failed: {result}"
+    assert on_data(frame_a[:half], state, DIR) == [], "T1a: should buffer partial frame"
+    result = on_data(frame_a[half:], state, DIR)
+    assert len(result) == 1 and result[0] == frame_a, f"T1b failed: {result}"
 
     # Test 2: two back-to-back frames in one feed
-    framer.reset()
-    result = framer.on_data(frame_a + frame_b)
+    state.pop(DIR, None)
+    result = on_data(frame_a + frame_b, state, DIR)
     assert len(result) == 2 and result[0] == frame_a and result[1] == frame_b, f"T2 failed"
 
-    # Test 3: desync — declared length too small
-    framer.reset()
+    # Test 3: desync — declared length too small for a valid DNS message
+    state.pop(DIR, None)
     bad = struct.pack(">H", 3)
-    result = framer.on_data(bad)
-    assert len(result) == 1 and result[0] == bad, f"T3a failed"
-    result = framer.on_data(frame_a)
-    assert len(result) == 1 and result[0] == frame_a, f"T3b failed"
+    result = on_data(bad, state, DIR)
+    assert len(result) == 1 and result[0] == bad, f"T3a: desync frame mismatch"
+    result = on_data(frame_a, state, DIR)
+    assert len(result) == 1 and result[0] == frame_a, f"T3b: post-desync frame mismatch"
 
     # Test 4: flush emits a partial frame
-    framer.reset()
-    assert framer.on_data(frame_a[:5]) == []
-    leftover = framer.on_flush()
-    assert len(leftover) == 1 and leftover[0] == frame_a[:5], f"T4 failed"
+    state.pop(DIR, None)
+    assert on_data(frame_a[:5], state, DIR) == [], "T4a: partial should not emit yet"
+    leftover = on_flush(state, DIR)
+    assert len(leftover) == 1 and leftover[0] == frame_a[:5], f"T4b flush mismatch"
+
+    # Test 5: shared state between directions (cross-direction correlation)
+    shared: dict = {}
+    on_data(frame_a, shared, "c2s")
+    shared["last_seen"] = "query"          # c2s sets a marker
+    on_data(frame_b, shared, "s2c")
+    assert shared.get("last_seen") == "query", "T5: shared state not visible cross-direction"
 
     print("All tests passed.", file=sys.stderr)
