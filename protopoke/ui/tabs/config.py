@@ -10,6 +10,7 @@ from textual.message import Message
 
 from ...config import ProxyConfig
 from ..modals.framer_edit import FramerEditModal, FramerSettings
+from ..modals.file_picker import FilePickerModal
 
 
 _LOG_LEVEL_OPTIONS = [
@@ -126,6 +127,11 @@ class ConfigTab(Widget):
         min-width: 8;
         margin-right: 1;
     }
+    ConfigTab .btn-browse {
+        width: 10;
+        min-width: 10;
+        margin-left: 1;
+    }
     ConfigTab .framer-summary {
         width: 1fr;
         padding: 0 1;
@@ -186,22 +192,27 @@ class ConfigTab(Widget):
             with Horizontal(classes="field-row"):
                 yield Label("TLS upstream:", classes="field-label")
                 yield Switch(value=cfg.tls_upstream, id="tls-upstream")
-            with Horizontal(classes="field-row"):
-                yield Label("CA cert path:", classes="field-label")
-                yield Input(value=cfg.ca_cert_path or "", id="ca-cert",
-                            placeholder="~/.protopoke/ca.crt", classes="field-input")
-            with Horizontal(classes="field-row"):
-                yield Label("CA key path:", classes="field-label")
-                yield Input(value=cfg.ca_key_path or "", id="ca-key",
-                            placeholder="~/.protopoke/ca.key", classes="field-input")
-            with Horizontal(classes="field-row"):
-                yield Label("Manual cert path:", classes="field-label")
-                yield Input(value=cfg.tls_cert_path or "", id="tls-cert",
-                            placeholder="(optional override)", classes="field-input")
-            with Horizontal(classes="field-row"):
-                yield Label("Manual key path:", classes="field-label")
-                yield Input(value=cfg.tls_key_path or "", id="tls-key",
-                            placeholder="(optional override)", classes="field-input")
+            with Vertical(id="tls-paths", display=cfg.tls_listen):
+                with Horizontal(classes="field-row"):
+                    yield Label("CA cert path:", classes="field-label")
+                    yield Input(value=cfg.ca_cert_path or "", id="ca-cert",
+                                placeholder="~/.protopoke/ca.crt", classes="field-input")
+                    yield Button("Browse", id="browse-ca-cert", classes="btn-browse")
+                with Horizontal(classes="field-row"):
+                    yield Label("CA key path:", classes="field-label")
+                    yield Input(value=cfg.ca_key_path or "", id="ca-key",
+                                placeholder="~/.protopoke/ca.key", classes="field-input")
+                    yield Button("Browse", id="browse-ca-key", classes="btn-browse")
+                with Horizontal(classes="field-row"):
+                    yield Label("Manual cert path:", classes="field-label")
+                    yield Input(value=cfg.tls_cert_path or "", id="tls-cert",
+                                placeholder="(optional override)", classes="field-input")
+                    yield Button("Browse", id="browse-tls-cert", classes="btn-browse")
+                with Horizontal(classes="field-row"):
+                    yield Label("Manual key path:", classes="field-label")
+                    yield Input(value=cfg.tls_key_path or "", id="tls-key",
+                                placeholder="(optional override)", classes="field-input")
+                    yield Button("Browse", id="browse-tls-key", classes="btn-browse")
 
             # ---- Framing ----
             yield Static("  Framing", classes="section-header")
@@ -220,6 +231,7 @@ class ConfigTab(Widget):
                 yield Label("Definition file:", classes="field-label")
                 yield Input(value=cfg.protocol_definition_path or "", id="proto-def",
                             placeholder="/path/to/protocol.yaml", classes="field-input")
+                yield Button("Browse", id="browse-proto-def", classes="btn-browse")
 
             # ---- Sequencer ----
             yield Static("  Sequencer", classes="section-header")
@@ -228,6 +240,7 @@ class ConfigTab(Widget):
                 yield Input(value=cfg.sequencer_script or "", id="sequencer-script",
                             placeholder="/path/to/my_protocol_script.py",
                             classes="field-input")
+                yield Button("Browse", id="browse-sequencer-script", classes="btn-browse")
 
             # ---- Misc ----
             yield Static("  Miscellaneous", classes="section-header")
@@ -314,22 +327,46 @@ class ConfigTab(Widget):
     # Event handlers
     # ------------------------------------------------------------------
 
+    def on_switch_changed(self, event: Switch.Changed) -> None:
+        if event.switch.id == "tls-listen":
+            self.query_one("#tls-paths").display = event.value
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-framer-edit":
+        btn_id = event.button.id
+
+        # Browse buttons — map button id to target input id
+        _browse_map = {
+            "browse-ca-cert":           "ca-cert",
+            "browse-ca-key":            "ca-key",
+            "browse-tls-cert":          "tls-cert",
+            "browse-tls-key":           "tls-key",
+            "browse-proto-def":         "proto-def",
+            "browse-sequencer-script":  "sequencer-script",
+        }
+        if btn_id in _browse_map:
+            target_id = _browse_map[btn_id]
+            current = self.query_one(f"#{target_id}", Input).value.strip() or None
+            def _on_pick(path: str | None, _tid: str = target_id) -> None:
+                if path is not None:
+                    self.query_one(f"#{_tid}", Input).value = path
+            self.app.push_screen(FilePickerModal(current), _on_pick)
+            return
+
+        if btn_id == "btn-framer-edit":
             settings: FramerSettings = {
                 "framer_name": self._framer_name,
                 "framer_kwargs": dict(self._framer_kwargs),
                 "custom_framer_path": self._custom_framer_path,
             }
             self.app.push_screen(FramerEditModal(settings), self._on_framer_edit_result)
-        elif event.button.id == "btn-apply":
+        elif btn_id == "btn-apply":
             self._read_form()
             self.post_message(self.Applied())
-        elif event.button.id == "btn-start":
+        elif btn_id == "btn-start":
             self._read_form()
             self.post_message(self.Applied())
             self.post_message(self.StartProxy())
-        elif event.button.id == "btn-stop":
+        elif btn_id == "btn-stop":
             self.post_message(self.StopProxy())
 
     def _on_framer_edit_result(self, result: FramerSettings | None) -> None:
@@ -366,6 +403,7 @@ class ConfigTab(Widget):
         _set("connect-timeout", str(cfg.connect_timeout))
         _sw("tls-listen", cfg.tls_listen)
         _sw("tls-upstream", cfg.tls_upstream)
+        self.query_one("#tls-paths").display = cfg.tls_listen
         _set("ca-cert", cfg.ca_cert_path or "")
         _set("ca-key", cfg.ca_key_path or "")
         _set("tls-cert", cfg.tls_cert_path or "")
