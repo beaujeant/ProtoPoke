@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.events import MouseDown
+from textual import events
+from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import DataTable, Static, Button
 from textual.containers import Horizontal, Vertical
@@ -11,6 +12,32 @@ from textual.containers import Horizontal, Vertical
 from ...models import Frame, Direction
 from ...core.session import Session
 from ..widgets.parsed_view import ParsedView
+
+
+class FramesTable(DataTable):
+    """DataTable subclass that exposes shift state on row clicks.
+
+    DataTable._on_click() calls event.stop(), so Click never bubbles to
+    the parent widget.  By overriding _on_click here we can post a
+    RowClicked message (with shift state) *before* super() posts
+    RowHighlighted, guaranteeing the correct queue order:
+
+        RowClicked  → LogsTab sets _extending_selection
+        RowHighlighted → LogsTab reads _extending_selection
+    """
+
+    class RowClicked(Message):
+        """Posted when a data row is clicked, carrying the shift modifier."""
+        def __init__(self, shift: bool) -> None:
+            super().__init__()
+            self.shift = shift
+
+    async def _on_click(self, event: events.Click) -> None:
+        meta = event.style.meta
+        if "row" in meta and not meta.get("out_of_bounds", False):
+            # Post before super() so it arrives in the queue before RowHighlighted.
+            self.post_message(FramesTable.RowClicked(shift=event.shift))
+        await super()._on_click(event)
 
 
 class LogsTab(Widget):
@@ -123,7 +150,7 @@ class LogsTab(Widget):
                 yield lbl
                 yield Button("→ Repeater",  id="btn-to-repeater",  variant="default")
                 yield Button("→ Sequencer", id="btn-to-sequencer", variant="default")
-            yield DataTable(id="frames-table", cursor_type="row")
+            yield FramesTable(id="frames-table", cursor_type="row")
 
         # Detail pane with hex↔parsed toggle
         with Vertical(id="detail-pane"):
@@ -261,26 +288,9 @@ class LogsTab(Widget):
         except Exception:
             pass
 
-    def on_mouse_down(self, event: MouseDown) -> None:
-        """
-        Detect Shift+click on the frames table to extend the selection range.
-
-        Flow (why this works and why we use MouseDown instead of Click):
-          1. User shift+clicks a row in the frames DataTable.
-          2. MouseDown bubbles up to LogsTab (DataTable has no _on_mouse_down,
-             so it does not stop propagation). We set _extending_selection here.
-          3. User releases mouse → Click is dispatched to DataTable.
-          4. DataTable._on_click moves cursor → posts RowHighlighted to the
-             message queue → calls event.stop() (Click never bubbles further).
-          5. RowHighlighted is dequeued. on_data_table_row_highlighted sees
-             _extending_selection=True and extends the selection.
-
-        A plain click (no shift) sets the flag to False so the next
-        RowHighlighted does a normal single-row selection.
-        """
-        focused = self.app.focused
-        if focused and getattr(focused, "id", None) == "frames-table":
-            self._extending_selection = event.shift
+    def on_frames_table_row_clicked(self, event: FramesTable.RowClicked) -> None:
+        """Set the extending-selection flag from shift state before RowHighlighted fires."""
+        self._extending_selection = event.shift
 
     # ------------------------------------------------------------------
     # Event handlers
@@ -291,7 +301,8 @@ class LogsTab(Widget):
         Single click or arrow key navigation selects a row immediately.
 
         For the frames table, shift+click extends the selection range from the
-        anchor row to the clicked row.
+        anchor row to the clicked row (shift state is delivered via
+        FramesTable.RowClicked, which arrives in the queue before RowHighlighted).
         """
         if event.row_key is None:
             return
