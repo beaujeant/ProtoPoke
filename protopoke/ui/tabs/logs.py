@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from textual import events
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.widget import Widget
 from textual.widgets import DataTable, Static, Button
 from textual.containers import Horizontal, Vertical
@@ -10,6 +12,40 @@ from textual.containers import Horizontal, Vertical
 from ...models import Frame, Direction
 from ...core.session import Session
 from ..widgets.parsed_view import ParsedView
+
+
+class _FramesTable(DataTable):
+    """DataTable that supports shift+arrow and shift+click range selection.
+
+    Shift+Up / Shift+Down move the cursor while signalling the parent
+    :class:`LogsTab` to extend the selection range instead of resetting it.
+    Shift+Click does the same for mouse interaction.
+    """
+
+    BINDINGS = [
+        Binding("shift+up", "shift_up", show=False),
+        Binding("shift+down", "shift_down", show=False),
+    ]
+
+    def _logs_tab(self) -> "LogsTab":
+        node = self.parent
+        while node is not None:
+            if isinstance(node, LogsTab):
+                return node
+            node = node.parent
+        raise RuntimeError("_FramesTable must be a descendant of LogsTab")
+
+    def action_shift_up(self) -> None:
+        self._logs_tab()._extending_selection = True
+        self.action_cursor_up()
+
+    def action_shift_down(self) -> None:
+        self._logs_tab()._extending_selection = True
+        self.action_cursor_down()
+
+    def on_click(self, event: events.Click) -> None:
+        if event.shift:
+            self._logs_tab()._extending_selection = True
 
 
 class LogsTab(Widget):
@@ -122,7 +158,7 @@ class LogsTab(Widget):
                 yield lbl
                 yield Button("→ Repeater",  id="btn-to-repeater",  variant="default")
                 yield Button("→ Sequencer", id="btn-to-sequencer", variant="default")
-            yield DataTable(id="frames-table", cursor_type="row")
+            yield _FramesTable(id="frames-table", cursor_type="row")
 
         # Detail pane with hex↔parsed toggle
         with Vertical(id="detail-pane"):
