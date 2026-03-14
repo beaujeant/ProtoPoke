@@ -1,0 +1,283 @@
+# DNS over TCP — protocol definition for ProtoPoke
+#
+# RFC 1035 §4.2.2: DNS messages sent over TCP are prefixed with a 2-byte
+# big-endian length field. ProtoPoke's framer strips that prefix, so the
+# frames fed to this parser start directly at the 12-byte DNS header.
+#
+# Configure the framer in ProxyConfig:
+#
+#   framer_name="length_prefix",
+#   framer_kwargs={"prefix_length": 2, "byte_order": "big"},
+#
+# DNS message layout (after the 2-byte TCP length prefix):
+#
+#   ┌──────────────────────────────────────────────────────────┐
+#   │ Header (12 bytes, fixed)                                 │
+#   │   ID        2B  – transaction identifier                 │
+#   │   Flags     2B  – QR, OPCODE, AA, TC, RD, RA, Z, RCODE  │
+#   │   QDCOUNT   2B  – number of questions                    │
+#   │   ANCOUNT   2B  – number of answer RRs                   │
+#   │   NSCOUNT   2B  – number of authority RRs                │
+#   │   ARCOUNT   2B  – number of additional RRs               │
+#   ├──────────────────────────────────────────────────────────┤
+#   │ Question / Answer / Authority / Additional sections      │
+#   │ (variable-length; captured as raw bytes below)           │
+#   └──────────────────────────────────────────────────────────┘
+#
+# The variable-length sections use DNS label encoding (length-prefixed
+# labels + 0x00 terminator, plus optional compression pointers 0xC0xx),
+# which cannot be fully expressed in the ProtoPoke DSL. They are captured
+# as raw bytes so you can inspect them in the hex dump while the fixed
+# header fields are decoded symbolically.
+#
+# Matching strategy:
+#   Queries  — QR bit == 0 at flags byte 0, bit 7  → magic match on flags
+#   Responses — QR bit == 1                         → magic match on flags
+#
+#   Because we cannot match on a single *bit*, we use two broad rules that
+#   cover the typical flag byte range:
+#     QR=0 (query):    byte 2 in range 0x00–0x7F  → use magic 0x00 as a
+#                      best-effort hint (works for standard queries)
+#     QR=1 (response): byte 2 in range 0x80–0xFF  → magic 0x80
+#
+#   Add more specific magic values (e.g., 0x01 for inverse queries, 0x84
+#   for authoritative responses) as you identify them in your traffic.
+
+protocol:
+  name: "DNS"
+  version: "1.0 (RFC 1035)"
+  endianness: big     # all DNS integers are big-endian
+
+  messages:
+
+    # ── Standard DNS query (QR=0, OPCODE=0) ──────────────────────────────
+    # Flags byte 2 is 0x00 for a plain recursive query (RD=1 → 0x01 also
+    # common). Start with 0x00 and add 0x01 if you see queries not matched.
+    - name: "Query"
+      description: "Standard DNS query (QR=0). Flags byte 2 is typically 0x00 or 0x01 (RD set)."
+      direction: client_to_server
+      match:
+        type: magic
+        offset: 2       # byte offset 2 = first byte of the Flags field
+        value: "0x00"   # QR=0, OPCODE=0, AA=0, TC=0, RD=0 — adjust if needed
+      fields:
+        - name: id
+          type: uint16
+          display: hex
+          # Transaction ID — ties queries to responses. Same value echoed back
+          # in the matching response.
+
+        - name: flags
+          type: uint16
+          display: hex
+          # Raw flags word. See the bitfield breakdown below for named bits.
+          # It is defined here as a uint16 so you can edit it as a whole during
+          # intercept. The bitfield version (flags_decoded) gives symbolic access.
+
+        - name: flags_decoded
+          type: bitfield
+          # Bit layout (MSB to LSB, numbering from LSB=bit 0):
+          #   bit 15: QR      — 0=Query, 1=Response
+          #   bit 14-11: OPCODE — 0=QUERY, 1=IQUERY, 2=STATUS
+          #   bit 10: AA      — Authoritative Answer (response only)
+          #   bit 9:  TC      — Truncated
+          #   bit 8:  RD      — Recursion Desired
+          #   bit 7:  RA      — Recursion Available (response only)
+          #   bit 6:  Z       — Reserved, must be 0
+          #   bit 5:  AD      — Authentic Data (DNSSEC, RFC 4035)
+          #   bit 4:  CD      — Checking Disabled (DNSSEC, RFC 4035)
+          #   bit 3-0: RCODE  — 0=NOERROR, 1=FORMERR, 2=SERVFAIL, 3=NXDOMAIN, 5=REFUSED
+          bits:
+            15: qr
+            14: opcode_3
+            13: opcode_2
+            12: opcode_1
+            11: opcode_0
+            10: aa
+            9:  tc
+            8:  rd
+            7:  ra
+            6:  z
+            5:  ad
+            4:  cd
+            3:  rcode_3
+            2:  rcode_2
+            1:  rcode_1
+            0:  rcode_0
+
+        - name: qdcount
+          type: uint16
+          # Number of entries in the Question section.
+
+        - name: ancount
+          type: uint16
+          # Number of Resource Records in the Answer section.
+
+        - name: nscount
+          type: uint16
+          # Number of Name Server Resource Records in the Authority section.
+
+        - name: arcount
+          type: uint16
+          # Number of Resource Records in the Additional section.
+
+        - name: sections
+          type: bytes
+          length: -1
+          display: hex
+          # Everything after the 12-byte header: Question + Answer + Authority
+          # + Additional sections. DNS label encoding and RR structures cannot
+          # be parsed with the DSL — inspect them in the hex dump.
+          # Once you reverse the specific query types you care about, split this
+          # into separate named fields (qname, qtype, qclass, etc.).
+
+    # ── Recursive query (RD=1, otherwise same as Query) ──────────────────
+    - name: "QueryRD"
+      description: "Standard DNS query with Recursion Desired bit set (flags byte 2 = 0x01)."
+      direction: client_to_server
+      match:
+        type: magic
+        offset: 2
+        value: "0x01"   # QR=0, OPCODE=0, RD=1 — most resolver queries
+      fields:
+        - { name: id,             type: uint16, display: hex }
+        - { name: flags,          type: uint16, display: hex }
+        - name: flags_decoded
+          type: bitfield
+          bits:
+            15: qr
+            14: opcode_3
+            13: opcode_2
+            12: opcode_1
+            11: opcode_0
+            10: aa
+            9:  tc
+            8:  rd
+            7:  ra
+            6:  z
+            5:  ad
+            4:  cd
+            3:  rcode_3
+            2:  rcode_2
+            1:  rcode_1
+            0:  rcode_0
+        - { name: qdcount,        type: uint16 }
+        - { name: ancount,        type: uint16 }
+        - { name: nscount,        type: uint16 }
+        - { name: arcount,        type: uint16 }
+        - { name: sections,       type: bytes,  length: -1, display: hex }
+
+    # ── Standard DNS response (QR=1, RCODE=NOERROR) ──────────────────────
+    - name: "Response"
+      description: "DNS response (QR=1). Flags byte 2 is 0x80 (no recursion available) or 0x81 (RA set)."
+      direction: server_to_client
+      match:
+        type: magic
+        offset: 2
+        value: "0x80"   # QR=1, OPCODE=0, RA=0 — authoritative or non-recursive server
+      fields:
+        - { name: id,             type: uint16, display: hex }
+        - { name: flags,          type: uint16, display: hex }
+        - name: flags_decoded
+          type: bitfield
+          bits:
+            15: qr
+            14: opcode_3
+            13: opcode_2
+            12: opcode_1
+            11: opcode_0
+            10: aa
+            9:  tc
+            8:  rd
+            7:  ra
+            6:  z
+            5:  ad
+            4:  cd
+            3:  rcode_3
+            2:  rcode_2
+            1:  rcode_1
+            0:  rcode_0
+        - { name: qdcount,        type: uint16 }
+        - { name: ancount,        type: uint16 }
+        - { name: nscount,        type: uint16 }
+        - { name: arcount,        type: uint16 }
+        - { name: sections,       type: bytes,  length: -1, display: hex }
+
+    # ── Recursive response (QR=1, RA=1, RCODE=NOERROR) ───────────────────
+    - name: "ResponseRA"
+      description: "DNS response with Recursion Available (flags byte 2 = 0x81). Most resolver responses."
+      direction: server_to_client
+      match:
+        type: magic
+        offset: 2
+        value: "0x81"   # QR=1, RA=1 — recursive resolver response
+      fields:
+        - { name: id,             type: uint16, display: hex }
+        - { name: flags,          type: uint16, display: hex }
+        - name: flags_decoded
+          type: bitfield
+          bits:
+            15: qr
+            14: opcode_3
+            13: opcode_2
+            12: opcode_1
+            11: opcode_0
+            10: aa
+            9:  tc
+            8:  rd
+            7:  ra
+            6:  z
+            5:  ad
+            4:  cd
+            3:  rcode_3
+            2:  rcode_2
+            1:  rcode_1
+            0:  rcode_0
+        - { name: qdcount,        type: uint16 }
+        - { name: ancount,        type: uint16 }
+        - { name: nscount,        type: uint16 }
+        - { name: arcount,        type: uint16 }
+        - { name: sections,       type: bytes,  length: -1, display: hex }
+
+    # ── NXDOMAIN response (RCODE=3) ───────────────────────────────────────
+    - name: "NXDOMAIN"
+      description: "DNS response: domain does not exist (RCODE=3, flags byte 3 & 0x0F == 3)."
+      direction: server_to_client
+      match:
+        type: magic
+        offset: 3         # second byte of the Flags field
+        value: "0x83"     # RA=1, RCODE=3 (NXDOMAIN) — common resolver response
+      fields:
+        - { name: id,             type: uint16, display: hex }
+        - { name: flags,          type: uint16, display: hex }
+        - name: rcode
+          type: uint8
+          display: enum
+          enum:
+            0: "NOERROR"
+            1: "FORMERR"
+            2: "SERVFAIL"
+            3: "NXDOMAIN"
+            4: "NOTIMP"
+            5: "REFUSED"
+        - { name: qdcount,        type: uint16 }
+        - { name: ancount,        type: uint16 }
+        - { name: nscount,        type: uint16 }
+        - { name: arcount,        type: uint16 }
+        - { name: sections,       type: bytes,  length: -1, display: hex }
+
+    # ── Catch-all: anything not matched above ─────────────────────────────
+    # Covers unusual opcodes, DNSSEC-specific flag combinations, TCP
+    # zone transfers (AXFR, opcode in flags), etc.
+    - name: "Unknown"
+      description: "DNS message not matched by any specific rule — inspect the raw hex."
+      match:
+        type: always
+      fields:
+        - { name: id,       type: uint16, display: hex }
+        - { name: flags,    type: uint16, display: hex }
+        - { name: qdcount,  type: uint16 }
+        - { name: ancount,  type: uint16 }
+        - { name: nscount,  type: uint16 }
+        - { name: arcount,  type: uint16 }
+        - { name: sections, type: bytes,  length: -1, display: hex }
