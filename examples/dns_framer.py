@@ -6,224 +6,179 @@ Wire format
 DNS over TCP wraps every DNS message in a 2-byte big-endian length prefix.
 The prefix counts only the DNS message bytes — it does NOT include itself.
 
-    +--------+--------+
-    | LENGTH (2 bytes)|   big-endian uint16
-    +--------+--------+
-    |                 |
-    |   DNS message   |   LENGTH bytes
-    |                 |
-    +-----------------+
+    +--------+--------+------ ... ------+
+    | LENGTH (2 bytes)|  DNS message    |
+    +--------+--------+------ ... ------+
+     big-endian uint16   LENGTH bytes
 
-Minimum valid DNS message: 12 bytes (the fixed DNS header, no records).
-Maximum: 65 535 bytes (fits in uint16; in practice responses are far smaller).
-
-This framing is used by:
-  - DNS over TCP (port 53, RFC 1035)
-  - DNS over TLS — DoT (port 853, RFC 7858)
-  - DNS over QUIC stream framing (RFC 9250) — same prefix convention
-
-Desync recovery
----------------
-DNS over TCP has no magic bytes or sync markers.  If the framer encounters
-a declared length that looks wrong (too small for a valid DNS header, or
-larger than the configured safety cap) it calls on_desync().
-
-Because there are no reliable sync markers the default on_desync()
-implementation flushes the entire buffer: the bad bytes are emitted as a
-single raw frame (so nothing is silently lost), and framing restarts cleanly
-from the next data that arrives on the socket.
-
-If your deployment uses a fixed-prefix wrapper around DNS (e.g. an in-house
-multiplexing layer that starts every datagram with 0xAB 0xCD), override
-on_desync() and search for that marker:
-
-    def on_desync(self, buffer: bytearray) -> int:
-        SYNC = b'\\xAB\\xCD'
-        idx = buffer.find(SYNC, 1)          # start at 1 to skip current bad pos
-        return idx if idx != -1 else len(buffer)
+Minimum valid DNS message: 12 bytes (the fixed-size DNS header, no records).
+Maximum: 65 535 bytes (the largest value a uint16 can express).
 
 Usage in ProtoPoke
 ------------------
 Config tab → Edit Framer → Custom, then set:
 
   Script path : /path/to/examples/dns_framer.py
-  Class name  : DnsFramer
 
-The framer accepts one optional kwarg:
+Python API:
 
-  max_frame_size (int, default 65 535): hard cap on declared message length.
-      Any declared length above this value triggers desync recovery instead
-      of waiting for an absurdly large payload.
+  config = ProxyConfig(
+      ...,
+      custom_framer_path="/path/to/examples/dns_framer.py",
+  )
+
+That is all.  ProtoPoke discovers ``on_data`` and ``on_flush`` automatically.
+
+How the custom framer API works
+--------------------------------
+A custom framer is **two plain module-level functions** — no class, no
+imports from ProtoPoke, no subclassing:
+
+    def on_data(data: bytes, state: dict, direction: str) -> list[bytes]:
+        ...
+
+    def on_flush(state: dict, direction: str) -> list[bytes]:
+        ...
+
+Arguments
+~~~~~~~~~
+data (bytes)
+    Raw bytes from the latest ``read()`` call on the TCP socket.  May be
+    a partial message, a complete message, or several messages coalesced —
+    the framer must handle all three cases by buffering internally.
+
+state (dict)
+    A plain mutable dict that ProtoPoke creates **once per proxied
+    connection** and passes to every ``on_data`` and ``on_flush`` call for
+    **both** directions.  It persists for the entire lifetime of the
+    connection and is discarded when the session closes.
+
+    Use ``direction`` as a dict key to keep per-direction accumulation
+    buffers separate:
+
+        buf = state.setdefault(direction, bytearray())
+
+    Because the same dict is shared between both directions you can also
+    store cross-direction state — data that the client side writes and the
+    server side reads (or vice versa):
+
+        # client side
+        state["last_query_id"] = transaction_id
+
+        # server side (called later, same state dict)
+        qid = state.get("last_query_id")
+
+direction (str)
+    ``"c2s"`` when bytes are flowing from the client to the server.
+    ``"s2c"`` when bytes are flowing from the server to the client.
+
+Return value of on_data
+    ``list[bytes]`` — zero or more complete message payloads ready for
+    ProtoPoke to process.  Return ``[]`` if more data is needed before a
+    boundary can be found.  Each returned ``bytes`` value becomes one Frame
+    in the intercept / log / replay pipeline.
+
+Return value of on_flush
+    ``list[bytes]`` — zero or one partial frame containing whatever bytes
+    remained in the buffer when the connection closed.  Nothing should be
+    silently discarded.
+
+Desync recovery
+---------------
+DNS over TCP has no magic bytes or per-frame sync markers.  If the framer
+encounters a declared length that looks wrong (< 12 bytes, which is smaller
+than the mandatory fixed DNS header) it cannot know where the next real
+frame starts.
+
+The strategy used here: flush the entire buffer as a single raw frame so
+nothing is lost, then restart parsing from the next ``on_data`` call.
+
+If your protocol *does* have a sync marker (e.g. a magic prefix ``0xAB
+0xCD`` at the start of every frame), you can recover more precisely by
+scanning the buffer for the next occurrence:
+
+    MAGIC = b"\\xab\\xcd"
+    idx = buf.find(MAGIC, 1)          # start at 1, skip current bad pos
+    skip = idx if idx != -1 else len(buf)
+    frames.append(bytes(buf[:skip]))  # emit skipped bytes as raw
+    del buf[:skip]
+    continue                          # retry from the new position
 """
 
 from __future__ import annotations
 
 import struct
 
-from protopoke.framing.base import Framer
-from protopoke.models import Frame
-
-# Every DNS message must carry at least the 12-byte fixed header:
-#   2 B  Transaction ID
-#   2 B  Flags
-#   2 B  QDCOUNT  (number of questions)
-#   2 B  ANCOUNT  (number of answers)
-#   2 B  NSCOUNT  (number of authority records)
-#   2 B  ARCOUNT  (number of additional records)
-_DNS_MIN_MSG = 12
-
-# The TCP length prefix is always exactly 2 bytes.
-_PREFIX_LEN = 2
-
-
-class DnsFramer(Framer):
-    """
-    Framer for DNS over TCP (RFC 1035 §4.2.2).
-
-    Reads the 2-byte big-endian length prefix that precedes each DNS message
-    and buffers data until the full message has arrived, then emits one Frame
-    containing both the prefix and the DNS message bytes.
-
-    Args:
-        session_id:     Session this framer belongs to.
-        direction:      Direction of the stream.
-        max_frame_size: Hard cap on the declared DNS message length in bytes.
-                        Defaults to 65 535 (the maximum a uint16 can express).
-                        Any declared length above this value is treated as a
-                        framing error and triggers on_desync() recovery.
-    """
-
-    def __init__(
-        self,
-        session_id: str,
-        direction,
-        max_frame_size: int = 0xFFFF,
-    ) -> None:
-        super().__init__(session_id, direction)
-        self._buffer: bytearray = bytearray()
-        self._max_frame_size: int = max_frame_size
-
-    @property
-    def name(self) -> str:
-        return "dns"
-
-    # ------------------------------------------------------------------
-    # Framer interface
-    # ------------------------------------------------------------------
-
-    def feed(self, data: bytes) -> list[Frame]:
-        """
-        Accumulate *data* and emit complete DNS-over-TCP frames.
-
-        Each emitted Frame contains the 2-byte length prefix followed by the
-        DNS message — exactly the bytes that appeared on the wire.
-
-        Returns a list of zero or more Frames.  Returns an empty list if more
-        data is needed to complete the current message.
-        """
-        self._buffer.extend(data)
-        frames: list[Frame] = []
-
-        while len(self._buffer) >= _PREFIX_LEN:
-            # Peek at the declared message length.
-            (msg_len,) = struct.unpack_from(">H", self._buffer, 0)
-
-            # Validate before committing to read msg_len bytes.
-            if msg_len < _DNS_MIN_MSG or msg_len > self._max_frame_size:
-                # Declared length is implausible — we are desynced.
-                # Delegate to on_desync() to decide how many bytes to skip.
-                skip = self.on_desync(self._buffer)
-                if skip <= 0:
-                    break  # on_desync wants more data before deciding
-                skip = min(skip, len(self._buffer))
-                frames.append(self._make_frame(bytes(self._buffer[:skip])))
-                del self._buffer[:skip]
-                continue  # retry parsing from the new buffer position
-
-            # Total on-wire size: prefix + message.
-            total = _PREFIX_LEN + msg_len
-            if len(self._buffer) < total:
-                break  # incomplete message — wait for more data
-
-            # We have a complete frame: emit prefix + message together.
-            frames.append(self._make_frame(bytes(self._buffer[:total])))
-            del self._buffer[:total]
-
-        return frames
-
-    def flush(self) -> list[Frame]:
-        """
-        Emit any remaining buffered bytes as a partial final frame.
-
-        Called when the connection closes.  If a DNS message arrived
-        incomplete (e.g. the sender crashed mid-transmission), whatever
-        bytes were buffered are still captured and visible in the session log.
-        """
-        if self._buffer:
-            frame = self._make_frame(bytes(self._buffer))
-            self._buffer.clear()
-            return [frame]
-        return []
-
-    def reset(self) -> None:
-        """Clear buffer and reset sequence counter."""
-        self._buffer.clear()
-        self._sequence = 0
-
-    # ------------------------------------------------------------------
-    # Desync recovery
-    # ------------------------------------------------------------------
-
-    def on_desync(self, buffer: bytearray) -> int:
-        """
-        Determine how many bytes to skip after detecting a framing error.
-
-        DNS over TCP carries no magic bytes or per-frame sync markers, so
-        forward-scanning cannot reliably distinguish a true frame boundary
-        from a coincidental byte pattern.  The safest strategy is therefore
-        to flush the entire buffer: all queued bytes are emitted as one raw
-        frame (nothing is silently discarded), and framing restarts cleanly
-        the next time data arrives.
-
-        If your deployment wraps DNS inside a custom transport layer that
-        DOES have sync markers, override this method and search for them::
-
-            def on_desync(self, buffer: bytearray) -> int:
-                SYNC = b'\\xAB\\xCD'
-                idx = buffer.find(SYNC, 1)   # skip offset 0 (already bad)
-                return idx if idx != -1 else len(buffer)
-
-        Returns:
-            ``len(buffer)`` — flush everything and restart.
-        """
-        return len(buffer)
+# DNS constants
+_DNS_MIN_MSG = 12   # smallest valid DNS payload (fixed 12-byte header)
+_PREFIX_LEN  = 2    # TCP length prefix is always exactly 2 bytes
 
 
 # ---------------------------------------------------------------------------
-# Smoke-test (run directly: python dns_framer.py)
+# Framer functions — these two are discovered automatically by ProtoPoke
+# ---------------------------------------------------------------------------
+
+def on_data(data: bytes, state: dict, direction: str) -> list[bytes]:
+    """
+    Accumulate *data* in the per-direction buffer and return complete
+    DNS-over-TCP message chunks.
+
+    Each returned ``bytes`` value contains the 2-byte length prefix followed
+    by the DNS message body — exactly the bytes that appeared on the wire.
+
+    Returns ``[]`` if the buffer does not yet hold a complete message.
+    """
+    buf = state.setdefault(direction, bytearray())
+    buf.extend(data)
+    frames: list[bytes] = []
+
+    while len(buf) >= _PREFIX_LEN:
+        (msg_len,) = struct.unpack_from(">H", buf, 0)
+
+        if msg_len < _DNS_MIN_MSG or msg_len > 0xFFFF:
+            # Declared length is implausible — the framer is desynced.
+            # Emit the whole buffer as a raw chunk so nothing is silently
+            # discarded, then restart framing from the next on_data call.
+            frames.append(bytes(buf))
+            buf.clear()
+            break
+
+        total = _PREFIX_LEN + msg_len
+        if len(buf) < total:
+            break           # incomplete message — wait for more data
+
+        frames.append(bytes(buf[:total]))
+        del buf[:total]
+
+    return frames
+
+
+def on_flush(state: dict, direction: str) -> list[bytes]:
+    """
+    Emit any remaining buffered bytes when the TCP connection closes.
+
+    If a DNS message arrived incomplete (e.g. the sender crashed
+    mid-transmission), whatever bytes were buffered are still returned so
+    nothing is silently discarded.
+    """
+    buf = state.pop(direction, bytearray())
+    return [bytes(buf)] if buf else []
+
+
+# ---------------------------------------------------------------------------
+# Smoke-test — run directly: python dns_framer.py
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import sys
 
-    try:
-        from protopoke.models import Direction
-    except ImportError:
-        from enum import Enum
-
-        class Direction(Enum):  # type: ignore[no-redef]
-            CLIENT_TO_SERVER = "c2s"
-            SERVER_TO_CLIENT = "s2c"
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
+    DIR   = "c2s"
+    state: dict = {}
 
     def _wrap(dns_msg: bytes) -> bytes:
-        """Prepend the 2-byte TCP length prefix to a DNS message."""
+        """Prepend the 2-byte TCP length prefix to a DNS payload."""
         return struct.pack(">H", len(dns_msg)) + dns_msg
 
-    # Minimal 12-byte DNS query header (no question/answer records):
-    #   ID=0x1234, Flags=0x0100 (RD=1), QDCOUNT=1, rest=0.
+    # Minimal 12-byte DNS query header (no question/answer records)
     _QUERY_HEADER = bytes([
         0x12, 0x34,  # Transaction ID
         0x01, 0x00,  # Flags: recursion desired
@@ -233,72 +188,61 @@ if __name__ == "__main__":
         0x00, 0x00,  # ARCOUNT = 0
     ])
 
-    # A slightly longer query that includes a question for example.com A.
-    _FULL_QUERY = _QUERY_HEADER + (
-        b"\x07example\x03com\x00"  # QNAME: example.com
-        b"\x00\x01"                # QTYPE:  A
-        b"\x00\x01"                # QCLASS: IN
-    )
+    # A slightly longer query: example.com A IN
+    _FULL_QUERY = _QUERY_HEADER + b"\x07example\x03com\x00\x00\x01\x00\x01"
 
     frame_a = _wrap(_QUERY_HEADER)   # 2 + 12 = 14 bytes
-    frame_b = _wrap(_FULL_QUERY)     # 2 + 12 + 17 = 31 bytes
-
-    framer = DnsFramer(session_id="test", direction=Direction.CLIENT_TO_SERVER)
+    frame_b = _wrap(_FULL_QUERY)     # 2 + 29 = 31 bytes
 
     # ------------------------------------------------------------------
-    # Test 1: single frame split across two feeds (simulates TCP segmentation)
+    # Test 1: frame split across two feeds (simulates TCP segmentation)
     # ------------------------------------------------------------------
     half = len(frame_a) // 2
-    result = framer.feed(frame_a[:half])
-    assert result == [], f"T1a: expected [], got {result}"
-    result = framer.feed(frame_a[half:])
-    assert len(result) == 1, f"T1b: expected 1 frame, got {len(result)}"
-    assert result[0].raw_bytes == frame_a, "T1c: frame bytes mismatch"
+    assert on_data(frame_a[:half], state, DIR) == [], \
+        "T1a: partial frame should not be emitted yet"
+    result = on_data(frame_a[half:], state, DIR)
+    assert len(result) == 1 and result[0] == frame_a, \
+        f"T1b: reassembled frame mismatch — got {result}"
 
     # ------------------------------------------------------------------
-    # Test 2: two back-to-back frames in a single feed (coalesced TCP read)
+    # Test 2: two frames coalesced in a single read
     # ------------------------------------------------------------------
-    framer.reset()
-    result = framer.feed(frame_a + frame_b)
-    assert len(result) == 2, f"T2: expected 2 frames, got {len(result)}"
-    assert result[0].raw_bytes == frame_a
-    assert result[1].raw_bytes == frame_b
+    state.pop(DIR, None)
+    result = on_data(frame_a + frame_b, state, DIR)
+    assert len(result) == 2 and result[0] == frame_a and result[1] == frame_b, \
+        f"T2: expected 2 frames, got {result}"
 
     # ------------------------------------------------------------------
-    # Test 3: desync — declared length is too small to be a valid DNS message
-    #
-    # Scenario: a length prefix of 3 arrives (3 < DNS minimum of 12).
-    # The framer cannot know where this "frame" ends, so on_desync() is
-    # triggered.  The bad bytes are emitted as a raw frame so they are
-    # still visible in the capture log.  The NEXT feed brings a valid DNS
-    # frame, which parses correctly — framing has re-synchronised.
+    # Test 3: desync — declared length too small to be a valid DNS message
     # ------------------------------------------------------------------
-    framer.reset()
-    bad = struct.pack(">H", 3)   # length=3, below DNS minimum of 12 → desync
-    result = framer.feed(bad)
-    assert len(result) == 1, f"T3a: expected 1 desync frame, got {len(result)}"
-    assert result[0].raw_bytes == bad, "T3b: desync frame should contain the bad bytes"
-
-    result = framer.feed(frame_a)
-    assert len(result) == 1, f"T3c: expected 1 good frame after recovery, got {len(result)}"
-    assert result[0].raw_bytes == frame_a, "T3d: recovered frame bytes mismatch"
+    state.pop(DIR, None)
+    bad = struct.pack(">H", 3)   # length=3 < DNS minimum of 12 → desync
+    result = on_data(bad, state, DIR)
+    assert len(result) == 1 and result[0] == bad, \
+        f"T3a: desync frame should contain the bad bytes — got {result}"
+    # After desync, framing restarts: the next good frame parses correctly
+    result = on_data(frame_a, state, DIR)
+    assert len(result) == 1 and result[0] == frame_a, \
+        f"T3b: post-desync frame mismatch — got {result}"
 
     # ------------------------------------------------------------------
-    # Test 4: flush emits a partial (incomplete) frame on connection close
+    # Test 4: on_flush emits partial bytes on connection close
     # ------------------------------------------------------------------
-    framer.reset()
-    partial = frame_a[:5]
-    assert framer.feed(partial) == [], "T4a: incomplete frame should not be emitted yet"
-    leftover = framer.flush()
-    assert len(leftover) == 1, f"T4b: expected 1 partial frame from flush, got {len(leftover)}"
-    assert leftover[0].raw_bytes == partial, "T4c: flush frame bytes mismatch"
+    state.pop(DIR, None)
+    assert on_data(frame_a[:5], state, DIR) == [], \
+        "T4a: incomplete frame must not be emitted by on_data"
+    leftover = on_flush(state, DIR)
+    assert len(leftover) == 1 and leftover[0] == frame_a[:5], \
+        f"T4b: on_flush should emit the partial bytes — got {leftover}"
 
     # ------------------------------------------------------------------
-    # Test 5: sequence numbers increment across frames
+    # Test 5: shared state between directions (cross-direction correlation)
     # ------------------------------------------------------------------
-    framer.reset()
-    frames = framer.feed(frame_a + frame_b)
-    assert frames[0].sequence_number == 0, "T5a: first frame should have sequence 0"
-    assert frames[1].sequence_number == 1, "T5b: second frame should have sequence 1"
+    shared: dict = {}
+    on_data(frame_a, shared, "c2s")
+    shared["last_query_id"] = 0x1234          # c2s writes a value
+    on_data(frame_b, shared, "s2c")
+    assert shared.get("last_query_id") == 0x1234, \
+        "T5: value written in c2s direction must be visible in s2c direction"
 
     print("All tests passed.", file=sys.stderr)

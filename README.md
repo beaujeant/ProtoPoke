@@ -496,7 +496,7 @@ By default ProtoPoke uses the **raw framer**, which treats every `read()` chunk 
 | Line-based text | `delimiter` with `\r\n` or `\n` | HTTP headers, SMTP, FTP |
 | Null-terminated | `delimiter` with `\x00` | Many C-string protocols |
 | Binary with length header | `length_prefix` | Most game/chat/custom binary protocols |
-| Custom boundary logic | Custom `Framer` subclass | Anything else |
+| Custom boundary logic | Custom script (`on_data` / `on_flush`) | Anything else |
 
 #### How to pick and configure a framer
 
@@ -535,28 +535,16 @@ config = ProxyConfig(
 ```
 The framer reads the first 4 bytes as a big-endian integer `N`, then buffers until it has exactly `N` more bytes, and emits the full `header + payload` as one frame.
 
-**Custom framer:**
+**Custom framer (script file):**
 ```python
-from protopoke.framing.base import Framer
-from protopoke.framing import FRAMER_REGISTRY
-from protopoke.models import Frame
-
-class MyFramer(Framer):
-    def feed(self, data: bytes) -> list[Frame]:
-        self._buffer += data
-        frames = []
-        # emit frames whenever you detect a complete message in self._buffer
-        return frames
-
-    def flush(self) -> list[Frame]:
-        return []
-
-    def reset(self) -> None:
-        self._buffer = b""
-
-FRAMER_REGISTRY["myproto"] = MyFramer
-config = ProxyConfig(framer_name="myproto", ...)
+config = ProxyConfig(
+    listen_port=8080,
+    upstream_host="10.0.0.1",
+    upstream_port=9090,
+    custom_framer_path="/path/to/my_framer.py",
+)
 ```
+The script just defines two functions — no imports from ProtoPoke needed. See the [Framer](#framer) chapter for the full API.
 
 > **How to find the right framer:** capture a few raw frames first (`framer_name="raw"`), open them in a hex editor, and look for repeating patterns at fixed offsets. A 2- or 4-byte integer right at the start whose value matches the remaining byte count is a length prefix. Repeated `\x00` or `\r\n` terminations mean a delimiter framer.
 
@@ -649,6 +637,300 @@ print(msg.field_by_name("username").value)          # "admin"
 # Edit one field — length fields are auto-recomputed on re-encode
 api.modify_field_and_forward(unit.id, {"username": "hacker"})
 ```
+
+---
+
+## Framer
+
+### What a framer does
+
+TCP is a **byte stream** — the OS delivers bytes in arbitrary chunks that bear no relation to the application's message boundaries. A single `read()` may return half a message, exactly one message, or three messages fused together.
+
+The framer is the **first processing phase** for every byte that arrives on a proxied connection. Its job is to cut the raw stream into discrete, atomic units called **frames** — one frame = one complete application-level message. Everything downstream (intercept, protocol dissection, replay, fuzzing) operates on frames, so getting the framing right is the prerequisite for everything else.
+
+ProtoPoke runs one framer instance per direction per session:
+
+```
+client ──bytes──▶ [client→server framer] ──frames──▶ intercept / dissect / log
+server ──bytes──▶ [server→client framer] ──frames──▶ intercept / dissect / log
+```
+
+---
+
+### Built-in framers
+
+Configure a built-in framer with `framer_name` (and optional `framer_kwargs`) in `ProxyConfig`:
+
+#### `raw` (default)
+
+Every `read()` chunk becomes one frame immediately. No buffering, no boundary detection. Good for an initial capture to observe raw bytes; unreliable for parsing because frame boundaries depend on OS scheduling.
+
+```python
+config = ProxyConfig(
+    listen_port=8080,
+    upstream_host="10.0.0.1",
+    upstream_port=9090,
+    # framer_name defaults to "raw"
+)
+```
+
+#### `delimiter`
+
+Accumulates bytes until a configurable byte sequence appears, then emits everything before it as one frame. The delimiter itself is consumed and not included in the frame.
+
+```python
+# Split on newline (HTTP headers, SMTP, FTP, Redis inline commands)
+config = ProxyConfig(..., framer_name="delimiter", framer_kwargs={"delimiter": b"\n"})
+
+# Split on CRLF
+config = ProxyConfig(..., framer_name="delimiter", framer_kwargs={"delimiter": b"\r\n"})
+
+# Split on null byte (C-string protocols)
+config = ProxyConfig(..., framer_name="delimiter", framer_kwargs={"delimiter": b"\x00"})
+
+# Split on a multi-byte magic sequence
+config = ProxyConfig(..., framer_name="delimiter", framer_kwargs={"delimiter": b"\xff\xfe"})
+```
+
+#### `length_prefix`
+
+Reads a fixed-size integer at the start of each message that declares how many bytes follow, then buffers until exactly that many bytes have arrived and emits the full `prefix + payload` as one frame.
+
+```python
+# 4-byte big-endian length field (most common binary protocol layout)
+config = ProxyConfig(
+    ...,
+    framer_name="length_prefix",
+    framer_kwargs={"prefix_length": 4, "byte_order": "big"},
+)
+
+# 2-byte little-endian length field
+config = ProxyConfig(
+    ...,
+    framer_name="length_prefix",
+    framer_kwargs={"prefix_length": 2, "byte_order": "little"},
+)
+
+# Length field is at byte offset 3 (skip a 3-byte header first)
+config = ProxyConfig(
+    ...,
+    framer_name="length_prefix",
+    framer_kwargs={"prefix_length": 2, "byte_order": "big", "prefix_offset": 3},
+)
+
+# Length field counts only the payload; add 6 to include the header in the frame
+config = ProxyConfig(
+    ...,
+    framer_name="length_prefix",
+    framer_kwargs={"prefix_length": 2, "byte_order": "big", "length_add": 6},
+)
+```
+
+`prefix_length` accepts 1, 2, 4, or 8 bytes. `byte_order` accepts `"big"` or `"little"`.
+
+#### `line`
+
+Convenience wrapper around `delimiter` that splits on `\r\n` and also accepts bare `\n`. Useful for HTTP/1.x header parsing or any human-readable line-oriented protocol.
+
+```python
+config = ProxyConfig(..., framer_name="line")
+```
+
+---
+
+### Custom framer
+
+When none of the built-in framers fit, write a Python script with two functions. No class, no inheritance, no imports from ProtoPoke.
+
+#### How to load it
+
+```python
+config = ProxyConfig(
+    listen_port=8080,
+    upstream_host="10.0.0.1",
+    upstream_port=9090,
+    custom_framer_path="/path/to/my_framer.py",
+)
+```
+
+`custom_framer_path` takes precedence over `framer_name`. ProtoPoke discovers the functions automatically — no class name or registration required.
+
+In the TUI: **Config tab → Edit Framer → Custom → Script path**.
+
+#### The two functions
+
+```python
+def on_data(data: bytes, state: dict, direction: str) -> list[bytes]:
+    ...
+
+def on_flush(state: dict, direction: str) -> list[bytes]:
+    ...
+```
+
+#### `on_data(data, state, direction)`
+
+Called every time bytes arrive from the network. May be called many times per message (TCP segments arrive piecemeal) or once with several messages fused together. Must handle both cases by buffering internally.
+
+| Argument | Type | Description |
+|---|---|---|
+| `data` | `bytes` | Raw bytes from the latest `read()` call. Append them to your buffer. |
+| `state` | `dict` | Mutable dict shared between **both** directions for this session. Persists for the lifetime of the connection. Use it for per-direction buffers and any cross-direction state your protocol needs (see below). |
+| `direction` | `str` | `"c2s"` (client → server) or `"s2c"` (server → client). |
+
+**Return value:** `list[bytes]` — zero or more complete message payloads. Return `[]` if you need more data before a boundary can be found.
+
+#### `on_flush(state, direction)`
+
+Called once when the underlying TCP connection closes, giving the framer a chance to emit any bytes that were buffered but never completed a full message. Nothing should be silently discarded — return whatever is left.
+
+| Argument | Type | Description |
+|---|---|---|
+| `state` | `dict` | Same shared dict as `on_data`. |
+| `direction` | `str` | `"c2s"` or `"s2c"`. |
+
+**Return value:** `list[bytes]` — zero or one partial frame. Typically `[bytes(buf)]` if the buffer is non-empty, `[]` otherwise.
+
+#### The `state` dict — buffers and cross-direction correlation
+
+`state` is created **once per connection** and passed to every `on_data` and `on_flush` call for **both** directions. This design has two consequences:
+
+**1. Per-direction buffering** — use `direction` as a key so each side has its own accumulation buffer:
+
+```python
+def on_data(data, state, direction):
+    buf = state.setdefault(direction, bytearray())
+    buf.extend(data)
+    # ... detect boundaries in buf and return complete frames ...
+```
+
+**2. Cross-direction correlation** — protocols where the server response format depends on what the client sent can share state freely:
+
+```python
+def on_data(data, state, direction):
+    buf = state.setdefault(direction, bytearray())
+    buf.extend(data)
+
+    if direction == "c2s":
+        # Parse the client's command and record it for the server side
+        if len(buf) >= 1:
+            state["last_cmd"] = buf[0]
+            # ... parse and return client frames ...
+
+    else:  # "s2c"
+        cmd = state.get("last_cmd")
+        # ... parse server response differently depending on cmd ...
+```
+
+`on_flush` receives the same `state`, so you can also check cross-direction state there.
+
+#### Minimal example — fixed 4-byte length prefix
+
+```python
+import struct
+
+def on_data(data: bytes, state: dict, direction: str) -> list[bytes]:
+    buf = state.setdefault(direction, bytearray())
+    buf.extend(data)
+    frames = []
+    while len(buf) >= 4:
+        (length,) = struct.unpack_from(">I", buf, 0)   # big-endian uint32
+        total = 4 + length
+        if len(buf) < total:
+            break                                        # incomplete — wait
+        frames.append(bytes(buf[:total]))
+        del buf[:total]
+    return frames
+
+def on_flush(state: dict, direction: str) -> list[bytes]:
+    buf = state.pop(direction, bytearray())
+    return [bytes(buf)] if buf else []
+```
+
+#### Example — delimiter (manual)
+
+```python
+DELIMITER = b"\r\n"
+
+def on_data(data: bytes, state: dict, direction: str) -> list[bytes]:
+    buf = state.setdefault(direction, bytearray())
+    buf.extend(data)
+    frames = []
+    while True:
+        idx = buf.find(DELIMITER)
+        if idx == -1:
+            break
+        frames.append(bytes(buf[:idx]))   # exclude delimiter
+        del buf[:idx + len(DELIMITER)]
+    return frames
+
+def on_flush(state: dict, direction: str) -> list[bytes]:
+    buf = state.pop(direction, bytearray())
+    return [bytes(buf)] if buf else []
+```
+
+#### Example — DNS over TCP (RFC 1035 §4.2.2)
+
+DNS over TCP prefixes every message with a 2-byte big-endian length (payload only, prefix not counted). This example also shows desync recovery: if the declared length looks implausible, the bad bytes are emitted as a raw frame and framing restarts.
+
+```python
+import struct
+
+_DNS_MIN = 12   # smallest valid DNS message (fixed header, no records)
+
+def on_data(data: bytes, state: dict, direction: str) -> list[bytes]:
+    buf = state.setdefault(direction, bytearray())
+    buf.extend(data)
+    frames = []
+    while len(buf) >= 2:
+        (msg_len,) = struct.unpack_from(">H", buf, 0)
+        if msg_len < _DNS_MIN or msg_len > 0xFFFF:
+            # Implausible — desynced. Flush buffer and restart.
+            frames.append(bytes(buf))
+            buf.clear()
+            break
+        total = 2 + msg_len
+        if len(buf) < total:
+            break                          # incomplete — wait
+        frames.append(bytes(buf[:total]))  # prefix + DNS message
+        del buf[:total]
+    return frames
+
+def on_flush(state: dict, direction: str) -> list[bytes]:
+    buf = state.pop(direction, bytearray())
+    return [bytes(buf)] if buf else []
+```
+
+A standalone runnable version of this framer lives in [`examples/dns_framer.py`](examples/dns_framer.py).
+
+#### Desync recovery
+
+If your protocol has no reliable sync markers (DNS over TCP being a classic example), the safest desync strategy is to flush the entire buffer and restart:
+
+```python
+# Desync: emit everything buffered as a single raw frame, then restart clean
+frames.append(bytes(buf))
+buf.clear()
+break
+```
+
+If your protocol *does* have sync markers (e.g. a magic header `0xAB 0xCD` that starts every frame), scan for the next one to skip as few bytes as possible:
+
+```python
+MAGIC = b"\xab\xcd"
+
+def _recover(buf: bytearray) -> int:
+    """Return how many bytes to skip. 0 = need more data."""
+    idx = buf.find(MAGIC, 1)          # start at 1 to skip current bad position
+    return idx if idx != -1 else len(buf)
+```
+
+#### Tips
+
+- **Always use `state.setdefault(direction, bytearray())`** for your buffer — never a module-level variable, which would be shared across all sessions.
+- **Never modify `data` directly.** Append it to your buffer, then slice from the buffer.
+- **Return complete frames only.** If you are not sure a frame is complete, return `[]` and wait for the next `on_data` call.
+- **`on_flush` should drain the buffer**, not leave bytes behind. Whatever is in the buffer when the connection closes is the last chance to capture it.
+- **Test with a smoke-test script.** Call `on_data` / `on_flush` directly with synthetic payloads before wiring up a live proxy. See the DNS and FrameSize examples in `examples/`.
 
 ---
 

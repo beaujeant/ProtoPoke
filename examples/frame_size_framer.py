@@ -11,132 +11,80 @@ Offset  Size  Description
 3       2     Total length  ← big-endian uint16, counts ALL bytes including header
 5+      N     Payload
 
-The framer reads bytes 3–4 (0-indexed) of every incoming frame, interprets
-them as a big-endian unsigned 16-bit integer, and buffers data until exactly
-that many bytes have arrived — then emits one complete Frame.
-
 Usage in ProtoPoke
 ------------------
-In the Config tab, click **Edit** next to *Framer*, choose *custom*, then set:
+Config tab → Edit Framer → Custom, then set:
 
   Script path : /path/to/this/file/frame_size_framer.py
-  Class name  : FrameSizeFramer
 
-The framer takes no extra kwargs.
+That is all.
 
-Example wire bytes
-------------------
-If the first five bytes of an incoming message are:
+How a custom framer works
+--------------------------
+A custom framer is two plain functions — no class, no imports from ProtoPoke:
 
-    0x01  0x00  0x00  0x00  0x14
+    def on_data(data: bytes, state: dict, direction: str) -> list[bytes]:
+        ...
 
-Then bytes[3:5] = 0x00 0x14  →  total_length = 20.
-The framer will buffer 20 bytes before emitting a Frame.
+    def on_flush(state: dict, direction: str) -> list[bytes]:
+        ...
+
+``state`` is a plain dict shared between BOTH directions for the lifetime
+of the session.  Use ``direction`` ("c2s" or "s2c") as a key to keep
+per-direction buffers separate:
+
+    buf = state.setdefault(direction, bytearray())
+
+Cross-direction correlation is free — anything written under a plain key in
+one direction call is visible in the next call for the other direction.
 """
 
 from __future__ import annotations
 
 import struct
 
-from protopoke.framing.base import Framer
-from protopoke.models import Frame
+_HEADER_SIZE   = 5       # must have at least 5 bytes before reading the length field
+_LENGTH_OFFSET = 3       # byte offset of the uint16 total-length field
+_MAX_FRAME     = 64 * 1024
 
 
-class FrameSizeFramer(Framer):
+def on_data(data: bytes, state: dict, direction: str) -> list[bytes]:
     """
-    Custom framer that derives the total frame size from bytes 3–4 of the frame.
+    Accumulate *data* and return complete frames.
 
-    Bytes at offset 3 and 4 (0-indexed) are interpreted as a big-endian
-    unsigned 16-bit integer (*total* frame length, inclusive of the header).
-
-    Args:
-        session_id:     Session this framer belongs to.
-        direction:      Direction of the stream.
-        max_frame_size: Safety cap (default 64 KiB).  If the declared length
-                        exceeds this value the buffer is flushed immediately
-                        to prevent unbounded memory growth.
+    Reads the big-endian uint16 at bytes 3–4 of the frame header to
+    determine total frame length (header + payload), then buffers until
+    that many bytes have arrived.
     """
+    buf = state.setdefault(direction, bytearray())
+    buf.extend(data)
+    frames: list[bytes] = []
 
-    # Minimum bytes we must have before we can read the length field.
-    _HEADER_SIZE: int = 5  # bytes 0-4 must be present
+    while True:
+        if len(buf) < _HEADER_SIZE:
+            break
 
-    # Offset and format of the length field within the header.
-    _LENGTH_OFFSET: int = 3
-    _LENGTH_FORMAT: str = ">H"  # big-endian unsigned 16-bit int
+        (total_length,) = struct.unpack_from(">H", buf, _LENGTH_OFFSET)
 
-    def __init__(
-        self,
-        session_id: str,
-        direction,
-        max_frame_size: int = 64 * 1024,
-    ) -> None:
-        super().__init__(session_id, direction)
-        self._buffer: bytearray = bytearray()
-        self._max_frame_size: int = max_frame_size
+        if total_length > _MAX_FRAME or total_length < _HEADER_SIZE:
+            # Corrupt / implausible length — emit everything and restart.
+            frames.append(bytes(buf))
+            buf.clear()
+            break
 
-    @property
-    def name(self) -> str:
-        return "frame_size"
+        if len(buf) < total_length:
+            break  # incomplete frame — wait for more data
 
-    # ------------------------------------------------------------------
-    # Framer interface
-    # ------------------------------------------------------------------
+        frames.append(bytes(buf[:total_length]))
+        del buf[:total_length]
 
-    def feed(self, data: bytes) -> list[Frame]:
-        """
-        Accumulate *data* and emit complete frames.
+    return frames
 
-        Returns a list of zero or more :class:`~protopoke.models.Frame`
-        objects.  Returns an empty list if more bytes are needed.
-        """
-        self._buffer.extend(data)
-        frames: list[Frame] = []
 
-        while True:
-            # Need the full header before we can read the length field.
-            if len(self._buffer) < self._HEADER_SIZE:
-                break
-
-            # Bytes 3 and 4 → big-endian uint16 = total frame length.
-            (total_length,) = struct.unpack_from(
-                self._LENGTH_FORMAT, self._buffer, self._LENGTH_OFFSET
-            )
-
-            if total_length > self._max_frame_size:
-                # Safety: corrupt data or misconfigured framer — emit and reset.
-                frames.append(self._make_frame(bytes(self._buffer)))
-                self._buffer.clear()
-                break
-
-            if total_length < self._HEADER_SIZE:
-                # Declared length smaller than header — treat as corrupt, emit.
-                frames.append(self._make_frame(bytes(self._buffer)))
-                self._buffer.clear()
-                break
-
-            if len(self._buffer) < total_length:
-                # Frame not yet complete — wait for more data.
-                break
-
-            # We have a complete frame.
-            frame_bytes = bytes(self._buffer[:total_length])
-            frames.append(self._make_frame(frame_bytes))
-            del self._buffer[:total_length]
-
-        return frames
-
-    def flush(self) -> list[Frame]:
-        """Emit any remaining buffered bytes as a partial final frame."""
-        if self._buffer:
-            frame = self._make_frame(bytes(self._buffer))
-            self._buffer.clear()
-            return [frame]
-        return []
-
-    def reset(self) -> None:
-        """Clear buffer and reset sequence counter."""
-        self._buffer.clear()
-        self._sequence = 0
+def on_flush(state: dict, direction: str) -> list[bytes]:
+    """Emit any remaining buffered bytes when the connection closes."""
+    buf = state.pop(direction, bytearray())
+    return [bytes(buf)] if buf else []
 
 
 # ---------------------------------------------------------------------------
@@ -145,35 +93,31 @@ class FrameSizeFramer(Framer):
 if __name__ == "__main__":
     import sys
 
-    # Minimal stubs so the test runs without a full ProtoPoke install.
-    try:
-        from protopoke.models import Direction
-    except ImportError:
-        from enum import Enum
-
-        class Direction(Enum):  # type: ignore[no-redef]
-            CLIENT_TO_SERVER = "c2s"
-            SERVER_TO_CLIENT = "s2c"
-
-    framer = FrameSizeFramer(session_id="test", direction=Direction.CLIENT_TO_SERVER)
+    DIR = "c2s"
+    state: dict = {}
 
     # Build a 20-byte frame: header (5 bytes) + 15-byte payload.
     # Bytes 3-4 carry the total length: 0x00 0x14 = 20.
     header = bytes([0x01, 0x00, 0x00, 0x00, 0x14])  # total_length = 20
-    payload = b"Hello, ProtoPoke!"[:15]              # exactly 15 bytes
+    payload = b"Hello, ProtoPoke!"[:15]
     raw = header + payload
-    assert len(raw) == 20, f"Expected 20 bytes, got {len(raw)}"
+    assert len(raw) == 20
 
     # Feed in two chunks to exercise buffering.
-    frames = framer.feed(raw[:10])
-    assert frames == [], "Should not have a complete frame yet"
-    frames = framer.feed(raw[10:])
-    assert len(frames) == 1, f"Expected 1 frame, got {len(frames)}"
-    assert frames[0].raw_bytes == raw, "Frame bytes mismatch"
+    assert on_data(raw[:10], state, DIR) == [], "T1a: should buffer partial frame"
+    result = on_data(raw[10:], state, DIR)
+    assert len(result) == 1 and result[0] == raw, f"T1b failed: {result}"
 
-    # Feed two back-to-back frames in one call.
-    framer.reset()
-    frames = framer.feed(raw + raw)
-    assert len(frames) == 2, f"Expected 2 frames, got {len(frames)}"
+    # Two back-to-back frames in one call.
+    state.pop(DIR, None)
+    result = on_data(raw + raw, state, DIR)
+    assert len(result) == 2, f"T2 failed: {result}"
+
+    # Shared state between directions.
+    shared: dict = {}
+    on_data(raw, shared, "c2s")
+    shared["seq"] = 1
+    on_data(raw, shared, "s2c")
+    assert shared.get("seq") == 1, "T3: shared state not visible cross-direction"
 
     print("All tests passed.", file=sys.stderr)
