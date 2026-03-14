@@ -141,6 +141,18 @@ class ConfigTab(Widget):
     }
     """
 
+    # Widget IDs that must be disabled while the proxy is running because
+    # they affect network binding or TLS contexts (require restart to change).
+    _LOCKED_WHEN_RUNNING = (
+        "listen-host", "listen-port",
+        "upstream-host", "upstream-port", "connect-timeout",
+        "tls-listen", "tls-upstream",
+        "ca-cert", "browse-ca-cert",
+        "ca-key", "browse-ca-key",
+        "tls-cert", "browse-tls-cert",
+        "tls-key", "browse-tls-key",
+    )
+
     def __init__(
         self,
         config: ProxyConfig,
@@ -155,6 +167,10 @@ class ConfigTab(Widget):
         self._framer_name: str = config.framer_name
         self._framer_kwargs: dict = dict(config.framer_kwargs)
         self._custom_framer_path: str | None = config.custom_framer_path
+        # Dirty tracking: True when any field has been modified since last Apply
+        self._dirty: bool = False
+        # Guard flag: suppress dirty marking while load_config() is running
+        self._loading: bool = False
 
     def compose(self) -> ComposeResult:
         cfg = self.config
@@ -263,9 +279,11 @@ class ConfigTab(Widget):
                 variant="primary",
                 id="btn-apply",
                 classes="btn-small",
+                disabled=True,   # enabled only when a field has been modified
             )
             yield Button("▶ Start Proxy", variant="success", id="btn-start")
-            yield Button("■ Stop Proxy", variant="error", id="btn-stop")
+            yield Button("■ Stop Proxy", variant="error", id="btn-stop",
+                         disabled=True)  # enabled only when proxy is running
 
     # ------------------------------------------------------------------
     # Helpers
@@ -330,9 +348,21 @@ class ConfigTab(Widget):
     # Event handlers
     # ------------------------------------------------------------------
 
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Any input field change marks the form as dirty."""
+        if not self._loading:
+            self._mark_dirty()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        """Any select change marks the form as dirty."""
+        if not self._loading:
+            self._mark_dirty()
+
     def on_switch_changed(self, event: Switch.Changed) -> None:
         if event.switch.id == "tls-listen":
             self.query_one("#tls-paths").display = event.value
+        if not self._loading:
+            self._mark_dirty()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id
@@ -364,9 +394,11 @@ class ConfigTab(Widget):
             self.app.push_screen(FramerEditModal(settings), self._on_framer_edit_result)
         elif btn_id == "btn-apply":
             self._read_form()
+            self._clear_dirty()
             self.post_message(self.Applied())
         elif btn_id == "btn-start":
             self._read_form()
+            self._clear_dirty()
             self.post_message(self.Applied())
             self.post_message(self.StartProxy())
         elif btn_id == "btn-stop":
@@ -380,6 +412,7 @@ class ConfigTab(Widget):
         self._framer_kwargs = dict(result["framer_kwargs"])
         self._custom_framer_path = result.get("custom_framer_path")
         self._update_framer_summary()
+        self._mark_dirty()
 
     # ------------------------------------------------------------------
     # Public API
@@ -388,6 +421,10 @@ class ConfigTab(Widget):
     def load_config(self, config: ProxyConfig) -> None:
         """Reload the form from a new ProxyConfig object (e.g. after project open)."""
         self.config = config
+        # Suppress dirty marking while we programmatically set field values.
+        # Input.Changed events are posted asynchronously, so we keep _loading=True
+        # until call_after_refresh fires (after all queued events are processed).
+        self._loading = True
 
         def _set(wid: str, val: str) -> None:
             self.query_one(f"#{wid}", Input).value = val
@@ -420,3 +457,46 @@ class ConfigTab(Widget):
         _set("sequencer-script",  cfg.sequencer_script or "")
         _sel("log-level",         cfg.log_level)
         _set("max-sessions", str(cfg.max_sessions))
+
+        # Reset loading flag and clear dirty state after all queued Changed
+        # events from the value-setting above have been processed.
+        self.call_after_refresh(self._on_load_complete)
+
+    def _on_load_complete(self) -> None:
+        """Called after load_config() — reset loading guard and clear dirty."""
+        self._loading = False
+        self._clear_dirty()
+
+    # ------------------------------------------------------------------
+    # Dirty-tracking helpers
+    # ------------------------------------------------------------------
+
+    def _mark_dirty(self) -> None:
+        """Mark the form as having unsaved changes and enable the Apply button."""
+        self._dirty = True
+        self.query_one("#btn-apply", Button).disabled = False
+
+    def _clear_dirty(self) -> None:
+        """Clear the dirty flag and disable the Apply button."""
+        self._dirty = False
+        self.query_one("#btn-apply", Button).disabled = True
+
+    # ------------------------------------------------------------------
+    # Proxy running state
+    # ------------------------------------------------------------------
+
+    def notify_proxy_running(self, running: bool) -> None:
+        """
+        Called by the app when the proxy starts or stops.
+
+        - Locks/unlocks fields that cannot be changed at runtime (networking,
+          TLS) to make it clear they require a proxy restart.
+        - Flips the Start/Stop button enabled states.
+        """
+        for wid_id in self._LOCKED_WHEN_RUNNING:
+            try:
+                self.query_one(f"#{wid_id}").disabled = running
+            except Exception:
+                pass
+        self.query_one("#btn-start", Button).disabled = running
+        self.query_one("#btn-stop", Button).disabled = not running

@@ -215,6 +215,10 @@ class ProtoPoke(App):
     def on_config_tab_applied(self, _event: ConfigTab.Applied) -> None:
         self._project.mark_dirty()
         self._update_title()
+        # If the proxy is already running, apply the changes that can take
+        # effect without a restart (protocol definition, log level, etc.)
+        if self._proxy_running:
+            self._apply_dynamic_config()
 
     def on_config_tab_start_proxy(self, _event: ConfigTab.StartProxy) -> None:
         if not self._proxy_running:
@@ -232,6 +236,7 @@ class ProtoPoke(App):
             await self.api.start()
             self._proxy_running = True
             self._update_title()
+            self.query_one("#config-tab", ConfigTab).notify_proxy_running(True)
             # Sync the intercept toggle in the Intercept tab to reflect config
             try:
                 self.query_one("#intercept-tab", InterceptTab).query_one(
@@ -252,9 +257,48 @@ class ProtoPoke(App):
             await self.api.stop()
             self._proxy_running = False
             self._update_title()
+            self.query_one("#config-tab", ConfigTab).notify_proxy_running(False)
             self.notify("Proxy stopped.", severity="information")
         except Exception as exc:
             self.notify(f"Failed to stop proxy: {exc}", severity="error")
+
+    def _apply_dynamic_config(self) -> None:
+        """
+        Apply config changes that can take effect while the proxy is running.
+
+        Called automatically by on_config_tab_applied() when _proxy_running is True.
+
+        Changes that are applied immediately:
+        - Protocol definition: reloaded via api.set_protocol_file()
+        - Log level: applied to the root logger
+        Changes that apply to new connections / next run (no extra action needed,
+        they are read from api.config at the relevant time):
+        - Framing (new connections use updated framer_name / framer_kwargs)
+        - Sequencer script (loaded fresh at the start of each run)
+        - Max sessions (checked per new connection)
+        """
+        import logging as _logging
+
+        cfg = self.api.config
+
+        # Protocol definition — reload immediately so new frames are decoded
+        if cfg.protocol_definition_path:
+            try:
+                self.api.set_protocol_file(cfg.protocol_definition_path)
+            except Exception as exc:
+                self.notify(
+                    f"Protocol definition reload failed: {exc}", severity="warning"
+                )
+        else:
+            # Path cleared — reset to passthrough decoder
+            from ..protocol.base import PassthroughDecoder
+            self.api.set_protocol(PassthroughDecoder())
+
+        # Log level — apply to the root logger immediately
+        try:
+            _logging.getLogger().setLevel(cfg.log_level)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Tab switching actions
@@ -287,7 +331,9 @@ class ProtoPoke(App):
         self._project.new(name)
         # Rebuild API with fresh state
         self._rebuild_api()
-        self.query_one("#config-tab", ConfigTab).load_config(self._project.config)
+        config_tab = self.query_one("#config-tab", ConfigTab)
+        config_tab.load_config(self._project.config)
+        config_tab.notify_proxy_running(False)
         self.query_one("#repeater-tab", RepeaterTab).load_requests([])
         self.query_one("#sequencer-tab", SequencerTab).load_sequences([])
         self._update_title()
@@ -302,7 +348,9 @@ class ProtoPoke(App):
         try:
             state = self._project.open(path)
             self._rebuild_api_from_state(state)
-            self.query_one("#config-tab", ConfigTab).load_config(state.config)
+            config_tab = self.query_one("#config-tab", ConfigTab)
+            config_tab.load_config(state.config)
+            config_tab.notify_proxy_running(False)
             self.query_one("#repeater-tab", RepeaterTab).load_requests(state.repeater_requests)
             self.query_one("#sequencer-tab", SequencerTab).load_sequences(state.sequencer_sessions)
             self._update_title()
