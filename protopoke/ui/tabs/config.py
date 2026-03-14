@@ -192,7 +192,7 @@ class ConfigTab(Widget):
             with Horizontal(classes="field-row"):
                 yield Label("TLS upstream:", classes="field-label")
                 yield Switch(value=cfg.tls_upstream, id="tls-upstream")
-            with Vertical(id="tls-paths", display=cfg.tls_listen):
+            with Vertical(id="tls-paths"):
                 with Horizontal(classes="field-row"):
                     yield Label("CA cert path:", classes="field-label")
                     yield Input(value=cfg.ca_cert_path or "", id="ca-cert",
@@ -270,6 +270,9 @@ class ConfigTab(Widget):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def on_mount(self) -> None:
+        self.query_one("#tls-paths").display = self.config.tls_listen
 
     def _update_framer_summary(self) -> None:
         """Refresh the framer summary Static widget from current instance vars."""
