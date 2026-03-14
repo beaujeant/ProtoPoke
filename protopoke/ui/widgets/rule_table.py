@@ -23,6 +23,9 @@ class RuleTable(Widget, Generic[R]):
       - ``on_add``: async callable invoked when the user presses [+].
       - ``on_remove``: called with the selected rule's ID when [-] is pressed.
       - ``on_move_up`` / ``on_move_down``: called with rule ID.
+      - ``on_toggle``: optional; called with rule ID when [Toggle] is pressed.
+      - ``on_reset``: optional; called with rule ID when [Reset] is pressed
+        (intended for script-type rules).
 
     The widget does *not* own the underlying rule list — it is a pure display
     layer.  Call ``refresh_rules(rules)`` to repopulate after any mutation.
@@ -54,6 +57,8 @@ class RuleTable(Widget, Generic[R]):
         on_remove: Callable,
         on_move_up: Callable | None = None,
         on_move_down: Callable | None = None,
+        on_toggle: Callable | None = None,
+        on_reset: Callable | None = None,
         *,
         name: str | None = None,
         id: str | None = None,
@@ -66,6 +71,8 @@ class RuleTable(Widget, Generic[R]):
         self._on_remove = on_remove
         self._on_move_up = on_move_up
         self._on_move_down = on_move_down
+        self._on_toggle = on_toggle
+        self._on_reset = on_reset
         self._rules: list[R] = []
 
     def compose(self) -> ComposeResult:
@@ -78,6 +85,10 @@ class RuleTable(Widget, Generic[R]):
                     yield Button("[↑] Up",   id="btn-up",   compact=True)
                 if self._on_move_down:
                     yield Button("[↓] Down", id="btn-down", compact=True)
+                if self._on_toggle:
+                    yield Button("[⏻] Toggle", id="btn-toggle", compact=True)
+                if self._on_reset:
+                    yield Button("[↺] Reset Script", id="btn-reset", compact=True)
 
     def on_mount(self) -> None:
         dt = self.query_one("#rule-dt", DataTable)
@@ -98,6 +109,12 @@ class RuleTable(Widget, Generic[R]):
             return None
         return getattr(self._rules[dt.cursor_row], "id", None)
 
+    def _selected_rule(self) -> "R | None":
+        dt = self.query_one("#rule-dt", DataTable)
+        if dt.cursor_row < 0 or dt.cursor_row >= len(self._rules):
+            return None
+        return self._rules[dt.cursor_row]
+
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
         if event.button.id == "btn-add":
@@ -114,3 +131,11 @@ class RuleTable(Widget, Generic[R]):
             rid = self._selected_rule_id()
             if rid:
                 self._on_move_down(rid)
+        elif event.button.id == "btn-toggle" and self._on_toggle:
+            rid = self._selected_rule_id()
+            if rid:
+                self._on_toggle(rid)
+        elif event.button.id == "btn-reset" and self._on_reset:
+            rid = self._selected_rule_id()
+            if rid:
+                self._on_reset(rid)

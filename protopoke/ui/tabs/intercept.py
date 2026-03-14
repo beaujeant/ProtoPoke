@@ -155,15 +155,16 @@ class InterceptTab(Widget):
         # Replace rules
         with Vertical(id="replace-rules-pane"):
             yield Static(
-                "  Replace Rules  [applied in order before intercept/forward]",
+                "  Replace Rules  [applied in order — scopes: I=Intercept R=Repeater S=Sequencer]",
                 classes="pane-header",
             )
             yield RuleTable(
                 columns=[
                     ("enabled",  "On"),
+                    ("type",     "Type"),
                     ("label",    "Label"),
-                    ("pattern",  "Pattern"),
-                    ("replace",  "→ Replacement"),
+                    ("detail",   "Pattern / Script"),
+                    ("scope",    "Scope"),
                     ("dir",      "Direction"),
                 ],
                 row_factory=self._replace_rule_row,
@@ -171,6 +172,8 @@ class InterceptTab(Widget):
                 on_remove=self._remove_replace_rule,
                 on_move_up=self._move_replace_rule_up,
                 on_move_down=self._move_replace_rule_down,
+                on_toggle=self._toggle_replace_rule,
+                on_reset=self._reset_replace_rule_script,
                 id="replace-rules",
             )
 
@@ -269,11 +272,32 @@ class InterceptTab(Widget):
     def _replace_rule_row(rule: ReplaceRule) -> tuple:
         enabled   = "✓" if rule.enabled else "✗"
         direction = rule.direction.value if rule.direction else "both"
-        repl_hex  = rule.replacement.hex()
-        if len(repl_hex) > 20:
-            repl_hex = repl_hex[:20] + "…"
-        pattern = rule.pattern_str or "(empty)"
-        return (enabled, rule.label, pattern, repl_hex, direction)
+
+        # Type abbreviation
+        type_label = {"binary": "bin", "regex": "regex", "script": "script"}.get(
+            rule.rule_type, rule.rule_type
+        )
+
+        # Detail column: show pattern or script path depending on type
+        if rule.rule_type == "binary":
+            detail = rule.pattern_str or "(empty)"
+            if len(detail) > 22:
+                detail = detail[:22] + "…"
+        elif rule.rule_type == "regex":
+            detail = rule.regex_pattern or "(empty)"
+            if len(detail) > 22:
+                detail = detail[:22] + "…"
+        else:  # script
+            import os
+            detail = os.path.basename(rule.script_path) if rule.script_path else "(no path)"
+
+        # Scope column: I=intercept R=repeater S=sequencer
+        scope = ""
+        scope += "I" if rule.apply_to_intercept else "·"
+        scope += "R" if rule.apply_to_repeater  else "·"
+        scope += "S" if rule.apply_to_sequencer  else "·"
+
+        return (enabled, type_label, rule.label, detail, scope, direction)
 
     def refresh_replace_rules(self, rules: list[ReplaceRule]) -> None:
         self.query_one("#replace-rules", RuleTable).refresh_rules(rules)
@@ -302,6 +326,25 @@ class InterceptTab(Widget):
         if 0 <= idx < len(rules) - 1:
             self.app.api.rules_engine.move_rule(rule_id, idx + 1)
             self.refresh_replace_rules(self.app.api.list_replace_rules())
+
+    def _toggle_replace_rule(self, rule_id: str) -> None:
+        """Toggle the enabled state of the selected replace rule."""
+        rule = self.app.api.rules_engine.get_rule(rule_id)
+        if rule is not None:
+            rule.enabled = not rule.enabled
+            self.refresh_replace_rules(self.app.api.list_replace_rules())
+
+    def _reset_replace_rule_script(self, rule_id: str) -> None:
+        """Reset the cached script module for a script-type replace rule."""
+        rule = self.app.api.rules_engine.get_rule(rule_id)
+        if rule is None:
+            self.notify("Rule not found.", severity="warning")
+            return
+        if rule.rule_type != "script":
+            self.notify("Reset Script only applies to script-type rules.", severity="warning")
+            return
+        rule.reset_script_state()
+        self.notify(f"Script state reset for rule '{rule.label}'.")
 
     # ------------------------------------------------------------------
     # Event handlers
