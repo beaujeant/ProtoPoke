@@ -295,8 +295,8 @@ class RepeaterTab(Widget):
         else:
             self._refresh_response_packets([])
 
-        # Refresh history table
-        self._refresh_history(req)
+        # Refresh history table — select last entry to match the displayed response
+        self._refresh_history(req, select_last=True)
 
     def _rebuild_session_dropdown(self, req: RepeaterRequest) -> None:
         """Rebuild the session Select options and set the correct value."""
@@ -403,8 +403,15 @@ class RepeaterTab(Widget):
         pairs = [pkt.hex()[i:i+2] for i in range(0, len(pkt.hex()), 2)]
         self.query_one("#resp-view", TextArea).load_text(" ".join(pairs))
 
-    def _refresh_history(self, req: RepeaterRequest) -> None:
+    def _refresh_history(
+        self,
+        req: RepeaterRequest,
+        *,
+        select_last: bool = False,
+        preserve_cursor: bool = False,
+    ) -> None:
         dt = self.query_one("#history-table", DataTable)
+        saved_row = dt.cursor_row if preserve_cursor else -1
         dt.clear()
         for i, record in enumerate(req.history, 1):
             t = _time.strftime("%H:%M:%S", _time.localtime(record.timestamp))
@@ -418,6 +425,12 @@ class RepeaterTab(Widget):
                 ok, err,
                 key=record.id,
             )
+        if not req.history:
+            return
+        if select_last:
+            dt.move_cursor(row=len(req.history) - 1)
+        elif preserve_cursor and saved_row >= 0:
+            dt.move_cursor(row=min(saved_row, len(req.history) - 1))
 
     def load_requests(self, requests: list[RepeaterRequest]) -> None:
         """Reload all requests (e.g. after project open)."""
@@ -668,17 +681,40 @@ class RepeaterTab(Widget):
         self.run_worker(self._async_send(req, data), exclusive=True)
 
     async def _async_send(self, req: RepeaterRequest, data: bytes) -> None:
+        import asyncio as _asyncio
         import time as _t
 
         response_window = self._get_response_window()
+
+        # Add a provisional record immediately so the history entry appears
+        # before the response window runs, giving real-time feedback.
+        record = SendRecord.create(
+            sent_bytes=data,
+            received_bytes=b"",
+            response_packets=[],
+            host=req.host,
+            port=req.port,
+            tls=req.tls,
+            success=True,
+        )
+        req.add_record(record)
+        self._refresh_history(req, select_last=True)
+        self._display_record_response(record)
+
+        def _on_packet(pkt: bytes) -> None:
+            """Called for each incoming frame during the send window so the
+            user sees responses arrive in real time."""
+            record.response_packets.append(pkt)
+            record.received_bytes = record.received_bytes + pkt
+            self._refresh_response_packets(record.response_packets)
 
         # ------------------------------------------------------------------
         # Path 1: session-linked request — inject into existing proxy session
         # ------------------------------------------------------------------
         if req.source_session_id:
             send_time = _t.time()
-            injected = False
             to_client = (req.direction == "to_client")
+            injected = False
             try:
                 if to_client:
                     injected = await self.app.api.inject_to_client(
@@ -692,39 +728,53 @@ class RepeaterTab(Widget):
                 pass
 
             if injected:
-                await __import__("asyncio").sleep(response_window)
+                # Collect the reply direction: if we injected to server, server
+                # replies to client; if we injected to client, client replies to server.
+                reply_direction = (
+                    Direction.CLIENT_TO_SERVER if to_client
+                    else Direction.SERVER_TO_CLIENT
+                )
+                # Poll session frames during the window so frames appear as they arrive.
+                deadline = _asyncio.get_event_loop().time() + response_window
+                poll_interval = 0.1
+                while True:
+                    remaining = deadline - _asyncio.get_event_loop().time()
+                    if remaining <= 0:
+                        break
+                    await _asyncio.sleep(min(poll_interval, remaining))
+                    session = self.app.api.get_session(req.source_session_id)
+                    if session:
+                        current_packets = [
+                            f.raw_bytes for f in session.frames
+                            if f.direction is reply_direction
+                            and f.timestamp >= send_time
+                        ]
+                        for pkt in current_packets[len(record.response_packets):]:
+                            _on_packet(pkt)
+                # Final sweep to catch any frames that arrived at the deadline.
                 session = self.app.api.get_session(req.source_session_id)
-                response_packets: list[bytes] = []
                 if session:
-                    # Collect the reply direction: if we injected to server, server
-                    # replies to client; if we injected to client, client replies to server.
-                    reply_direction = (
-                        Direction.CLIENT_TO_SERVER if to_client
-                        else Direction.SERVER_TO_CLIENT
-                    )
-                    response_packets = [
+                    current_packets = [
                         f.raw_bytes for f in session.frames
                         if f.direction is reply_direction
                         and f.timestamp >= send_time
                     ]
-                record = SendRecord.create(
-                    sent_bytes=data,
-                    received_bytes=b"".join(response_packets),
-                    response_packets=response_packets,
-                    host=req.host,
-                    port=req.port,
-                    tls=req.tls,
-                    success=True,
-                )
+                    for pkt in current_packets[len(record.response_packets):]:
+                        _on_packet(pkt)
             else:
                 # Inject failed (session closed) — fall back to one-shot send
-                record = await self.app.api.send_frame(
+                final = await self.app.api.send_frame(
                     data=data,
                     host=req.host,
                     port=req.port,
                     tls=req.tls,
                     receive_timeout=response_window,
+                    packet_callback=_on_packet,
                 )
+                record.received_bytes = final.received_bytes
+                record.response_packets = final.response_packets
+                record.success = final.success
+                record.error = final.error
 
         # ------------------------------------------------------------------
         # Path 2: custom host:port — use (or create) a persistent session
@@ -741,33 +791,45 @@ class RepeaterTab(Widget):
                         req.host, req.port, req.tls
                     )
                 except Exception as exc:
-                    record = await self.app.api.send_frame(
+                    final = await self.app.api.send_frame(
                         data=data,
                         host=req.host,
                         port=req.port,
                         tls=req.tls,
                         receive_timeout=response_window,
+                        packet_callback=_on_packet,
                     )
-                    req.add_record(record)
+                    record.received_bytes = final.received_bytes
+                    record.response_packets = final.response_packets
+                    record.success = final.success
+                    record.error = final.error
+                    self._refresh_history(req, preserve_cursor=True)
                     self._display_record_response(record)
-                    self._refresh_history(req)
                     self.notify(f"Send complete (no persistent session): {exc}", severity="warning")
                     return
 
-            record = await self.app.api.send_on_repeater_session(
+            final = await self.app.api.send_on_repeater_session(
                 session_id=req.repeater_session_id,
                 data=data,
                 receive_timeout=response_window,
+                packet_callback=_on_packet,
             )
+            # Sync from the authoritative engine result (covers edge cases where
+            # the framer flushes bytes that weren't emitted via the callback).
+            record.received_bytes = final.received_bytes
+            record.response_packets = final.response_packets
+            record.success = final.success
+            record.error = final.error
 
             if req.repeater_session_id:
                 session = self.app.api.get_session(req.repeater_session_id)
                 if session and not session.is_active():
                     req.repeater_session_id = None
 
-        req.add_record(record)
+        # Refresh history to update the recv-bytes column, preserving the
+        # user's current selection in case they navigated while waiting.
+        self._refresh_history(req, preserve_cursor=True)
         self._display_record_response(record)
-        self._refresh_history(req)
         n_frames = len(record.response_packets)
         status = "OK" if record.success else f"Error: {record.error}"
         self.notify(f"Send complete: {status} — {n_frames} frame(s) received")
