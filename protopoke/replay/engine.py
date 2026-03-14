@@ -62,7 +62,7 @@ import logging
 import ssl
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from ..models import Direction, Frame, SessionInfo
 from ..core.session import Session, SessionRegistry
@@ -558,9 +558,10 @@ class ReplayEngine:
 
     async def send_on_repeater_session(
         self,
-        session_id:      str,
-        data:            bytes,
-        receive_timeout: float = 10.0,
+        session_id:       str,
+        data:             bytes,
+        receive_timeout:  float = 10.0,
+        packet_callback:  Optional[Callable[[bytes], None]] = None,
     ) -> SendRecord:
         """
         Send *data* through an existing persistent repeater session and read
@@ -648,12 +649,16 @@ class ReplayEngine:
                 received.extend(chunk)
                 for frame in response_framer.feed(chunk):
                     received_packets.append(frame.raw_bytes)
+                    if packet_callback is not None:
+                        packet_callback(frame.raw_bytes)
 
         # Flush any bytes still buffered inside the framer (e.g. a partial
         # message that arrived before the window closed).
         for frame in response_framer.flush():
             if frame.raw_bytes:
                 received_packets.append(frame.raw_bytes)
+                if packet_callback is not None:
+                    packet_callback(frame.raw_bytes)
 
         if server_closed:
             reader_task.cancel()
@@ -696,6 +701,7 @@ class ReplayEngine:
         tls:              bool           = False,
         connect_timeout:  Optional[float] = None,
         receive_timeout:  Optional[float] = None,
+        packet_callback:  Optional[Callable[[bytes], None]] = None,
     ) -> SendRecord:
         """
         Send raw bytes to *host*:*port* and read all response bytes.
@@ -784,6 +790,8 @@ class ReplayEngine:
                     received.extend(chunk)
                     for frame in response_framer.feed(chunk):
                         received_packets.append(frame.raw_bytes)
+                        if packet_callback is not None:
+                            packet_callback(frame.raw_bytes)
 
             try:
                 await asyncio.wait_for(_read_all(), timeout=recv_timeout)
@@ -797,6 +805,8 @@ class ReplayEngine:
             for frame in response_framer.flush():
                 if frame.raw_bytes:
                     received_packets.append(frame.raw_bytes)
+                    if packet_callback is not None:
+                        packet_callback(frame.raw_bytes)
             return SendRecord.create(
                 sent_bytes=data,
                 received_bytes=bytes(received),
@@ -818,6 +828,8 @@ class ReplayEngine:
         for frame in response_framer.flush():
             if frame.raw_bytes:
                 received_packets.append(frame.raw_bytes)
+                if packet_callback is not None:
+                    packet_callback(frame.raw_bytes)
 
         logger.info(
             "send_frame: sent=%d bytes, received=%d bytes (%d frames, framer=%s) to %s:%d",

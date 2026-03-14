@@ -622,9 +622,10 @@ class ProxyAPI:
 
     async def send_on_repeater_session(
         self,
-        session_id:      str,
-        data:            bytes,
-        receive_timeout: Optional[float] = None,
+        session_id:       str,
+        data:             bytes,
+        receive_timeout:  Optional[float] = None,
+        packet_callback:  Optional[Callable[[bytes], None]] = None,
     ) -> SendRecord:
         """
         Send *data* through an existing persistent repeater session.
@@ -650,6 +651,7 @@ class ProxyAPI:
             session_id=session_id,
             data=data,
             receive_timeout=recv_timeout,
+            packet_callback=packet_callback,
         )
 
         # Add sent and received frames to the session so they appear in the Logs tab.
@@ -760,6 +762,7 @@ class ProxyAPI:
         tls:              bool           = False,
         connect_timeout:  Optional[float] = None,
         receive_timeout:  Optional[float] = None,
+        packet_callback:  Optional[Callable[[bytes], None]] = None,
     ) -> SendRecord:
         """
         Send raw bytes to *host*:*port* and return a :class:`SendRecord`.
@@ -799,6 +802,7 @@ class ProxyAPI:
             tls=tls,
             connect_timeout=connect_timeout,
             receive_timeout=receive_timeout,
+            packet_callback=packet_callback,
         )
 
         if record.sent_bytes:
