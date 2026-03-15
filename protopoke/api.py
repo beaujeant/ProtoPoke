@@ -233,6 +233,52 @@ class ProxyAPI:
         """
         return self.session_registry.delete(session_id)
 
+    def load_sessions_from_dicts(self, sessions_data: list[dict]) -> list[Session]:
+        """
+        Restore saved sessions into the registry (used when loading a project).
+
+        Each dict must have the shape produced by ``session_to_dict()``:
+        keys: id, client_host, client_port, server_host, server_port, state,
+        created_at, closed_at (optional), frames (list of frame dicts).
+
+        Returns the list of restored Session objects.
+        """
+        from .models import SessionInfo, SessionState, Frame, Direction
+        restored: list[Session] = []
+        for sd in sessions_data:
+            info = SessionInfo(
+                id=sd["id"],
+                client_host=sd.get("client_host", ""),
+                client_port=sd.get("client_port", 0),
+                server_host=sd.get("server_host", ""),
+                server_port=sd.get("server_port", 0),
+                state=SessionState(sd.get("state", "closed")),
+                created_at=sd.get("created_at", 0.0),
+                closed_at=sd.get("closed_at"),
+            )
+            session = Session(info)
+            for fd in sd.get("frames", []):
+                frame = Frame(
+                    id=fd["id"],
+                    session_id=fd["session_id"],
+                    direction=Direction(fd["direction"]),
+                    raw_bytes=bytes.fromhex(fd["raw_bytes"]),
+                    timestamp=fd["timestamp"],
+                    sequence_number=fd["sequence_number"],
+                    framer_name=fd.get("framer_name", "raw"),
+                )
+                session.frames.append(frame)
+            self.session_registry._sessions[session.id] = session
+            restored.append(session)
+        return restored
+
+    @staticmethod
+    def session_to_dict(session: Session) -> dict:
+        """Serialise a Session (info + frames) to a JSON-compatible dict."""
+        d = session.info.to_dict()
+        d["frames"] = [f.to_dict() for f in session.frames]
+        return d
+
     def get_frames(
         self,
         session_id: str,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time as _time
 
 from textual.app import ComposeResult
@@ -21,12 +22,15 @@ class SequencerTab(Widget):
     Layout (all panes 100% width, stacked vertically):
 
       ┌─────────────────────────────────────────────────────────┐
-      │ Sequences: [Seq 1] [Seq 2] [+ New]     tab strip  h=3  │
+      │ Sequences pane (DataTable list)           h=20%         │
+      │  Name        Steps                                      │
+      │  Sequence 1  3                                          │
+      │  Sequence 2  5                                          │
       ├─────────────────────────────────────────────────────────┤
-      │ PACKET LIST  (~25%)                                     │
+      │ [+ New]  [Import]  [Export]               h=3           │
+      ├─────────────────────────────────────────────────────────┤
+      │ PACKET LIST  (~20%)                                     │
       │  #   Label      Len   Preview                           │
-      │  1   Handshake  12    01 02 03 04 05 …                  │
-      │  2   Login      40    01 0a {{SESS_ID}} …               │
       ├─────────────────────────────────────────────────────────┤
       │ [↑ Up] [↓ Down] [+ Add] [- Remove]         h=3         │
       ├─────────────────────────────────────────────────────────┤
@@ -37,9 +41,6 @@ class SequencerTab(Widget):
       │  └─────────────────────────────────────────────────┘   │
       ├─────────────────────────────────────────────────────────┤
       │ SEND / RECV HISTORY  (1fr)                              │
-      │  #   Dir  Len   Preview                  Time           │
-      │  1   →    40    01 0a de ad be ef …     14:32:01        │
-      │  2   ←    12    61 62 00 01 …           14:32:01        │
       ├─────────────────────────────────────────────────────────┤
       │ [▶ Run] [■ Stop]  Session: [____]  Host: [___]          │
       │ Port: [___]  [TLS ⬜]  Window (s): [1.0]  [Clear Hist] │
@@ -50,13 +51,27 @@ class SequencerTab(Widget):
     SequencerTab {
         layout: vertical;
     }
-    SequencerTab .tab-strip {
+    SequencerTab .seq-list-header {
+        background: $primary-darken-2;
+        color: $text;
+        padding: 0 1;
+        height: 1;
+        text-style: bold;
+    }
+    SequencerTab #seq-list-pane {
+        height: 20%;
+        border-bottom: solid $primary-darken-2;
+    }
+    SequencerTab #seq-list-pane DataTable {
+        height: 1fr;
+    }
+    SequencerTab .seq-controls {
         height: 3;
         align: left middle;
-        background: $surface-darken-1;
         padding: 0 1;
+        background: $surface-darken-1;
     }
-    SequencerTab .tab-strip Button {
+    SequencerTab .seq-controls Button {
         margin-right: 1;
     }
     SequencerTab .pane-header {
@@ -67,7 +82,7 @@ class SequencerTab(Widget):
         text-style: bold;
     }
     SequencerTab #step-list-pane {
-        height: 25%;
+        height: 20%;
         border-bottom: solid $primary-darken-2;
     }
     SequencerTab #step-list-pane DataTable {
@@ -159,10 +174,16 @@ class SequencerTab(Widget):
     # ------------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        # Tab strip
-        with Horizontal(classes="tab-strip"):
-            yield Label("Sequences:")
-            yield Button("[+ New]", id="btn-new-seq", variant="success", compact=True)
+        # Sequence list pane
+        with Vertical(id="seq-list-pane"):
+            yield Static("  Sequences", classes="seq-list-header")
+            yield DataTable(id="seq-table", cursor_type="row")
+
+        # Sequence controls
+        with Horizontal(classes="seq-controls"):
+            yield Button("+ New",    id="btn-new-seq",    variant="success", compact=True)
+            yield Button("Import",   id="btn-import-seq", compact=True)
+            yield Button("Export",   id="btn-export-seq", compact=True)
 
         # Packet list
         with Vertical(id="step-list-pane"):
@@ -214,6 +235,11 @@ class SequencerTab(Widget):
                 yield Input("1.0", id="seq-window")
 
     def on_mount(self) -> None:
+        # Sequence list table
+        st = self.query_one("#seq-table", DataTable)
+        st.add_column("Name",  key="name")
+        st.add_column("Steps", key="steps")
+
         dt = self.query_one("#step-table", DataTable)
         dt.add_column("#",       key="num")
         dt.add_column("Dir",     key="dir")
@@ -229,16 +255,28 @@ class SequencerTab(Widget):
         ht.add_column("Time",    key="time")
 
     # ------------------------------------------------------------------
-    # Sequence (tab) management
+    # Sequence list management
     # ------------------------------------------------------------------
+
+    def _refresh_seq_list(self) -> None:
+        """Repopulate the sequence DataTable from self._sequences."""
+        st = self.query_one("#seq-table", DataTable)
+        st.clear()
+        for seq in self._sequences:
+            st.add_row(seq.label, str(len(seq.steps)), key=seq.id)
 
     def add_sequence(self, seq: SequencerSession) -> None:
         """Add a new sequence and switch to it."""
         self._sequences.append(seq)
         idx = len(self._sequences) - 1
-        btn = Button(seq.label, id=f"seq-tab-{idx}", compact=True)
-        self.query_one(".tab-strip", Horizontal).mount(btn, before="#btn-new-seq")
+        st = self.query_one("#seq-table", DataTable)
+        st.add_row(seq.label, str(len(seq.steps)), key=seq.id)
+        # Auto-select the newly added sequence
         self._switch_to(idx)
+        try:
+            st.move_cursor(row=idx)
+        except Exception:
+            pass
 
     def _switch_to(self, idx: int) -> None:
         if idx < 0 or idx >= len(self._sequences):
@@ -263,14 +301,21 @@ class SequencerTab(Widget):
 
     def load_sequences(self, sequences: list[SequencerSession]) -> None:
         """Reload all sequences (e.g. after project open)."""
-        for btn in self.query(".tab-strip Button"):
-            if btn.id and btn.id.startswith("seq-tab-"):
-                btn.remove()
         self._sequences = []
         self._current_idx = -1
         self._selected_step_idx = -1
+        st = self.query_one("#seq-table", DataTable)
+        st.clear()
         for seq in sequences:
-            self.add_sequence(seq)
+            self._sequences.append(seq)
+            st.add_row(seq.label, str(len(seq.steps)), key=seq.id)
+        # Auto-select the first sequence if any
+        if self._sequences:
+            self._switch_to(0)
+            try:
+                st.move_cursor(row=0)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Step list
@@ -398,6 +443,108 @@ class SequencerTab(Widget):
             seq.port = 0
 
     # ------------------------------------------------------------------
+    # Import / Export sequences
+    # ------------------------------------------------------------------
+
+    def _export_sequence(self) -> None:
+        """Export the current sequence to a JSON file via a path input modal."""
+        if self._current_idx < 0:
+            self.notify("No sequence selected to export.", severity="warning")
+            return
+        self._save_step_editor()
+        seq = self._sequences[self._current_idx]
+
+        export_data = {
+            "label": seq.label,
+            "steps": [
+                {
+                    "label":     step.label,
+                    "raw_hex":   step.raw_hex,
+                    "direction": step.direction,
+                }
+                for step in seq.steps
+            ],
+        }
+
+        from ..modals.project import SaveAsModal as _SaveModal
+
+        class _ExportModal(_SaveModal):
+            def compose(self):
+                from textual.app import ComposeResult
+                from textual.widgets import Button, Input, Label, Static
+                from textual.containers import Horizontal, Vertical
+                with Vertical():
+                    yield Label("Export Sequence", classes="modal-title")
+                    yield Label("Destination path (.json):")
+                    yield Input(
+                        value=self._default_path,
+                        placeholder="~/sequence_export.json",
+                        id="save-path",
+                    )
+                    yield Static(
+                        "The sequence steps and direction will be saved (not session info).",
+                        classes="hint",
+                    )
+                    with Horizontal(classes="buttons"):
+                        yield Button("Cancel", variant="default", id="btn-cancel")
+                        yield Button("Export", variant="primary", id="btn-save")
+
+        def _on_path(path: str | None) -> None:
+            if not path:
+                return
+            if not path.endswith(".json"):
+                path = path + ".json"
+            try:
+                import pathlib
+                pathlib.Path(path).write_text(
+                    json.dumps(export_data, indent=2), encoding="utf-8"
+                )
+                self.notify(f"Sequence exported to {path}")
+            except Exception as exc:
+                self.notify(f"Export failed: {exc}", severity="error")
+
+        self.app.push_screen(_ExportModal(""), _on_path)
+
+    def _import_sequence(self) -> None:
+        """Import a sequence from a JSON file — creates a new sequence tab."""
+        from ..modals.file_picker import FilePickerModal
+
+        def _on_pick(path: str | None) -> None:
+            if not path:
+                return
+            try:
+                import pathlib
+                raw = pathlib.Path(path).read_text(encoding="utf-8")
+                data = json.loads(raw)
+            except Exception as exc:
+                self.notify(f"Import failed (read/parse): {exc}", severity="error")
+                return
+
+            label = data.get("label", "Imported Sequence")
+            steps_data = data.get("steps", [])
+            if not isinstance(steps_data, list):
+                self.notify("Import failed: 'steps' must be a list.", severity="error")
+                return
+
+            seq = SequencerSession.create(label=label)
+            for sd in steps_data:
+                step = SequenceStep.create(
+                    label=sd.get("label", ""),
+                    raw_hex=sd.get("raw_hex", ""),
+                    direction=sd.get("direction", "client_to_server"),
+                )
+                seq.steps.append(step)
+
+            # Note: session fields (host, port, tls, source_session_id) are NOT
+            # imported — the user needs to configure them for the new context.
+            self.add_sequence(seq)
+            if hasattr(self.app, "mark_dirty"):
+                self.app.mark_dirty()
+            self.notify(f"Imported '{label}' with {len(seq.steps)} step(s).")
+
+        self.app.push_screen(FilePickerModal(None), _on_pick)
+
+    # ------------------------------------------------------------------
     # Button handlers
     # ------------------------------------------------------------------
 
@@ -408,15 +555,17 @@ class SequencerTab(Widget):
             event.stop()
             self._do_new_sequence()
 
+        elif bid == "btn-import-seq":
+            event.stop()
+            self._import_sequence()
+
+        elif bid == "btn-export-seq":
+            event.stop()
+            self._export_sequence()
+
         elif bid == "btn-step-mode":
             event.stop()
             self._toggle_step_editor_mode()
-
-        elif bid.startswith("seq-tab-"):
-            event.stop()
-            idx = int(bid.removeprefix("seq-tab-"))
-            self._save_step_editor()
-            self._switch_to(idx)
 
         elif bid == "btn-step-up":
             event.stop()
@@ -518,6 +667,8 @@ class SequencerTab(Widget):
             self.query_one("#step-table", DataTable).move_cursor(row=insert_at)
         except Exception:
             pass
+        # Update sequence list step count
+        self._update_seq_list_row()
         if hasattr(self.app, "mark_dirty"):
             self.app.mark_dirty()
 
@@ -538,8 +689,21 @@ class SequencerTab(Widget):
                 pass
         else:
             self._clear_step_editor()
+        # Update sequence list step count
+        self._update_seq_list_row()
         if hasattr(self.app, "mark_dirty"):
             self.app.mark_dirty()
+
+    def _update_seq_list_row(self) -> None:
+        """Refresh the step count in the sequence list for the current sequence."""
+        if self._current_idx < 0 or self._current_idx >= len(self._sequences):
+            return
+        seq = self._sequences[self._current_idx]
+        try:
+            st = self.query_one("#seq-table", DataTable)
+            st.update_cell(seq.id, "steps", str(len(seq.steps)), update_width=False)
+        except Exception:
+            pass
 
     def _do_run(self) -> None:
         if self._current_idx < 0:
@@ -578,8 +742,27 @@ class SequencerTab(Widget):
     # DataTable row selection
     # ------------------------------------------------------------------
 
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Arrow-key navigation auto-selects the highlighted row."""
+        if event.data_table.id == "seq-table":
+            if event.row_key is None:
+                return
+            seq_id = str(event.row_key.value)
+            for i, seq in enumerate(self._sequences):
+                if seq.id == seq_id:
+                    if i != self._current_idx:
+                        self._switch_to(i)
+                    break
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if event.data_table.id == "step-table":
+        if event.data_table.id == "seq-table":
+            seq_id = str(event.row_key.value)
+            for i, seq in enumerate(self._sequences):
+                if seq.id == seq_id:
+                    self._switch_to(i)
+                    break
+
+        elif event.data_table.id == "step-table":
             if self._current_idx < 0:
                 return
             # Save before switching
@@ -668,3 +851,4 @@ class SequencerTab(Widget):
             )
         except Exception:
             pass
+        self._update_seq_list_row()

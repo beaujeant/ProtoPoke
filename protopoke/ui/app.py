@@ -334,8 +334,11 @@ class ProtoPoke(App):
         config_tab = self.query_one("#config-tab", ConfigTab)
         config_tab.load_config(self._project.config)
         config_tab.notify_proxy_running(False)
+        self.query_one("#logs-tab", LogsTab).clear_all()
         self.query_one("#repeater-tab", RepeaterTab).load_requests([])
         self.query_one("#sequencer-tab", SequencerTab).load_sequences([])
+        self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions([])
+        self.query_one("#repeater-tab", RepeaterTab).refresh_session_dropdown()
         self._update_title()
         self.notify(f"New project: {name}")
 
@@ -353,6 +356,19 @@ class ProtoPoke(App):
             config_tab.notify_proxy_running(False)
             self.query_one("#repeater-tab", RepeaterTab).load_requests(state.repeater_requests)
             self.query_one("#sequencer-tab", SequencerTab).load_sequences(state.sequencer_sessions)
+            # Restore logs: load sessions+frames into registry, then populate UI
+            logs_tab = self.query_one("#logs-tab", LogsTab)
+            logs_tab.clear_all()
+            if state.captured_sessions:
+                restored = self.api.load_sessions_from_dicts(state.captured_sessions)
+                for session in restored:
+                    # add_session populates the session row; show_frames is
+                    # called automatically for the first session (auto-select).
+                    # For all others the frames appear when the user selects them
+                    # (on_data_table_row_highlighted looks up via api.get_session).
+                    logs_tab.add_session(session)
+                self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
+                self.query_one("#repeater-tab", RepeaterTab).refresh_session_dropdown()
             self._update_title()
             self.notify(f"Opened project: {state.name}")
         except Exception as exc:
@@ -386,12 +402,17 @@ class ProtoPoke(App):
             self.notify(f"Save failed: {exc}", severity="error")
 
     def _sync_repeater_requests(self) -> None:
-        """Copy the current repeater requests from the UI into the project."""
+        """Copy the current UI state (repeater, sequencer, logs) into the project."""
         repeater_tab = self.query_one("#repeater-tab", RepeaterTab)
         self._project.repeater_requests = list(repeater_tab._requests)
         sequencer_tab = self.query_one("#sequencer-tab", SequencerTab)
         sequencer_tab._save_step_editor()
         self._project.sequencer_sessions = list(sequencer_tab._sequences)
+        # Sync logs: capture all sessions and their frames
+        self._project.captured_sessions = [
+            self.api.session_to_dict(session)
+            for session in self.api.list_sessions()
+        ]
 
     def mark_dirty(self) -> None:
         """Mark the project as having unsaved changes."""
@@ -425,7 +446,11 @@ class ProtoPoke(App):
                 req.current_bytes = session.frames[0].raw_bytes
         self.query_one("#repeater-tab", RepeaterTab).add_request(req)
         self._project.repeater_requests.append(req)
-        self.call_after_refresh(self.action_switch_tab, "repeater")
+        def _do_sw_rep() -> None:
+            self.action_switch_tab("repeater")
+        def _sched_sw_rep() -> None:
+            self.call_after_refresh(_do_sw_rep)
+        self.call_after_refresh(_sched_sw_rep)
 
     def terminate_session(self, session_id: str) -> None:
         """Terminate an active session (closes client + server connections)."""
@@ -501,7 +526,13 @@ class ProtoPoke(App):
             )
 
         self._project.mark_dirty()
-        self.action_switch_tab("sequencer")
+        # Double call_after_refresh: lets all widget mounts (new sequence buttons,
+        # DataTable updates) settle before the tab switch is applied.
+        def _do_switch_sequencer() -> None:
+            self.action_switch_tab("sequencer")
+        def _schedule_switch_sequencer() -> None:
+            self.call_after_refresh(_do_switch_sequencer)
+        self.call_after_refresh(_schedule_switch_sequencer)
         skipped = len(frame_ids) - len(selected_frames)
         msg = f"{len(selected_frames)} frame(s) added to Sequencer"
         if skipped:
@@ -531,10 +562,14 @@ class ProtoPoke(App):
         )
         self.query_one("#repeater-tab", RepeaterTab).add_request(req)
         self._project.repeater_requests.append(req)
-        # Use call_after_refresh so the tab switch happens after the new request
-        # button is mounted in the DOM — otherwise the mount may revert focus back
-        # to the Logs tab.
-        self.call_after_refresh(self.action_switch_tab, "repeater")
+        # Double call_after_refresh: the first refresh lets the mount settle,
+        # the second actually performs the tab switch so it lands after all
+        # reactive DOM updates triggered by the mount have been processed.
+        def _do_switch_repeater() -> None:
+            self.action_switch_tab("repeater")
+        def _schedule_switch_repeater() -> None:
+            self.call_after_refresh(_do_switch_repeater)
+        self.call_after_refresh(_schedule_switch_repeater)
         self.notify(f"Frame sent to Repeater: {frame_id[:8]}")
 
     # ------------------------------------------------------------------

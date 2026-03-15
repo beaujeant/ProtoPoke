@@ -169,8 +169,11 @@ class ConfigTab(Widget):
         self._custom_framer_path: str | None = config.custom_framer_path
         # Dirty tracking: True when any field has been modified since last Apply
         self._dirty: bool = False
-        # Guard flag: suppress dirty marking while load_config() is running
-        self._loading: bool = False
+        # Guard flag: suppress dirty marking while widgets are being initialised
+        # or load_config() is running.  Set True here so that Input.Changed
+        # events fired during initial widget mount are ignored; reset to False
+        # by on_mount() via call_after_refresh once the first frame is complete.
+        self._loading: bool = True
 
     def compose(self) -> ComposeResult:
         cfg = self.config
@@ -291,6 +294,9 @@ class ConfigTab(Widget):
 
     def on_mount(self) -> None:
         self.query_one("#tls-paths").display = self.config.tls_listen
+        # Release the loading guard after all queued Input.Changed events
+        # (fired by widget initialisation) have been processed.
+        self.call_after_refresh(self._on_load_complete)
 
     def _update_framer_summary(self) -> None:
         """Refresh the framer summary Static widget from current instance vars."""

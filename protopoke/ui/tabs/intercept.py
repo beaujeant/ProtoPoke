@@ -165,6 +165,7 @@ class InterceptTab(Widget):
                 on_remove=self._remove_intercept_rule,
                 on_move_up=self._move_intercept_rule_up,
                 on_move_down=self._move_intercept_rule_down,
+                on_edit=self._edit_intercept_rule,
                 id="intercept-rules",
             )
 
@@ -191,6 +192,7 @@ class InterceptTab(Widget):
                 on_move_down=self._move_replace_rule_down,
                 on_toggle=self._toggle_replace_rule,
                 on_reset=self._reset_replace_rule_script,
+                on_edit=self._edit_replace_rule,
                 id="replace-rules",
             )
 
@@ -263,6 +265,16 @@ class InterceptTab(Widget):
         self.app.api.add_intercept_rule(rule)
         self.refresh_intercept_rules(self.app.api.list_intercept_rules())
 
+    async def _edit_intercept_rule(self, rule: InterceptRule) -> None:
+        """Open the edit modal pre-populated with *rule* and update it in-place."""
+        updated: InterceptRule | None = await self.app.push_screen_wait(
+            AddInterceptRuleModal(existing=rule)
+        )
+        if updated is None:
+            return
+        # The modal mutates the rule object in-place when existing= is supplied.
+        self.refresh_intercept_rules(self.app.api.list_intercept_rules())
+
     def _remove_intercept_rule(self, rule_id: str) -> None:
         self.app.api.remove_intercept_rule(rule_id)
         self.refresh_intercept_rules(self.app.api.list_intercept_rules())
@@ -324,6 +336,16 @@ class InterceptTab(Widget):
         if rule is None:
             return
         self.app.api.add_replace_rule(rule)
+        self.refresh_replace_rules(self.app.api.list_replace_rules())
+
+    async def _edit_replace_rule(self, rule: ReplaceRule) -> None:
+        """Open the edit modal pre-populated with *rule* and update it in-place."""
+        updated: ReplaceRule | None = await self.app.push_screen_wait(
+            AddReplaceRuleModal(existing=rule)
+        )
+        if updated is None:
+            return
+        # The modal mutates the rule object in-place when existing= is supplied.
         self.refresh_replace_rules(self.app.api.list_replace_rules())
 
     def _remove_replace_rule(self, rule_id: str) -> None:
