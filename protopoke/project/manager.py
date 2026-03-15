@@ -57,6 +57,13 @@ from ..sequencer.models import SequencerSession
 # Project format version — bump when the schema changes incompatibly.
 _FORMAT_VERSION = 2
 
+# Safety limits for ZIP loading.
+# Each individual member must not expand beyond 100 MB when decompressed, and
+# the archive may contain at most 32 members total.  These bounds are generous
+# for any legitimate project file while guarding against decompression bombs.
+_ZIP_MAX_MEMBERS      = 32
+_ZIP_MAX_MEMBER_BYTES = 100 * 1024 * 1024  # 100 MB
+
 
 @dataclass
 class ProjectState:
@@ -287,7 +294,24 @@ class ProjectManager:
             raise ValueError(f"Not a valid project file: {zip_path}") from exc
 
         with zf:
-            names = zf.namelist()
+            infos = zf.infolist()
+
+            # Guard against decompression bombs: reject archives with too many
+            # members or any member whose uncompressed size exceeds the limit.
+            if len(infos) > _ZIP_MAX_MEMBERS:
+                raise ValueError(
+                    f"Project file has too many members ({len(infos)}); "
+                    f"maximum allowed is {_ZIP_MAX_MEMBERS}."
+                )
+            for info in infos:
+                if info.file_size > _ZIP_MAX_MEMBER_BYTES:
+                    raise ValueError(
+                        f"Project member {info.filename!r} is too large "
+                        f"({info.file_size:,} bytes uncompressed; "
+                        f"limit is {_ZIP_MAX_MEMBER_BYTES:,} bytes)."
+                    )
+
+            names = {info.filename for info in infos}
 
             def _read(name: str) -> str | None:
                 return zf.read(name).decode("utf-8") if name in names else None

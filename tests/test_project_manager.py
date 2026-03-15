@@ -201,3 +201,15 @@ class TestProjectManager:
         pm = ProjectManager()
         state = pm.open(old_dir)
         assert state.name == "Old"
+
+    def test_zip_too_many_members_rejected(self, tmp_path):
+        """ZIP with more than _ZIP_MAX_MEMBERS entries raises ValueError."""
+        import zipfile as zf
+        from protopoke.project.manager import _ZIP_MAX_MEMBERS
+        bomb = tmp_path / "bomb.protopoke"
+        with zf.ZipFile(bomb, "w") as z:
+            for i in range(_ZIP_MAX_MEMBERS + 1):
+                z.writestr(f"junk_{i}.bin", b"x")
+        pm = ProjectManager()
+        with pytest.raises(ValueError, match="too many members"):
+            pm.open(bomb)
