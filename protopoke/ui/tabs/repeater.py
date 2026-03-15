@@ -31,7 +31,10 @@ class RepeaterTab(Widget):
 
     Layout:
       ┌─────────────────────────────────────────┐
-      │ Request tabs: [1] [2] [+ New]           │  tab strip
+      │ Forged Frames (DataTable list)  h=20%   │  req-list-pane
+      │  #   Name     Host:Port   Dir           │
+      ├─────────────────────────────────────────┤
+      │ [+ New]  [Rename (R)]           h=3     │  req-controls
       ├─────────────────────────────────────────┤
       │ [Session ▼]  Host: <input>  Port: <in>  │  target bar
       │ TLS: [sw]  Dir: [→ To Server ▼]         │
@@ -49,25 +52,39 @@ class RepeaterTab(Widget):
       └─────────────────────────────────────────┘
 
     Keyboard:
-      R       — rename the current request tab (when a text editor is not focused)
+      R       — rename the selected forged frame (when a text editor is not focused)
       Ctrl+R  — send current Logs frame to Repeater (handled at app level)
     """
 
     BINDINGS = [
-        Binding("r", "rename_request", "Rename tab", show=False),
+        Binding("r", "rename_request", "Rename", show=False),
     ]
 
     DEFAULT_CSS = """
     RepeaterTab {
         layout: vertical;
     }
-    RepeaterTab .tab-strip {
+    RepeaterTab .req-list-header {
+        background: $primary-darken-2;
+        color: $text;
+        padding: 0 1;
+        height: 1;
+        text-style: bold;
+    }
+    RepeaterTab #req-list-pane {
+        height: 20%;
+        border-bottom: solid $primary-darken-2;
+    }
+    RepeaterTab #req-list-pane DataTable {
+        height: 1fr;
+    }
+    RepeaterTab .req-controls {
         height: 3;
         align: left middle;
-        background: $surface-darken-1;
         padding: 0 1;
+        background: $surface-darken-1;
     }
-    RepeaterTab .tab-strip Button {
+    RepeaterTab .req-controls Button {
         margin-right: 1;
     }
     RepeaterTab .target-bar {
@@ -176,10 +193,15 @@ class RepeaterTab(Widget):
         self._editor_mode: str = "hex"
 
     def compose(self) -> ComposeResult:
-        # Tab strip
-        with Horizontal(classes="tab-strip"):
-            yield Label("Requests:", id="tab-label")
-            yield Button("[+ New]", id="btn-new-request", variant="success", compact=True)
+        # Forged frames list pane (like sequencer's seq-list-pane)
+        with Vertical(id="req-list-pane"):
+            yield Static("  Forged Frames", classes="req-list-header")
+            yield DataTable(id="req-table", cursor_type="row")
+
+        # Request controls
+        with Horizontal(classes="req-controls"):
+            yield Button("+ New",    id="btn-new-request", variant="success", compact=True)
+            yield Button("Rename",   id="btn-rename-request", compact=True)
 
         # Target bar — session dropdown + host/port/tls + direction
         with Horizontal(classes="target-bar"):
@@ -231,6 +253,12 @@ class RepeaterTab(Widget):
             yield DataTable(id="history-table", cursor_type="row")
 
     def on_mount(self) -> None:
+        rt = self.query_one("#req-table", DataTable)
+        rt.add_column("#",        key="num")
+        rt.add_column("Name",     key="name")
+        rt.add_column("Host:Port",key="dest")
+        rt.add_column("Dir",      key="dir")
+
         dt = self.query_one("#history-table", DataTable)
         dt.add_column("#", key="num")
         dt.add_column("Time", key="time")
@@ -245,7 +273,7 @@ class RepeaterTab(Widget):
         rpt.add_column("Size (B)", key="size")
 
     # ------------------------------------------------------------------
-    # Request tab management
+    # Request list management
     # ------------------------------------------------------------------
 
     def add_request(self, req: RepeaterRequest, _preserve_label: bool = False) -> None:
@@ -260,8 +288,12 @@ class RepeaterTab(Widget):
 
         self._requests.append(req)
         idx = len(self._requests) - 1
-        btn = Button(req.label, id=f"req-tab-{idx}", compact=True)
-        self.query_one(".tab-strip", Horizontal).mount(btn, before="#btn-new-request")
+
+        rt = self.query_one("#req-table", DataTable)
+        dest = f"{req.host}:{req.port}" if req.host else "—"
+        dir_symbol = "←" if req.direction == "to_client" else "→"
+        rt.add_row(str(idx + 1), req.label, dest, dir_symbol, key=req.id)
+
         self._switch_to(idx)
 
     def _switch_to(self, idx: int) -> None:
@@ -270,6 +302,12 @@ class RepeaterTab(Widget):
             return
         self._current_idx = idx
         req = self._requests[idx]
+
+        # Move the cursor in the list to the selected row
+        try:
+            self.query_one("#req-table", DataTable).move_cursor(row=idx)
+        except Exception:
+            pass
 
         # Refresh session dropdown options and set correct value
         self._rebuild_session_dropdown(req)
@@ -432,11 +470,25 @@ class RepeaterTab(Widget):
         elif preserve_cursor and saved_row >= 0:
             dt.move_cursor(row=min(saved_row, len(req.history) - 1))
 
+    def _update_req_list_row(self, idx: int) -> None:
+        """Refresh the row in the request list for the given index."""
+        if idx < 0 or idx >= len(self._requests):
+            return
+        req = self._requests[idx]
+        dest = f"{req.host}:{req.port}" if req.host else "—"
+        dir_symbol = "←" if req.direction == "to_client" else "→"
+        try:
+            rt = self.query_one("#req-table", DataTable)
+            rt.update_cell(req.id, "name", req.label,   update_width=False)
+            rt.update_cell(req.id, "dest", dest,        update_width=False)
+            rt.update_cell(req.id, "dir",  dir_symbol,  update_width=False)
+        except Exception:
+            pass
+
     def load_requests(self, requests: list[RepeaterRequest]) -> None:
         """Reload all requests (e.g. after project open)."""
-        for btn in self.query(".tab-strip Button"):
-            if btn.id and btn.id.startswith("req-tab-"):
-                btn.remove()
+        rt = self.query_one("#req-table", DataTable)
+        rt.clear()
         self._requests = []
         self._current_idx = -1
         for req in requests:
@@ -455,7 +507,7 @@ class RepeaterTab(Widget):
     # ------------------------------------------------------------------
 
     def action_rename_request(self) -> None:
-        """Open the rename modal for the current request tab."""
+        """Open the rename modal for the current request."""
         if self._current_idx < 0:
             return
         req = self._requests[self._current_idx]
@@ -466,10 +518,7 @@ class RepeaterTab(Widget):
             return
         req = self._requests[self._current_idx]
         req.label = new_name
-        try:
-            self.query_one(f"#req-tab-{self._current_idx}", Button).label = new_name
-        except Exception:
-            pass
+        self._update_req_list_row(self._current_idx)
         if hasattr(self.app, "mark_dirty"):
             self.app.mark_dirty()
 
@@ -484,15 +533,14 @@ class RepeaterTab(Widget):
             event.stop()
             self.app.open_new_request_modal()
 
+        elif bid == "btn-rename-request":
+            event.stop()
+            self.action_rename_request()
+
         elif bid == "btn-req-mode":
             event.stop()
             self._toggle_editor_mode()
             return
-
-        elif bid.startswith("req-tab-"):
-            event.stop()
-            idx = int(bid.removeprefix("req-tab-"))
-            self._switch_to(idx)
 
         elif bid == "btn-send":
             event.stop()
@@ -539,6 +587,7 @@ class RepeaterTab(Widget):
         elif event.select.id == "direction-select":
             if event.value is not Select.BLANK:
                 req.direction = str(event.value)
+                self._update_req_list_row(self._current_idx)
                 if hasattr(self.app, "mark_dirty"):
                     self.app.mark_dirty()
 
@@ -556,6 +605,7 @@ class RepeaterTab(Widget):
         elif event.input.id == "target-host-input":
             if not event.input.disabled:
                 req.host = event.value
+                self._update_req_list_row(self._current_idx)
                 if hasattr(self.app, "mark_dirty"):
                     self.app.mark_dirty()
 
@@ -563,6 +613,7 @@ class RepeaterTab(Widget):
             if not event.input.disabled:
                 try:
                     req.port = int(event.value)
+                    self._update_req_list_row(self._current_idx)
                     if hasattr(self.app, "mark_dirty"):
                         self.app.mark_dirty()
                 except ValueError:
@@ -584,13 +635,21 @@ class RepeaterTab(Widget):
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         """
         Arrow key navigation and single-click selection — display content
-        immediately for both the response packets table and the history table.
-        No Enter / double-click required.
+        immediately for both the request list, response packets table and the
+        history table. No Enter / double-click required.
         """
         if event.row_key is None:
             return
 
-        if event.data_table.id == "resp-packets-table":
+        if event.data_table.id == "req-table":
+            req_id = str(event.row_key.value)
+            for i, req in enumerate(self._requests):
+                if req.id == req_id:
+                    if i != self._current_idx:
+                        self._switch_to(i)
+                    break
+
+        elif event.data_table.id == "resp-packets-table":
             idx = int(str(event.row_key.value))
             self._show_packet(idx)
 
@@ -605,10 +664,13 @@ class RepeaterTab(Widget):
                     self._display_record_response(record)
                     break
 
-    # on_data_table_row_selected is no longer used for navigation (both tables
-    # respond to RowHighlighted); kept empty to avoid accidental double-loads.
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        pass
+        if event.data_table.id == "req-table":
+            req_id = str(event.row_key.value)
+            for i, req in enumerate(self._requests):
+                if req.id == req_id:
+                    self._switch_to(i)
+                    break
 
     # ------------------------------------------------------------------
     # Send logic
