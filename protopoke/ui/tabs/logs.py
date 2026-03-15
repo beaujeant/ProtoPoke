@@ -25,6 +25,7 @@ class _FramesTable(DataTable):
     BINDINGS = [
         Binding("shift+up", "shift_up", show=False),
         Binding("shift+down", "shift_down", show=False),
+        Binding("escape", "cancel_selection", show=False),
     ]
 
     def _logs_tab(self) -> "LogsTab":
@@ -42,6 +43,9 @@ class _FramesTable(DataTable):
     def action_shift_down(self) -> None:
         self._logs_tab()._extending_selection = True
         self.action_cursor_down()
+
+    def action_cancel_selection(self) -> None:
+        self._logs_tab()._cancel_frame_selection()
 
 
 
@@ -326,9 +330,25 @@ class LogsTab(Widget):
             return
         n = len(self._selected_frame_ids)
         if n > 1:
-            self._frames_label.update(f"  Frames  [{n} selected]")
+            self._frames_label.update(f"  Frames  [{n} selected — Esc to cancel]")
         else:
             self._frames_label.update("  Frames  [Shift+↑↓ to multi-select]")
+
+    def _cancel_frame_selection(self) -> None:
+        """Collapse a multi-frame selection back to just the current single frame."""
+        if len(self._selected_frame_ids) <= 1:
+            return
+        # Keep the anchor frame as the single selected frame
+        if self._anchor_frame_idx >= 0 and self._anchor_frame_idx < len(self._frame_rows):
+            single_id = self._frame_rows[self._anchor_frame_idx]
+        elif self._current_frame_id:
+            single_id = self._current_frame_id
+        else:
+            return
+        self._selected_frame_ids = [single_id]
+        self._current_frame_id = single_id
+        self._highlight_selection()
+        self._update_frames_label()
 
     # ------------------------------------------------------------------
     # Event handlers
