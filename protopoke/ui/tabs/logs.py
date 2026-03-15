@@ -45,7 +45,8 @@ class _FramesTable(DataTable):
         self._logs_tab()._extending_selection = True
         self.action_cursor_down()
 
-    def on_click(self, event: events.Click) -> None:
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        """Fires before Click, so the flag is set before DataTable moves the cursor."""
         if event.shift:
             self._logs_tab()._extending_selection = True
 
