@@ -395,6 +395,20 @@ class LogsTab(Widget):
             self._update_frames_label()
             self._highlight_selection()
 
+    def clear_all(self) -> None:
+        """Remove all sessions, frames, and reset the detail pane."""
+        self.query_one("#sessions-table", DataTable).clear()
+        self.query_one("#frames-table", DataTable).clear()
+        self.query_one("#parsed-view", ParsedView).clear()
+        self._current_session_id = None
+        self._current_frame_id   = None
+        self._frame_rows         = []
+        self._row_data           = {}
+        self._prev_highlighted   = set()
+        self._selected_frame_ids = []
+        self._anchor_frame_idx   = -1
+        self._update_frames_label()
+
     def remove_session(self, session_id: str) -> None:
         """Remove a session row (and clear frames/detail if it was selected)."""
         dt = self.query_one("#sessions-table", DataTable)

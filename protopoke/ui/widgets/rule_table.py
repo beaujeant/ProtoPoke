@@ -26,6 +26,8 @@ class RuleTable(Widget, Generic[R]):
       - ``on_toggle``: optional; called with rule ID when [Toggle] is pressed.
       - ``on_reset``: optional; called with rule ID when [Reset] is pressed
         (intended for script-type rules).
+      - ``on_edit``: optional async callable; called with the selected rule
+        object when [Edit] is pressed. Allows opening an edit modal.
 
     The widget does *not* own the underlying rule list — it is a pure display
     layer.  Call ``refresh_rules(rules)`` to repopulate after any mutation.
@@ -59,6 +61,7 @@ class RuleTable(Widget, Generic[R]):
         on_move_down: Callable | None = None,
         on_toggle: Callable | None = None,
         on_reset: Callable | None = None,
+        on_edit: Callable | None = None,
         *,
         name: str | None = None,
         id: str | None = None,
@@ -73,6 +76,7 @@ class RuleTable(Widget, Generic[R]):
         self._on_move_down = on_move_down
         self._on_toggle = on_toggle
         self._on_reset = on_reset
+        self._on_edit = on_edit
         self._rules: list[R] = []
 
     def compose(self) -> ComposeResult:
@@ -81,6 +85,8 @@ class RuleTable(Widget, Generic[R]):
             with Horizontal(classes="rule-buttons"):
                 yield Button("[+] Add",    variant="success", id="btn-add",    compact=True)
                 yield Button("[-] Remove", variant="error",   id="btn-remove", compact=True)
+                if self._on_edit:
+                    yield Button("[✎] Edit", variant="primary", id="btn-edit", compact=True)
                 if self._on_move_up:
                     yield Button("[↑] Up",   id="btn-up",   compact=True)
                 if self._on_move_down:
@@ -123,6 +129,10 @@ class RuleTable(Widget, Generic[R]):
             rid = self._selected_rule_id()
             if rid:
                 self._on_remove(rid)
+        elif event.button.id == "btn-edit" and self._on_edit:
+            rule = self._selected_rule()
+            if rule is not None:
+                self.run_worker(self._on_edit(rule))
         elif event.button.id == "btn-up" and self._on_move_up:
             rid = self._selected_rule_id()
             if rid:

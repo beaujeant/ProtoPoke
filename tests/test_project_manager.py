@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import zipfile
 
 import pytest
 
@@ -22,15 +23,17 @@ class TestProjectManager:
         assert pm.path is None
         assert pm.is_dirty is False
 
-    def test_save_as_creates_directory(self, tmp_path):
+    def test_save_as_creates_zip_file(self, tmp_path):
         pm = ProjectManager()
         pm.name = "Test Project"
         out = pm.save_as(tmp_path / "my.protopoke")
-        assert out.is_dir()
-        assert (out / "project.json").exists()
-        assert (out / "config.json").exists()
-        assert (out / "rules.json").exists()
-        assert (out / "repeater.json").exists()
+        assert out.is_file()
+        assert zipfile.is_zipfile(out)
+        with zipfile.ZipFile(out) as zf:
+            assert "project.json" in zf.namelist()
+            assert "config.json" in zf.namelist()
+            assert "rules.json" in zf.namelist()
+            assert "repeater.json" in zf.namelist()
 
     def test_save_as_sets_path(self, tmp_path):
         pm = ProjectManager()
@@ -88,7 +91,7 @@ class TestProjectManager:
 
     def test_open_loads_repeater(self, tmp_path):
         pm = ProjectManager()
-        req = RepeaterRequest.create("Tab 1", "10.0.0.1", 443, current_bytes=b"\x01\x02")
+        req = RepeaterRequest.create("10.0.0.1", 443, label="Tab 1", current_bytes=b"\x01\x02")
         rec = SendRecord.create(b"\x01\x02", b"\x03\x04", "10.0.0.1", 443)
         req.add_record(rec)
         pm.repeater_requests.append(req)
@@ -102,7 +105,7 @@ class TestProjectManager:
         assert len(state.repeater_requests[0].history) == 1
         assert state.repeater_requests[0].history[0].sent_bytes == b"\x01\x02"
 
-    def test_open_missing_directory_raises(self):
+    def test_open_missing_path_raises(self):
         pm = ProjectManager()
         with pytest.raises(FileNotFoundError):
             pm.open("/tmp/does_not_exist_12345.protopoke")
@@ -123,7 +126,8 @@ class TestProjectManager:
         state = pm2.open(tmp_path / "p.protopoke")
         assert isinstance(state, ProjectState)
         assert state.name == "MyProj"
-        assert state.db_path is None  # sessions.db not created yet
+        # ZIP format: db_path is always None
+        assert state.db_path is None
 
     def test_mark_dirty(self):
         pm = ProjectManager()
@@ -135,16 +139,65 @@ class TestProjectManager:
         pm = ProjectManager()
         assert pm.db_path is None
 
-    def test_db_path_set_after_save_as(self, tmp_path):
+    def test_db_path_none_for_zip_format(self, tmp_path):
         pm = ProjectManager()
         pm.save_as(tmp_path / "p.protopoke")
-        assert pm.db_path == tmp_path / "p.protopoke" / "sessions.db"
+        # ZIP format projects have no db_path
+        assert pm.db_path is None
 
     def test_project_json_contains_metadata(self, tmp_path):
         pm = ProjectManager()
         pm.name = "My Test"
-        pm.save_as(tmp_path / "p.protopoke")
-        meta = json.loads((tmp_path / "p.protopoke" / "project.json").read_text())
+        out = pm.save_as(tmp_path / "p.protopoke")
+        with zipfile.ZipFile(out) as zf:
+            meta = json.loads(zf.read("project.json"))
         assert meta["name"] == "My Test"
         assert "format_version" in meta
         assert "saved_at" in meta
+
+    def test_captured_sessions_round_trip(self, tmp_path):
+        pm = ProjectManager()
+        pm.name = "Sessions Test"
+        pm.captured_sessions = [
+            {
+                "id": "sess-1",
+                "client_host": "127.0.0.1",
+                "client_port": 1234,
+                "server_host": "10.0.0.1",
+                "server_port": 9090,
+                "state": "closed",
+                "created_at": 1000.0,
+                "closed_at": 1001.0,
+                "frames": [
+                    {
+                        "id": "frame-1",
+                        "session_id": "sess-1",
+                        "direction": "client_to_server",
+                        "raw_bytes": "deadbeef",
+                        "timestamp": 1000.5,
+                        "sequence_number": 1,
+                        "framer_name": "raw",
+                    }
+                ],
+            }
+        ]
+        out = pm.save_as(tmp_path / "p.protopoke")
+
+        pm2 = ProjectManager()
+        state = pm2.open(out)
+        assert len(state.captured_sessions) == 1
+        assert state.captured_sessions[0]["id"] == "sess-1"
+        assert len(state.captured_sessions[0]["frames"]) == 1
+        assert state.captured_sessions[0]["frames"][0]["raw_bytes"] == "deadbeef"
+
+    def test_legacy_directory_format_still_opens(self, tmp_path):
+        """Backward compat: old directory-based projects can still be opened."""
+        import time
+        old_dir = tmp_path / "old.protopoke"
+        old_dir.mkdir()
+        meta = {"format_version": 1, "name": "Old", "created_at": time.time(), "saved_at": 0.0}
+        (old_dir / "project.json").write_text(json.dumps(meta))
+
+        pm = ProjectManager()
+        state = pm.open(old_dir)
+        assert state.name == "Old"
