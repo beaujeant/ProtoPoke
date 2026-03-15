@@ -9,6 +9,8 @@ from textual.widget import Widget
 from textual.widgets import DataTable, Static, Button
 from textual.containers import Horizontal, Vertical
 
+from rich.text import Text
+
 from ...models import Frame, Direction
 from ...core.session import Session
 from ..widgets.parsed_view import ParsedView
@@ -141,6 +143,14 @@ class LogsTab(Widget):
         # Label widget reference for the frames toolbar (shows selection count).
         self._frames_label: Static | None = None
 
+        # Plain cell values per frame ID — used for applying / removing Rich
+        # Text highlight styles without losing the original data.
+        self._row_data: dict[str, tuple[str, ...]] = {}
+
+        # Frame IDs that currently have highlight styling applied.  Used to
+        # compute the diff so we only update changed rows.
+        self._prev_highlighted: set[str] = set()
+
     def compose(self) -> ComposeResult:
         # Sessions pane
         with Vertical(id="sessions-pane"):
@@ -222,6 +232,8 @@ class LogsTab(Widget):
         dt = self.query_one("#frames-table", DataTable)
         dt.clear()
         self._frame_rows = []
+        self._row_data = {}
+        self._prev_highlighted = set()
         self._anchor_frame_idx = -1
         self._selected_frame_ids = []
         self._current_session_id = session.id
@@ -255,14 +267,15 @@ class LogsTab(Widget):
         preview   = frame.raw_bytes[:24].hex()
         if len(frame.raw_bytes) > 24:
             preview += "…"
-        dt.add_row(
+        values = (
             str(frame.sequence_number),
             direction,
             str(len(frame.raw_bytes)),
             frame.framer_name,
             preview,
-            key=frame.id,      # full UUID as row key
         )
+        self._row_data[frame.id] = values
+        dt.add_row(*values, key=frame.id)
         self._frame_rows.append(frame.id)
 
     def _show_frame_in_detail(self, frame_id: str) -> None:
@@ -284,17 +297,39 @@ class LogsTab(Widget):
                 self.query_one("#parsed-view", ParsedView).show_frame(frame, message)
                 return
 
+    _COL_KEYS = ("seq", "dir", "len", "framer", "preview")
+    _SELECTED_STYLE = "bold on dark_blue"
+
+    def _highlight_selection(self) -> None:
+        """Apply / remove Rich Text highlight on rows that changed selection state."""
+        dt = self.query_one("#frames-table", DataTable)
+        new_sel = set(self._selected_frame_ids)
+        to_style   = new_sel - self._prev_highlighted
+        to_unstyle = self._prev_highlighted - new_sel
+
+        for fid in to_style | to_unstyle:
+            data = self._row_data.get(fid)
+            if data is None:
+                continue
+            is_sel = fid in new_sel
+            for col_key, val in zip(self._COL_KEYS, data):
+                cell = Text(val, style=self._SELECTED_STYLE) if is_sel else val
+                try:
+                    dt.update_cell(fid, col_key, cell, update_width=False)
+                except Exception:
+                    pass
+
+        self._prev_highlighted = new_sel
+
     def _update_frames_label(self) -> None:
-        """Update the toolbar label to reflect the current selection count."""
-        try:
-            lbl = self.query_one(".toolbar Static", Static)
-            n = len(self._selected_frame_ids)
-            if n > 1:
-                lbl.update(f"  Frames  [{n} selected]")
-            else:
-                lbl.update("  Frames")
-        except Exception:
-            pass
+        """Update the frames toolbar label to reflect the current selection count."""
+        if self._frames_label is None:
+            return
+        n = len(self._selected_frame_ids)
+        if n > 1:
+            self._frames_label.update(f"  Frames  [{n} selected]")
+        else:
+            self._frames_label.update("  Frames")
 
     # ------------------------------------------------------------------
     # Event handlers
@@ -339,6 +374,7 @@ class LogsTab(Widget):
 
             self._extending_selection = False
             self._update_frames_label()
+            self._highlight_selection()
 
     def remove_session(self, session_id: str) -> None:
         """Remove a session row (and clear frames/detail if it was selected)."""
@@ -351,6 +387,8 @@ class LogsTab(Widget):
             self._current_session_id = None
             self._current_frame_id   = None
             self._frame_rows         = []
+            self._row_data           = {}
+            self._prev_highlighted   = set()
             self._selected_frame_ids = []
             self._anchor_frame_idx   = -1
             self.query_one("#frames-table", DataTable).clear()
