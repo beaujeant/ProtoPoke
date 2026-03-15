@@ -292,7 +292,7 @@ class LogsTab(Widget):
                 return
 
     _COL_KEYS = ("seq", "dir", "len", "framer", "preview")
-    _SELECTED_STYLE = "bold"
+    _SELECTED_STYLE = "bold underline"
 
     def _highlight_selection(self) -> None:
         """Apply / remove bold styling on multi-selected rows.
