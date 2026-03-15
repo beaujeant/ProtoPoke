@@ -82,7 +82,6 @@ class RepeaterTab(Widget):
     }
     RepeaterTab #editor-pane {
         height: 40%;
-        border-bottom: solid $primary-darken-2;
         layout: horizontal;
     }
     RepeaterTab #request-editor {
@@ -179,8 +178,8 @@ class RepeaterTab(Widget):
 
         # Action bar
         with Horizontal(classes="action-bar"):
-            yield Button("▶ Send",        variant="success", id="btn-send",       compact=True)
-            yield Button("Clear History",                    id="btn-clear-hist", compact=True)
+            yield Button("▶ Send",        variant="success", id="btn-send",       flat=True)
+            yield Button("Clear History",                    id="btn-clear-hist", flat=True)
 
         # History pane
         with Vertical(id="history-pane"):
