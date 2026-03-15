@@ -26,7 +26,7 @@ class TestProjectManager:
     def test_save_as_creates_zip_file(self, tmp_path):
         pm = ProjectManager()
         pm.name = "Test Project"
-        out = pm.save_as(tmp_path / "my.protopoke")
+        out = pm.save_as(tmp_path / "my.pp")
         assert out.is_file()
         assert zipfile.is_zipfile(out)
         with zipfile.ZipFile(out) as zf:
@@ -37,7 +37,7 @@ class TestProjectManager:
 
     def test_save_as_sets_path(self, tmp_path):
         pm = ProjectManager()
-        pm.save_as(tmp_path / "proj.protopoke")
+        pm.save_as(tmp_path / "proj.pp")
         assert pm.path is not None
         assert pm.is_dirty is False
 
@@ -48,22 +48,22 @@ class TestProjectManager:
 
     def test_save_after_save_as(self, tmp_path):
         pm = ProjectManager()
-        pm.save_as(tmp_path / "p.protopoke")
+        pm.save_as(tmp_path / "p.pp")
         pm.config.listen_port = 1234
         pm.mark_dirty()
         pm.save()
         # Reload and verify
         pm2 = ProjectManager()
-        pm2.open(tmp_path / "p.protopoke")
+        pm2.open(tmp_path / "p.pp")
         assert pm2.config.listen_port == 1234
 
     def test_open_loads_config(self, tmp_path):
         pm = ProjectManager()
         pm.config.listen_port = 7777
-        pm.save_as(tmp_path / "p.protopoke")
+        pm.save_as(tmp_path / "p.pp")
 
         pm2 = ProjectManager()
-        state = pm2.open(tmp_path / "p.protopoke")
+        state = pm2.open(tmp_path / "p.pp")
         assert state.config.listen_port == 7777
         assert pm2.config.listen_port == 7777
 
@@ -71,10 +71,10 @@ class TestProjectManager:
         pm = ProjectManager()
         rule = ReplaceRule.create("r1", "01 02", b"\xFF")
         pm.rules_engine.add_rule(rule)
-        pm.save_as(tmp_path / "p.protopoke")
+        pm.save_as(tmp_path / "p.pp")
 
         pm2 = ProjectManager()
-        state = pm2.open(tmp_path / "p.protopoke")
+        state = pm2.open(tmp_path / "p.pp")
         assert len(state.rules_engine.rules) == 1
         assert state.rules_engine.rules[0].label == "r1"
 
@@ -82,10 +82,10 @@ class TestProjectManager:
         pm = ProjectManager()
         rule = InterceptRule.create("catch", "FF", RuleAction.FORWARD)
         pm.intercept_filter.add_rule(rule)
-        pm.save_as(tmp_path / "p.protopoke")
+        pm.save_as(tmp_path / "p.pp")
 
         pm2 = ProjectManager()
-        state = pm2.open(tmp_path / "p.protopoke")
+        state = pm2.open(tmp_path / "p.pp")
         assert len(state.intercept_filter.rules) == 1
         assert state.intercept_filter.rules[0].action == RuleAction.FORWARD
 
@@ -95,10 +95,10 @@ class TestProjectManager:
         rec = SendRecord.create(b"\x01\x02", b"\x03\x04", "10.0.0.1", 443)
         req.add_record(rec)
         pm.repeater_requests.append(req)
-        pm.save_as(tmp_path / "p.protopoke")
+        pm.save_as(tmp_path / "p.pp")
 
         pm2 = ProjectManager()
-        state = pm2.open(tmp_path / "p.protopoke")
+        state = pm2.open(tmp_path / "p.pp")
         assert len(state.repeater_requests) == 1
         assert state.repeater_requests[0].label == "Tab 1"
         assert state.repeater_requests[0].current_bytes == b"\x01\x02"
@@ -108,11 +108,11 @@ class TestProjectManager:
     def test_open_missing_path_raises(self):
         pm = ProjectManager()
         with pytest.raises(FileNotFoundError):
-            pm.open("/tmp/does_not_exist_12345.protopoke")
+            pm.open("/tmp/does_not_exist_12345.pp")
 
     def test_open_missing_project_json_raises(self, tmp_path):
         pm = ProjectManager()
-        bad_dir = tmp_path / "bad.protopoke"
+        bad_dir = tmp_path / "bad.pp"
         bad_dir.mkdir()
         with pytest.raises(ValueError, match="project.json"):
             pm.open(bad_dir)
@@ -120,10 +120,10 @@ class TestProjectManager:
     def test_open_returns_project_state(self, tmp_path):
         pm = ProjectManager()
         pm.name = "MyProj"
-        pm.save_as(tmp_path / "p.protopoke")
+        pm.save_as(tmp_path / "p.pp")
 
         pm2 = ProjectManager()
-        state = pm2.open(tmp_path / "p.protopoke")
+        state = pm2.open(tmp_path / "p.pp")
         assert isinstance(state, ProjectState)
         assert state.name == "MyProj"
         # ZIP format: db_path is always None
@@ -141,14 +141,14 @@ class TestProjectManager:
 
     def test_db_path_none_for_zip_format(self, tmp_path):
         pm = ProjectManager()
-        pm.save_as(tmp_path / "p.protopoke")
+        pm.save_as(tmp_path / "p.pp")
         # ZIP format projects have no db_path
         assert pm.db_path is None
 
     def test_project_json_contains_metadata(self, tmp_path):
         pm = ProjectManager()
         pm.name = "My Test"
-        out = pm.save_as(tmp_path / "p.protopoke")
+        out = pm.save_as(tmp_path / "p.pp")
         with zipfile.ZipFile(out) as zf:
             meta = json.loads(zf.read("project.json"))
         assert meta["name"] == "My Test"
@@ -181,7 +181,7 @@ class TestProjectManager:
                 ],
             }
         ]
-        out = pm.save_as(tmp_path / "p.protopoke")
+        out = pm.save_as(tmp_path / "p.pp")
 
         pm2 = ProjectManager()
         state = pm2.open(out)
@@ -193,7 +193,7 @@ class TestProjectManager:
     def test_legacy_directory_format_still_opens(self, tmp_path):
         """Backward compat: old directory-based projects can still be opened."""
         import time
-        old_dir = tmp_path / "old.protopoke"
+        old_dir = tmp_path / "old.pp"
         old_dir.mkdir()
         meta = {"format_version": 1, "name": "Old", "created_at": time.time(), "saved_at": 0.0}
         (old_dir / "project.json").write_text(json.dumps(meta))
@@ -206,7 +206,7 @@ class TestProjectManager:
         """ZIP with more than _ZIP_MAX_MEMBERS entries raises ValueError."""
         import zipfile as zf
         from protopoke.project.manager import _ZIP_MAX_MEMBERS
-        bomb = tmp_path / "bomb.protopoke"
+        bomb = tmp_path / "bomb.pp"
         with zf.ZipFile(bomb, "w") as z:
             for i in range(_ZIP_MAX_MEMBERS + 1):
                 z.writestr(f"junk_{i}.bin", b"x")

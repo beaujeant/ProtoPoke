@@ -1,7 +1,7 @@
 """
 ProjectManager — save/load a named ProtoPoke project.
 
-A *project* is a single ``.protopoke`` ZIP file that bundles:
+A *project* is a single ``.pp`` ZIP file that bundles:
 
     project.json    — metadata (name, version, timestamps)
     config.json     — ProxyConfig serialised to JSON
@@ -30,11 +30,11 @@ Usage::
     pm.rules_engine.add_rule(ReplaceRule.create(...))
 
     # Save to disk (single ZIP file)
-    pm.save_as("/tmp/capture.protopoke")
+    pm.save_as("/tmp/capture.pp")
 
     # Later: reload
     pm2 = ProjectManager()
-    state = pm2.open("/tmp/capture.protopoke")
+    state = pm2.open("/tmp/capture.pp")
     # state.config, state.rules_engine, state.intercept_filter,
     # state.repeater_requests, state.sequencer_sessions, state.captured_sessions
 """
@@ -98,7 +98,7 @@ class ProjectManager:
     """
     Manages loading and saving of a ProtoPoke project.
 
-    Projects are stored as a single ``.protopoke`` ZIP file containing
+    Projects are stored as a single ``.pp`` ZIP file containing
     JSON members for every piece of state.  Older directory-based projects
     are still readable (backward compat) but always saved in the new format.
 
@@ -158,9 +158,9 @@ class ProjectManager:
         Load a project from *path*.
 
         Supports two formats:
-        - **New format** (ZIP file): a single ``.protopoke`` file produced by
+        - **New format** (ZIP file): a single ``.pp`` file produced by
           :meth:`save` / :meth:`save_as`.
-        - **Legacy format** (directory): the old ``.protopoke`` directory format.
+        - **Legacy format** (directory): the old ``.pp`` directory format.
 
         Updates ``self.config``, ``self.rules_engine``, etc. in place and
         returns a :class:`ProjectState` snapshot for the caller to use.
@@ -198,10 +198,10 @@ class ProjectManager:
         Write the current project to a (possibly new) *path* and update
         :attr:`path` to point there.
 
-        The result is always a single ``.protopoke`` ZIP file.
+        The result is always a single ``.pp`` ZIP file.
 
         Args:
-            path: Destination file path (should end in ``.protopoke``).
+            path: Destination file path (should end in ``.pp``).
 
         Returns:
             The resolved absolute path that was written.

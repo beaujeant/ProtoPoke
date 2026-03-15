@@ -103,8 +103,8 @@ class OpenProjectModal(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label("Open Project", classes="modal-title")
-            yield Label("Path to .protopoke file (or legacy directory):")
-            yield Input(placeholder="/path/to/capture.protopoke", id="project-path")
+            yield Label("Path to .pp file (or legacy directory):")
+            yield Input(placeholder="/path/to/capture.pp", id="project-path")
             yield Static("Tip: Tab-complete doesn't work here — paste the full path.", classes="hint")
             with Horizontal(classes="buttons"):
                 yield Button("Cancel", variant="default", id="btn-cancel")
@@ -168,9 +168,9 @@ class SaveAsModal(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label("Save Project As", classes="modal-title")
-            yield Label("Destination path (.protopoke file):")
-            yield Input(value=self._default_path, placeholder="~/captures/session1.protopoke", id="save-path")
-            yield Static("The project is saved as a single ZIP file (.protopoke).", classes="hint")
+            yield Label("Destination path (.pp file):")
+            yield Input(value=self._default_path, placeholder="~/captures/session1.pp", id="save-path")
+            yield Static("The project is saved as a single ZIP file (.pp).", classes="hint")
             with Horizontal(classes="buttons"):
                 yield Button("Cancel", variant="default", id="btn-cancel")
                 yield Button("Save", variant="primary", id="btn-save")
