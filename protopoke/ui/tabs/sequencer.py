@@ -724,7 +724,7 @@ class SequencerTab(Widget):
 
         def on_entry(entry: HE) -> None:
             if self._running:
-                self.app.call_from_thread(self.append_history_entry, entry)
+                self.append_history_entry(entry)
 
         try:
             await self.app.api.run_sequence(seq=seq, on_entry=on_entry)
