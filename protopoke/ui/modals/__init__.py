@@ -1,11 +1,11 @@
 from .project import NewProjectModal, OpenProjectModal, SaveAsModal
-from .new_request import NewRequestModal
+from .request_modal import RequestModal, RequestResult
 from .add_rule import AddReplaceRuleModal, AddInterceptRuleModal
 from .rename import RenameModal
 
 __all__ = [
     "NewProjectModal", "OpenProjectModal", "SaveAsModal",
-    "NewRequestModal",
+    "RequestModal", "RequestResult",
     "AddReplaceRuleModal", "AddInterceptRuleModal",
     "RenameModal",
 ]

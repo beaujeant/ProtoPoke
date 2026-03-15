@@ -17,7 +17,7 @@ from ..models import Direction
 from ..events.bus import FrameCapturedEvent, SessionClosedEvent, SessionOpenedEvent
 from ..project.manager import ProjectManager, ProjectState
 from ..replay.models import RepeaterRequest
-from .modals.new_request import NewRequestModal, NewRequestResult
+from .modals.request_modal import RequestModal, RequestResult
 from .modals.project import NewProjectModal, OpenProjectModal, SaveAsModal
 from .tabs.config import ConfigTab
 from .tabs.fuzzer import FuzzerTab
@@ -428,9 +428,9 @@ class ProtoPoke(App):
             (s.id, f"{s.info.client_host}:{s.info.client_port}", s.info.server_host, s.info.server_port)
             for s in self.api.list_sessions()
         ]
-        self.push_screen(NewRequestModal(sessions), self._on_new_request)
+        self.push_screen(RequestModal(sessions), self._on_new_request)
 
-    def _on_new_request(self, result: NewRequestResult | None) -> None:
+    def _on_new_request(self, result: RequestResult | None) -> None:
         if result is None:
             return
         req = RepeaterRequest.create(
@@ -438,6 +438,7 @@ class ProtoPoke(App):
             port=result.port,
             tls=result.tls,
             source_session_id=result.session_id,
+            direction=result.direction,
         )
         if result.session_id:
             # Pre-fill with frames from that session
