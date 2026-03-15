@@ -440,6 +440,7 @@ class ProtoPoke(App):
             source_session_id=result.session_id,
             direction=result.direction,
         )
+        req.response_window = result.window
         if result.session_id:
             # Pre-fill with frames from that session
             session = self.api.get_session(result.session_id)
