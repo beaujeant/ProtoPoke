@@ -157,7 +157,7 @@ class LogsTab(Widget):
         # Frames pane
         with Vertical(id="frames-pane"):
             with Horizontal(classes="toolbar"):
-                lbl = Static("  Frames")
+                lbl = Static("  Frames  [Shift+↑↓ to multi-select]")
                 self._frames_label = lbl
                 yield lbl
                 yield Button("→ Repeater",  id="btn-to-repeater",  variant="default")
@@ -328,7 +328,7 @@ class LogsTab(Widget):
         if n > 1:
             self._frames_label.update(f"  Frames  [{n} selected]")
         else:
-            self._frames_label.update("  Frames")
+            self._frames_label.update("  Frames  [Shift+↑↓ to multi-select]")
 
     # ------------------------------------------------------------------
     # Event handlers
