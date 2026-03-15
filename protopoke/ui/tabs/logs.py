@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.widget import Widget
@@ -17,11 +16,10 @@ from ..widgets.parsed_view import ParsedView
 
 
 class _FramesTable(DataTable):
-    """DataTable that supports shift+arrow and shift+click range selection.
+    """DataTable that supports shift+arrow range selection.
 
     Shift+Up / Shift+Down move the cursor while signalling the parent
     :class:`LogsTab` to extend the selection range instead of resetting it.
-    Shift+Click does the same for mouse interaction.
     """
 
     BINDINGS = [
@@ -45,10 +43,6 @@ class _FramesTable(DataTable):
         self._logs_tab()._extending_selection = True
         self.action_cursor_down()
 
-    def on_mouse_down(self, event: events.MouseDown) -> None:
-        """Fires before Click, so the flag is set before DataTable moves the cursor."""
-        if event.shift:
-            self._logs_tab()._extending_selection = True
 
 
 class LogsTab(Widget):
@@ -68,10 +62,9 @@ class LogsTab(Widget):
       • Single click or arrow keys highlight a row → auto-selects it.
       • First session created is selected automatically.
       • First frame captured for the current session is selected automatically.
-      • Shift+click in the Frames table extends the selection range from the
-        anchor row to the clicked row.
-        The direction of the first selected frame determines which direction is
-        sent when using "→ Sequencer".
+      • Shift+Up/Down in the Frames table extends the selection range from the
+        anchor row.  The direction of the first selected frame determines which
+        direction is sent when using "→ Sequencer".
     """
 
     DEFAULT_CSS = """
