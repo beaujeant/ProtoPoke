@@ -22,6 +22,7 @@ class RequestResult:
     tls:        bool
     direction:  str
     session_id: str | None = None
+    window:     float = 1.0
 
 
 class RequestModal(ModalScreen[RequestResult | None]):
@@ -98,6 +99,7 @@ class RequestModal(ModalScreen[RequestResult | None]):
         tls:        bool      = False,
         direction:  str       = "to_server",
         session_id: str | None = None,
+        window:     float     = 1.0,
         edit:       bool      = False,
     ) -> None:
         super().__init__()
@@ -108,6 +110,7 @@ class RequestModal(ModalScreen[RequestResult | None]):
         self._tls        = tls
         self._direction  = direction
         self._session_id = session_id
+        self._window     = window
         self._edit       = edit
 
     def compose(self) -> ComposeResult:
@@ -164,6 +167,10 @@ class RequestModal(ModalScreen[RequestResult | None]):
                 id="direction-select",
             )
 
+            with Horizontal(classes="row"):
+                yield Label("Window (s): ")
+                yield Input(str(self._window), placeholder="1.0", id="req-window", restrict=r"[\d.]*")
+
             with Horizontal(classes="buttons"):
                 yield Button("Cancel", variant="default", id="btn-cancel")
                 yield Button(confirm_label, variant="primary", id="btn-confirm")
@@ -212,11 +219,12 @@ class RequestModal(ModalScreen[RequestResult | None]):
             self.dismiss(None)
             return
 
-        label     = self.query_one("#req-label",       Input).value.strip() or (self._label or "Request")
-        host      = self.query_one("#req-host",        Input).value.strip()
-        port_str  = self.query_one("#req-port",        Input).value.strip()
-        tls       = self.query_one("#req-tls",         Switch).value
-        direction = str(self.query_one("#direction-select", Select).value)
+        label      = self.query_one("#req-label",       Input).value.strip() or (self._label or "Request")
+        host       = self.query_one("#req-host",        Input).value.strip()
+        port_str   = self.query_one("#req-port",        Input).value.strip()
+        tls        = self.query_one("#req-tls",         Switch).value
+        direction  = str(self.query_one("#direction-select", Select).value)
+        window_str = self.query_one("#req-window",      Input).value.strip()
 
         sid_val    = self.query_one("#session-select", Select).value
         session_id = None if (sid_val is Select.BLANK or sid_val == _CUSTOM) else str(sid_val)
@@ -242,6 +250,11 @@ class RequestModal(ModalScreen[RequestResult | None]):
         if direction is Select.BLANK:
             direction = self._direction
 
+        try:
+            window = max(0.0, float(window_str)) if window_str else self._window
+        except ValueError:
+            window = self._window
+
         self.dismiss(RequestResult(
             label=label,
             host=host,
@@ -249,6 +262,7 @@ class RequestModal(ModalScreen[RequestResult | None]):
             tls=tls,
             direction=direction,
             session_id=session_id,
+            window=window,
         ))
 
     def on_key(self, event) -> None:

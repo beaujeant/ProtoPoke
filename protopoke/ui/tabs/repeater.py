@@ -7,7 +7,7 @@ import time as _time
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.widget import Widget
-from textual.widgets import DataTable, TextArea, Button, Label, Static, Input
+from textual.widgets import DataTable, TextArea, Button, Label, Static
 from textual.containers import Horizontal, Vertical
 
 from ...models import Direction
@@ -131,10 +131,6 @@ class RepeaterTab(Widget):
     RepeaterTab .action-bar Label {
         margin-right: 1;
     }
-    RepeaterTab .action-bar #resp-window {
-        width: 6;
-        margin-right: 1;
-    }
     RepeaterTab #history-pane {
         height: 1fr;
     }
@@ -158,9 +154,9 @@ class RepeaterTab(Widget):
         self._editor_mode: str = "hex"
 
     def compose(self) -> ComposeResult:
-        # Forged frames list pane (like sequencer's seq-list-pane)
+        # Frames list pane
         with Vertical(id="req-list-pane"):
-            yield Static("  Forged Frames", classes="req-list-header")
+            yield Static("  Frames", classes="req-list-header")
             yield DataTable(id="req-table", cursor_type="row")
 
         # Request controls
@@ -183,11 +179,8 @@ class RepeaterTab(Widget):
 
         # Action bar
         with Horizontal(classes="action-bar"):
-            yield Button("▶ Send", variant="success", id="btn-send",       compact=True)
-            yield Button("Clear Request",              id="btn-clear-req",  compact=True)
-            yield Button("Clear History",              id="btn-clear-hist", compact=True)
-            yield Label("  Window (s):")
-            yield Input("1.0", id="resp-window")
+            yield Button("▶ Send",        variant="success", id="btn-send",       compact=True)
+            yield Button("Clear History",                    id="btn-clear-hist", compact=True)
 
         # History pane
         with Vertical(id="history-pane"):
@@ -196,19 +189,25 @@ class RepeaterTab(Widget):
 
     def on_mount(self) -> None:
         rt = self.query_one("#req-table", DataTable)
-        rt.add_column("#",        key="num")
-        rt.add_column("Name",     key="name")
-        rt.add_column("Host:Port",key="dest")
-        rt.add_column("Dir",      key="dir")
+        rt.add_column("Name",      key="name")
+        rt.add_column("Session",   key="session")
+        rt.add_column("Host",      key="host")
+        rt.add_column("Port",      key="port")
+        rt.add_column("Direction", key="dir")
+        rt.add_column("Window",    key="window")
+        rt.add_column("Preview",   key="preview")
 
         dt = self.query_one("#history-table", DataTable)
-        dt.add_column("#", key="num")
-        dt.add_column("Time", key="time")
-        dt.add_column("Host:Port", key="dest")
-        dt.add_column("Sent (B)", key="sent")
+        dt.add_column("#",        key="num")
+        dt.add_column("Time",     key="time")
+        dt.add_column("Session",  key="session")
+        dt.add_column("Host",     key="host")
+        dt.add_column("Port",     key="port")
+        dt.add_column("Send (B)", key="sent")
         dt.add_column("Recv (B)", key="recv")
-        dt.add_column("OK", key="ok")
-        dt.add_column("Error", key="err")
+        dt.add_column("Ok",       key="ok")
+        dt.add_column("Error",    key="err")
+        dt.add_column("Preview",  key="preview")
 
         rpt = self.query_one("#resp-packets-table", DataTable)
         rpt.add_column("Frame", key="num")
@@ -232,9 +231,13 @@ class RepeaterTab(Widget):
         idx = len(self._requests) - 1
 
         rt = self.query_one("#req-table", DataTable)
-        dest = f"{req.host}:{req.port}" if req.host else "—"
-        dir_symbol = "←" if req.direction == "to_client" else "→"
-        rt.add_row(str(idx + 1), req.label, dest, dir_symbol, key=req.id)
+        session_display = req.source_session_id[:8] if req.source_session_id else "—"
+        host_display    = req.host or "—"
+        port_display    = str(req.port) if req.port else "—"
+        dir_symbol      = "←" if req.direction == "to_client" else "→"
+        window_display  = str(req.response_window)
+        preview         = " ".join(f"{b:02x}" for b in req.current_bytes[:8]) if req.current_bytes else "—"
+        rt.add_row(req.label, session_display, host_display, port_display, dir_symbol, window_display, preview, key=req.id)
 
         self._switch_to(idx)
 
@@ -250,9 +253,6 @@ class RepeaterTab(Widget):
             self.query_one("#req-table", DataTable).move_cursor(row=idx)
         except Exception:
             pass
-
-        # Sync the response-window input
-        self.query_one("#resp-window", Input).value = str(req.response_window)
 
         # Populate editor
         if req.current_bytes:
@@ -318,15 +318,17 @@ class RepeaterTab(Widget):
         saved_row = dt.cursor_row if preserve_cursor else -1
         dt.clear()
         for i, record in enumerate(req.history, 1):
-            t = _time.strftime("%H:%M:%S", _time.localtime(record.timestamp))
-            dest = f"{record.host}:{record.port}"
-            ok = "✓" if record.success else "✗"
-            err = record.error or ""
+            t               = _time.strftime("%H:%M:%S", _time.localtime(record.timestamp))
+            session_display = record.session_id[:8] if record.session_id else "—"
+            ok              = "✓" if record.success else "✗"
+            err             = record.error or ""
+            preview         = " ".join(f"{b:02x}" for b in record.sent_bytes[:8]) if record.sent_bytes else "—"
             dt.add_row(
-                str(i), t, dest,
+                str(i), t, session_display,
+                record.host, str(record.port),
                 str(len(record.sent_bytes)),
                 str(len(record.received_bytes)),
-                ok, err,
+                ok, err, preview,
                 key=record.id,
             )
         if not req.history:
@@ -341,13 +343,21 @@ class RepeaterTab(Widget):
         if idx < 0 or idx >= len(self._requests):
             return
         req = self._requests[idx]
-        dest = f"{req.host}:{req.port}" if req.host else "—"
-        dir_symbol = "←" if req.direction == "to_client" else "→"
+        session_display = req.source_session_id[:8] if req.source_session_id else "—"
+        host_display    = req.host or "—"
+        port_display    = str(req.port) if req.port else "—"
+        dir_symbol      = "←" if req.direction == "to_client" else "→"
+        window_display  = str(req.response_window)
+        preview         = " ".join(f"{b:02x}" for b in req.current_bytes[:8]) if req.current_bytes else "—"
         try:
             rt = self.query_one("#req-table", DataTable)
-            rt.update_cell(req.id, "name", req.label,   update_width=False)
-            rt.update_cell(req.id, "dest", dest,        update_width=False)
-            rt.update_cell(req.id, "dir",  dir_symbol,  update_width=False)
+            rt.update_cell(req.id, "name",    req.label,       update_width=False)
+            rt.update_cell(req.id, "session", session_display, update_width=False)
+            rt.update_cell(req.id, "host",    host_display,    update_width=False)
+            rt.update_cell(req.id, "port",    port_display,    update_width=False)
+            rt.update_cell(req.id, "dir",     dir_symbol,      update_width=False)
+            rt.update_cell(req.id, "window",  window_display,  update_width=False)
+            rt.update_cell(req.id, "preview", preview,         update_width=False)
         except Exception:
             pass
 
@@ -402,6 +412,7 @@ class RepeaterTab(Widget):
                 tls=req.tls,
                 direction=req.direction,
                 session_id=req.source_session_id,
+                window=req.response_window,
                 edit=True,
             ),
             self._on_edit_request,
@@ -412,8 +423,9 @@ class RepeaterTab(Widget):
             return
         req = self._requests[self._current_idx]
 
-        req.label     = result.label
-        req.direction = result.direction
+        req.label           = result.label
+        req.direction       = result.direction
+        req.response_window = result.window
 
         # If the session or connection target changed, reset the persistent
         # repeater session so a new connection is opened on the next send.
@@ -458,10 +470,6 @@ class RepeaterTab(Widget):
             event.stop()
             self._do_send()
 
-        elif bid == "btn-clear-req":
-            event.stop()
-            self.query_one("#req-editor", TextArea).load_text("")
-
         elif bid == "btn-clear-hist":
             event.stop()
             if 0 <= self._current_idx < len(self._requests):
@@ -470,24 +478,9 @@ class RepeaterTab(Widget):
 
     def _get_response_window(self) -> float:
         """Return the configured response-capture window in seconds."""
-        try:
-            val = float(self.query_one("#resp-window", Input).value)
-            return max(0.0, val)
-        except (ValueError, Exception):
-            return 1.0
-
-    # ------------------------------------------------------------------
-    # Input event handlers
-    # ------------------------------------------------------------------
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if self._current_idx < 0:
-            return
-        if event.input.id == "resp-window":
-            try:
-                self._requests[self._current_idx].response_window = max(0.0, float(event.value))
-            except ValueError:
-                pass
+        if 0 <= self._current_idx < len(self._requests):
+            return self._requests[self._current_idx].response_window
+        return 1.0
 
     # ------------------------------------------------------------------
     # DataTable navigation — highlighted (arrow / single-click)
@@ -591,6 +584,7 @@ class RepeaterTab(Widget):
             return
 
         req.current_bytes = data
+        self._update_req_list_row(self._current_idx)
         if hasattr(self.app, "mark_dirty"):
             self.app.mark_dirty()
 
@@ -619,6 +613,7 @@ class RepeaterTab(Widget):
             port=req.port,
             tls=req.tls,
             success=True,
+            session_id=req.source_session_id,
         )
         req.add_record(record)
         self._refresh_history(req, select_last=True)

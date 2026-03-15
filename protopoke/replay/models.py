@@ -52,6 +52,7 @@ class SendRecord:
     success:          bool        = True
     error:            Optional[str]  = None
     response_packets: list[bytes] = field(default_factory=list)
+    session_id:       Optional[str]  = None
 
     @classmethod
     def create(
@@ -64,6 +65,7 @@ class SendRecord:
         success:          bool        = True,
         error:            Optional[str]  = None,
         response_packets: list[bytes] = None,
+        session_id:       Optional[str]  = None,
     ) -> "SendRecord":
         return cls(
             id=str(uuid.uuid4()),
@@ -76,6 +78,7 @@ class SendRecord:
             success=success,
             error=error,
             response_packets=response_packets or [],
+            session_id=session_id,
         )
 
     def to_dict(self) -> dict:
@@ -90,6 +93,7 @@ class SendRecord:
             "tls":              self.tls,
             "success":          self.success,
             "error":            self.error,
+            "session_id":       self.session_id,
         }
 
     @classmethod
@@ -105,6 +109,7 @@ class SendRecord:
             tls=d.get("tls", False),
             success=d.get("success", True),
             error=d.get("error"),
+            session_id=d.get("session_id"),
         )
 
 
