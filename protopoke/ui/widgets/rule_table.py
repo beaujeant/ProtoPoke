@@ -43,11 +43,10 @@ class RuleTable(Widget, Generic[R]):
     }
     RuleTable .rule-buttons {
         height: 3;
-        margin: 1 0;
+        margin: 0;
     }
     RuleTable Button {
-        min-width: 6;
-        margin-right: 1;
+        margin-left: 1;
     }
     """
 
@@ -83,18 +82,18 @@ class RuleTable(Widget, Generic[R]):
         with Vertical():
             yield DataTable(id="rule-dt", cursor_type="row")
             with Horizontal(classes="rule-buttons"):
-                yield Button("[+] Add",    variant="success", id="btn-add",    compact=True)
-                yield Button("[-] Remove", variant="error",   id="btn-remove", compact=True)
+                yield Button("+ Add",    variant="success", id="btn-add",    flat=True)
+                yield Button("✖ Remove", variant="error",   id="btn-remove", flat=True)
                 if self._on_edit:
-                    yield Button("[✎] Edit", variant="primary", id="btn-edit", compact=True)
+                    yield Button("✎ Edit", variant="primary", id="btn-edit", flat=True)
                 if self._on_move_up:
-                    yield Button("[↑] Up",   id="btn-up",   compact=True)
+                    yield Button("↑ Up",   id="btn-up",   flat=True)
                 if self._on_move_down:
-                    yield Button("[↓] Down", id="btn-down", compact=True)
+                    yield Button("↓ Down", id="btn-down", flat=True)
                 if self._on_toggle:
-                    yield Button("[⏻] Toggle", id="btn-toggle", compact=True)
+                    yield Button("⏻ Toggle", id="btn-toggle", flat=True)
                 if self._on_reset:
-                    yield Button("[↺] Reset Script", id="btn-reset", compact=True)
+                    yield Button("↺ Reset Script", id="btn-reset", flat=True)
 
     def on_mount(self) -> None:
         dt = self.query_one("#rule-dt", DataTable)

@@ -73,7 +73,6 @@ class RepeaterTab(Widget):
     }
     RepeaterTab #req-list-pane {
         height: 20%;
-        border-bottom: solid $primary-darken-2;
     }
     RepeaterTab #req-list-pane DataTable {
         height: 1fr;
@@ -139,7 +138,6 @@ class RepeaterTab(Widget):
     }
     RepeaterTab #resp-packets-table {
         height: 7;
-        border-bottom: solid $primary-darken-2;
     }
     RepeaterTab #resp-view {
         height: 1fr;
@@ -200,8 +198,8 @@ class RepeaterTab(Widget):
 
         # Request controls
         with Horizontal(classes="req-controls"):
-            yield Button("+ New",    id="btn-new-request", variant="success", compact=True)
-            yield Button("Rename",   id="btn-rename-request", compact=True)
+            yield Button("+ New",    id="btn-new-request", variant="success", flat=True)
+            yield Button("Rename",   id="btn-rename-request", flat=True)
 
         # Target bar — session dropdown + host/port/tls + direction
         with Horizontal(classes="target-bar"):
@@ -232,12 +230,12 @@ class RepeaterTab(Widget):
                 with Horizontal(classes="pane-header"):
                     yield Static("  Request (editable)", markup=False)
                     yield Button("HEX", id="btn-req-mode", compact=True)
-                yield TextArea("", id="req-editor", theme="monokai")
+                yield TextArea("", id="req-editor")
             with Vertical(id="response-view"):
                 yield Static("  Response frames  ↓ server→client", classes="pane-header")
                 yield DataTable(id="resp-packets-table", cursor_type="row")
                 yield Static("  Packet view (hex)", classes="pane-header")
-                yield TextArea("", id="resp-view", theme="monokai", read_only=True)
+                yield TextArea("", id="resp-view", read_only=True)
 
         # Action bar
         with Horizontal(classes="action-bar"):

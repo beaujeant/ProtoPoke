@@ -88,7 +88,7 @@ class ConfigTab(Widget):
     ConfigTab .section-header {
         background: $primary-darken-2;
         color: $text;
-        padding: 0 1;
+        padding: 0;
         text-style: bold;
     }
     ConfigTab .field-row {

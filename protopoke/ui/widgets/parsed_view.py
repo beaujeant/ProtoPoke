@@ -43,7 +43,6 @@ class ParsedView(Vertical):
         content-align-vertical: middle;
     }
     ParsedView .view-toolbar Button {
-        min-width: 8;
         padding: 0;
     }
     ParsedView #detail-content {
@@ -63,8 +62,8 @@ class ParsedView(Vertical):
     def compose(self) -> ComposeResult:
         with Horizontal(classes="view-toolbar"):
             yield Static(self._title, id="view-title")
-            yield Button("Hex",    id="btn-hex",    variant="default")
-            yield Button("Parsed", id="btn-parsed", variant="primary")
+            yield Button("Hex",    id="btn-hex",    variant="default", flat=True)
+            yield Button("Parsed", id="btn-parsed", variant="primary", flat=True)
         yield Static("", id="detail-content", markup=False)
 
     def on_mount(self) -> None:

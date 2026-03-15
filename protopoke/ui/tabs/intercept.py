@@ -40,7 +40,7 @@ class InterceptTab(Widget):
         layout: vertical;
     }
     InterceptTab .top-bar {
-        height: 3;
+        height: 2;
         background: $surface-darken-1;
         align: left middle;
         padding: 0 1;
@@ -50,6 +50,9 @@ class InterceptTab(Widget):
     }
     InterceptTab .top-bar Switch {
         margin-right: 2;
+    }
+    InterceptTab .top-bar Button {
+        margin-right: 1;
     }
     InterceptTab #queue-pane {
         height: 30%;
@@ -68,18 +71,23 @@ class InterceptTab(Widget):
         padding: 0;
         border: none;
     }
+    InterceptTab #intercept-toggle > .switch--slider {
+        color: dodgerblue;
+        background: darkslateblue;
+    }
     InterceptTab .action-bar {
         height: 3;
         align: left middle;
-        padding: 0 1;
-        margin: 1 0;
+        padding: 0;
+        margin: 0;
         background: $surface-darken-1;
     }
     InterceptTab .action-bar Button {
-        margin-right: 1;
+        margin-left: 1;
     }
     InterceptTab #hex-editor-pane {
         height: 20%;
+        border-bottom: solid $primary-darken-2;
     }
     InterceptTab #hex-editor-pane .pane-header {
         height: 1;
@@ -119,8 +127,8 @@ class InterceptTab(Widget):
             yield Switch(id="intercept-toggle", value=False)
             yield Label("Direction:")
             yield Button("Both",  id="dir-both", variant="default", compact=True)
-            yield Button("→ C→S", id="dir-c2s",  variant="default", compact=True)
-            yield Button("← S→C", id="dir-s2c",  variant="default", compact=True)
+            yield Button("C → S", id="dir-c2s",  variant="default", compact=True)
+            yield Button("C ← S", id="dir-s2c",  variant="default", compact=True)
             yield Label("", id="pending-label")
 
         # Queue
@@ -130,10 +138,10 @@ class InterceptTab(Widget):
 
         # Action bar
         with Horizontal(classes="action-bar"):
-            yield Button("▶ Forward",        variant="success", id="btn-forward",    compact=True)
-            yield Button("✖ Drop",           variant="error",   id="btn-drop",       compact=True)
-            yield Button("✎ Modify+Forward", variant="warning", id="btn-modify",     compact=True)
-            yield Button("▶▶ Forward All",                      id="btn-forward-all", compact=True)
+            yield Button("▶ Forward",       variant="success", id="btn-forward",    flat=True)
+            yield Button("✖ Drop",           variant="error",   id="btn-drop",       flat=True)
+            yield Button("✎ Modify+Forward", variant="warning", id="btn-modify",     flat=True)
+            yield Button("▶▶ Forward All",                     id="btn-forward-all", flat=True)
 
         # Hex editor
         with Vertical(id="hex-editor-pane"):
@@ -143,7 +151,7 @@ class InterceptTab(Widget):
                     markup=False,
                 )
                 yield Button("HEX", id="btn-intercept-mode", compact=True)
-            yield TextArea(id="hex-editor", language=None, theme="monokai")
+            yield TextArea(id="hex-editor", language=None)
 
         # Intercept rules
         with Vertical(id="intercept-rules-pane"):

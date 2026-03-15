@@ -84,7 +84,6 @@ class LogsTab(Widget):
     }
     LogsTab #sessions-pane {
         height: 35%;
-        border-bottom: solid $primary-darken-2;
     }
     LogsTab #frames-pane {
         height: 30%;
@@ -99,10 +98,11 @@ class LogsTab(Widget):
         height: 3;
         background: $primary-darken-2;
         align: left middle;
-        padding: 0 1;
+        padding: 0;
     }
     LogsTab .toolbar Button {
-        margin-right: 1;
+        margin: 0 1;
+        padding: 0;
     }
     LogsTab .toolbar Static {
         width: 1fr;
@@ -154,8 +154,8 @@ class LogsTab(Widget):
         with Vertical(id="sessions-pane"):
             with Horizontal(classes="toolbar"):
                 yield Static("  Sessions")
-                yield Button("✖ Terminate", id="btn-terminate-session", variant="warning")
-                yield Button("✗ Delete",    id="btn-delete-session",    variant="error")
+                yield Button("✖ Terminate", id="btn-terminate-session", variant="warning", flat=True)
+                yield Button("✗ Delete",    id="btn-delete-session",    variant="error", flat=True)
             yield DataTable(id="sessions-table", cursor_type="row")
 
         # Frames pane
@@ -164,8 +164,8 @@ class LogsTab(Widget):
                 lbl = Static("  Frames  [Shift+↑↓ to multi-select]")
                 self._frames_label = lbl
                 yield lbl
-                yield Button("→ Repeater",  id="btn-to-repeater",  variant="default")
-                yield Button("→ Sequencer", id="btn-to-sequencer", variant="default")
+                yield Button("→ Repeater",  id="btn-to-repeater",  variant="default", flat=True)
+                yield Button("→ Sequencer", id="btn-to-sequencer", variant="default", flat=True)
             yield _FramesTable(id="frames-table", cursor_type="row")
 
         # Detail pane with hex↔parsed toggle
