@@ -11,7 +11,7 @@ server, with optional modifications) is essential for security testing:
     - Regression testing: compare responses between server versions
 
 Design:
-    ReplayEngine replays frames from a captured Session to a target server,
+    ForgeEngine replays frames from a captured Session to a target server,
     captures the server's responses, and returns a new Session containing both
     the sent frames and the received responses.
 
@@ -67,7 +67,7 @@ from typing import Callable, Optional
 from ..models import Direction, Frame, SessionInfo
 from ..core.session import Session, SessionRegistry
 from ..framing import create_framer
-from .models import RepeaterRequest, SendRecord
+from .models import ForgeRequest, ForgeRecord
 
 logger = logging.getLogger(__name__)
 
@@ -125,11 +125,11 @@ def parse_frame_selector(selector: str) -> set[int]:
 
 
 # ---------------------------------------------------------------------------
-# ReplayResult
+# ForgeResult
 # ---------------------------------------------------------------------------
 
 @dataclass
-class ReplayResult:
+class ForgeResult:
     """
     The outcome of replaying a session.
 
@@ -192,27 +192,27 @@ class ReplayResult:
 
 
 # ---------------------------------------------------------------------------
-# ReplayEngine
+# ForgeEngine
 # ---------------------------------------------------------------------------
 
-class ReplayEngine:
+class ForgeEngine:
     """
     Replays captured TCP sessions against a target server.
 
     Usage:
-        engine = ReplayEngine(session_registry)
+        engine = ForgeEngine(session_registry)
 
         # Replay all client→server frames (default)
-        result = await engine.replay_session(session_id="...")
+        result = await engine.forge_session(session_id="...")
 
         # Replay only frames 3 through 7
-        result = await engine.replay_session(
+        result = await engine.forge_session(
             session_id="...",
             frame_selector="3-7",
         )
 
         # Replay only the server→client direction
-        result = await engine.replay_session(
+        result = await engine.forge_session(
             session_id="...",
             direction=Direction.SERVER_TO_CLIENT,
         )
@@ -233,7 +233,7 @@ class ReplayEngine:
         self._connect_timeout  = connect_timeout
         self._framer_name      = framer_name
         self._framer_kwargs    = framer_kwargs or {}
-        # Persistent connections created by the Repeater for custom host:port sends.
+        # Persistent connections created by Forge for custom host:port sends.
         # Maps session_id → (writer, tls, reader_queue, reader_task)
         # The StreamReader is owned exclusively by the background reader_task so
         # that only one coroutine ever calls reader.read() — avoiding the
@@ -245,7 +245,7 @@ class ReplayEngine:
             tuple[asyncio.StreamWriter, bool, asyncio.Queue, asyncio.Task]
         ] = {}
 
-    async def replay_session(
+    async def forge_session(
         self,
         session_id:      str,
         server_host:     Optional[str]              = None,
@@ -254,7 +254,7 @@ class ReplayEngine:
         modified_frames: Optional[dict[str, bytes]] = None,
         direction:       Direction                  = Direction.CLIENT_TO_SERVER,
         frame_selector:  Optional[str]              = None,
-    ) -> ReplayResult:
+    ) -> ForgeResult:
         """
         Replay a captured session.
 
@@ -277,13 +277,13 @@ class ReplayEngine:
                              None (default) means all frames in that direction.
 
         Returns:
-            ReplayResult with the new replayed session and metadata.
+            ForgeResult with the new replayed session and metadata.
         """
         original = self._session_registry.get(session_id)
         if not original:
             stub_info = SessionInfo.create("replay", 0, server_host or "", server_port or 0)
             stub = Session(stub_info)
-            return ReplayResult(
+            return ForgeResult(
                 original_session_id=session_id,
                 replayed_session=stub,
                 success=False,
@@ -302,7 +302,7 @@ class ReplayEngine:
             except ValueError as exc:
                 stub_info = SessionInfo.create("replay", 0, target_host, target_port)
                 stub = Session(stub_info)
-                return ReplayResult(
+                return ForgeResult(
                     original_session_id=session_id,
                     replayed_session=stub,
                     success=False,
@@ -325,7 +325,7 @@ class ReplayEngine:
             selector_label = f" matching selector '{frame_selector}'" if frame_selector else ""
             stub_info = SessionInfo.create("replay", 0, target_host, target_port)
             stub = Session(stub_info)
-            return ReplayResult(
+            return ForgeResult(
                 original_session_id=session_id,
                 replayed_session=stub,
                 success=False,
@@ -349,7 +349,7 @@ class ReplayEngine:
             f" [selector={frame_selector!r}]" if frame_selector else "",
         )
 
-        result = ReplayResult(
+        result = ForgeResult(
             original_session_id=session_id,
             replayed_session=replayed,
             success=False,
@@ -383,7 +383,7 @@ class ReplayEngine:
         target_port:      int,
         frame_delay:      float,
         modified_frames:  dict[str, bytes],
-        result:           ReplayResult,
+        result:           ForgeResult,
     ) -> None:
         """Internal: connect to the server, send frames, capture responses."""
         try:
@@ -466,7 +466,7 @@ class ReplayEngine:
     # Persistent repeater sessions (custom host:port)
     # ------------------------------------------------------------------
 
-    async def open_repeater_session(
+    async def open_forge_session(
         self,
         host: str,
         port: int,
@@ -477,7 +477,7 @@ class ReplayEngine:
         session in the registry.
 
         The connection is kept alive between sends (no EOF signalled).  Call
-        :meth:`send_on_repeater_session` to send data through it.  The session
+        :meth:`send_on_forge_session` to send data through it.  The session
         is automatically closed and removed when the server drops the connection.
 
         Returns:
@@ -509,7 +509,7 @@ class ReplayEngine:
             raise ConnectionError(f"Connection failed to {host}:{port}: {exc}") from exc
 
         session = self._session_registry.create(
-            client_host="repeater",
+            client_host="forge",
             client_port=0,
             server_host=host,
             server_port=port,
@@ -518,17 +518,17 @@ class ReplayEngine:
 
         # Start a dedicated background task that is the *sole* reader of the
         # StreamReader.  It feeds received bytes into a Queue so that
-        # send_on_repeater_session can drain from the Queue with a timeout
+        # send_on_forge_session can drain from the Queue with a timeout
         # without ever calling reader.read() from a second coroutine.
         reader_queue: asyncio.Queue = asyncio.Queue()
         reader_task = asyncio.get_event_loop().create_task(
             self._background_reader(reader, reader_queue),
-            name=f"repeater-reader-{session.id[:8]}",
+            name=f"forge-reader-{session.id[:8]}",
         )
         self._open_connections[session.id] = (writer, tls, reader_queue, reader_task)
 
         logger.info(
-            "Repeater session opened: %s → %s:%d (tls=%s)",
+            "Forge session opened: %s → %s:%d (tls=%s)",
             session.id[:8], host, port, tls,
         )
         return session
@@ -556,13 +556,13 @@ class ReplayEngine:
         except Exception as exc:
             await queue.put(exc)   # propagate error as a sentinel value
 
-    async def send_on_repeater_session(
+    async def send_on_forge_session(
         self,
         session_id:       str,
         data:             bytes,
         receive_timeout:  float = 10.0,
         packet_callback:  Optional[Callable[[bytes], None]] = None,
-    ) -> SendRecord:
+    ) -> ForgeRecord:
         """
         Send *data* through an existing persistent repeater session and read
         the server's response.
@@ -576,27 +576,27 @@ class ReplayEngine:
         came back before the close.
 
         Args:
-            session_id:      ID of the session opened via :meth:`open_repeater_session`.
+            session_id:      ID of the session opened via :meth:`open_forge_session`.
             data:            Bytes to send.
             receive_timeout: Seconds to wait for the server's response.
                              On timeout the bytes received so far are returned
                              and the connection stays open.
 
         Returns:
-            A :class:`SendRecord` with the sent bytes and received response.
+            A :class:`ForgeRecord` with the sent bytes and received response.
         """
         conn = self._open_connections.get(session_id)
         session = self._session_registry.get(session_id)
 
         if not conn or not session:
-            return SendRecord.create(
+            return ForgeRecord.create(
                 sent_bytes=data,
                 received_bytes=b"",
                 host="",
                 port=0,
                 tls=False,
                 success=False,
-                error=f"Repeater session {session_id[:8]} not found or not open",
+                error=f"Forge session {session_id[:8]} not found or not open",
             )
 
         writer, tls, queue, reader_task = conn
@@ -668,7 +668,7 @@ class ReplayEngine:
                 "Repeater session %s closed by server after send", session_id[:8]
             )
             if io_error:
-                return SendRecord.create(
+                return ForgeRecord.create(
                     sent_bytes=data,
                     received_bytes=bytes(received),
                     response_packets=received_packets,
@@ -680,10 +680,10 @@ class ReplayEngine:
                 )
 
         logger.info(
-            "send_on_repeater_session %s: sent=%d bytes, received=%d bytes (%d frames, framer=%s)",
+            "send_on_forge_session %s: sent=%d bytes, received=%d bytes (%d frames, framer=%s)",
             session_id[:8], len(data), len(received), len(received_packets), self._framer_name,
         )
-        return SendRecord.create(
+        return ForgeRecord.create(
             sent_bytes=data,
             received_bytes=bytes(received),
             response_packets=received_packets,
@@ -702,7 +702,7 @@ class ReplayEngine:
         connect_timeout:  Optional[float] = None,
         receive_timeout:  Optional[float] = None,
         packet_callback:  Optional[Callable[[bytes], None]] = None,
-    ) -> SendRecord:
+    ) -> ForgeRecord:
         """
         Send raw bytes to *host*:*port* and read all response bytes.
 
@@ -723,7 +723,7 @@ class ReplayEngine:
                               Defaults to the same value as *connect_timeout*.
 
         Returns:
-            A ``SendRecord`` capturing the sent bytes, response bytes,
+            A ``ForgeRecord`` capturing the sent bytes, response bytes,
             success flag, and error message (if any).
         """
         timeout = connect_timeout if connect_timeout is not None else self._connect_timeout
@@ -744,7 +744,7 @@ class ReplayEngine:
                 timeout=timeout,
             )
         except asyncio.TimeoutError:
-            return SendRecord.create(
+            return ForgeRecord.create(
                 sent_bytes=data,
                 received_bytes=b"",
                 host=host,
@@ -754,7 +754,7 @@ class ReplayEngine:
                 error=f"Connection timeout ({timeout}s)",
             )
         except OSError as exc:
-            return SendRecord.create(
+            return ForgeRecord.create(
                 sent_bytes=data,
                 received_bytes=b"",
                 host=host,
@@ -807,7 +807,7 @@ class ReplayEngine:
                     received_packets.append(frame.raw_bytes)
                     if packet_callback is not None:
                         packet_callback(frame.raw_bytes)
-            return SendRecord.create(
+            return ForgeRecord.create(
                 sent_bytes=data,
                 received_bytes=bytes(received),
                 response_packets=received_packets,
@@ -835,7 +835,7 @@ class ReplayEngine:
             "send_frame: sent=%d bytes, received=%d bytes (%d frames, framer=%s) to %s:%d",
             len(data), len(received), len(received_packets), self._framer_name, host, port,
         )
-        return SendRecord.create(
+        return ForgeRecord.create(
             sent_bytes=data,
             received_bytes=bytes(received),
             response_packets=received_packets,

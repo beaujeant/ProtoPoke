@@ -1,4 +1,4 @@
-"""RepeaterTab — hand-craft and replay single frames with history."""
+"""ForgeTab — hand-craft and replay single frames with history."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from textual.widgets import DataTable, TextArea, Button, Label, Static
 from textual.containers import Horizontal, Vertical
 
 from ...models import Direction
-from ...replay.models import RepeaterRequest, SendRecord
+from ...forge.models import ForgeRequest, ForgeRecord
 from ..modals.request_modal import RequestModal, RequestResult
 from ..utils.frame_codec import bytes_to_str, str_to_bytes, hex_pairs_to_str, str_to_hex_pairs
 
@@ -22,7 +22,7 @@ _DIR_MAP = {
 }
 
 
-class RepeaterTab(Widget):
+class ForgeTab(Widget):
     """
     Tab 4 — Repeater: send single frames to the target.
 
@@ -55,95 +55,95 @@ class RepeaterTab(Widget):
     ]
 
     DEFAULT_CSS = """
-    RepeaterTab {
+    ForgeTab {
         layout: vertical;
     }
-    RepeaterTab .req-list-header {
+    ForgeTab .req-list-header {
         background: $primary-darken-2;
         color: $text;
         padding: 0 1;
         height: 1;
         text-style: bold;
     }
-    RepeaterTab #req-list-pane {
+    ForgeTab #req-list-pane {
         height: 20%;
     }
-    RepeaterTab #req-list-pane DataTable {
+    ForgeTab #req-list-pane DataTable {
         height: 1fr;
     }
-    RepeaterTab .req-controls {
+    ForgeTab .req-controls {
         height: 3;
         align: left middle;
         padding: 0 1;
         background: $surface-darken-1;
     }
-    RepeaterTab .req-controls Button {
+    ForgeTab .req-controls Button {
         margin-right: 1;
     }
-    RepeaterTab #editor-pane {
+    ForgeTab #editor-pane {
         height: 40%;
         layout: horizontal;
     }
-    RepeaterTab #request-editor {
+    ForgeTab #request-editor {
         width: 1fr;
         border-right: solid $primary-darken-2;
     }
-    RepeaterTab #request-editor .pane-header {
+    ForgeTab #request-editor .pane-header {
         height: 1;
         align: left middle;
     }
-    RepeaterTab #request-editor .pane-header Static {
+    ForgeTab #request-editor .pane-header Static {
         width: 1fr;
     }
-    RepeaterTab #request-editor .pane-header Button {
+    ForgeTab #request-editor .pane-header Button {
         width: 5;
     }
-    RepeaterTab #response-view {
+    ForgeTab #response-view {
         width: 1fr;
         layout: vertical;
     }
-    RepeaterTab #resp-packets-table {
+    ForgeTab #resp-packets-table {
         height: 7;
     }
-    RepeaterTab #resp-view {
+    ForgeTab #resp-view {
         height: 1fr;
     }
-    RepeaterTab .pane-header {
+    ForgeTab .pane-header {
         background: $primary-darken-2;
         color: $text;
         padding: 0 1;
         height: 1;
         text-style: bold;
     }
-    RepeaterTab #request-editor TextArea {
+    ForgeTab #request-editor TextArea {
         height: 1fr;
     }
-    RepeaterTab .action-bar {
+    ForgeTab .action-bar {
         height: 3;
         align: left middle;
         padding: 0 1;
         background: $surface-darken-1;
     }
-    RepeaterTab .action-bar Button {
+    ForgeTab .action-bar Button {
         margin-right: 1;
     }
-    RepeaterTab .action-bar Label {
+    ForgeTab .action-bar Label {
         margin-right: 1;
     }
-    RepeaterTab #history-pane {
+    ForgeTab #history-pane {
         height: 1fr;
     }
-    RepeaterTab DataTable {
+    ForgeTab DataTable {
         height: 1fr;
     }
-    RepeaterTab #resp-packets-table {
+    ForgeTab #resp-packets-table {
         height: 7;
     }
     """
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self._requests: list[RepeaterRequest] = []
+        self._requests: list[ForgeRequest] = []
         self._current_idx: int = -1
         # Response packets for the currently displayed send record
         self._current_response_packets: list[bytes] = []
@@ -216,7 +216,7 @@ class RepeaterTab(Widget):
     # Request list management
     # ------------------------------------------------------------------
 
-    def add_request(self, req: RepeaterRequest, _preserve_label: bool = False) -> None:
+    def add_request(self, req: ForgeRequest, _preserve_label: bool = False) -> None:
         """Add a new repeater request and switch to it.
 
         When *_preserve_label* is False (default), the request label is
@@ -271,8 +271,8 @@ class RepeaterTab(Widget):
     def refresh_session_dropdown(self) -> None:
         """Called by the app when a session opens or closes (no-op: sessions are fetched fresh when the Edit modal opens)."""
 
-    def _display_record_response(self, record: SendRecord) -> None:
-        """Populate the response packet list and viewer from a SendRecord."""
+    def _display_record_response(self, record: ForgeRecord) -> None:
+        """Populate the response packet list and viewer from a ForgeRecord."""
         self._refresh_response_packets(record.response_packets)
 
     def _refresh_response_packets(self, packets: list[bytes]) -> None:
@@ -308,7 +308,7 @@ class RepeaterTab(Widget):
 
     def _refresh_history(
         self,
-        req: RepeaterRequest,
+        req: ForgeRequest,
         *,
         select_last: bool = False,
         preserve_cursor: bool = False,
@@ -360,7 +360,7 @@ class RepeaterTab(Widget):
         except Exception:
             pass
 
-    def load_requests(self, requests: list[RepeaterRequest]) -> None:
+    def load_requests(self, requests: list[ForgeRequest]) -> None:
         """Reload all requests (e.g. after project open)."""
         rt = self.query_one("#req-table", DataTable)
         rt.clear()
@@ -596,7 +596,7 @@ class RepeaterTab(Widget):
 
         self.run_worker(self._async_send(req, data), exclusive=True)
 
-    async def _async_send(self, req: RepeaterRequest, data: bytes) -> None:
+    async def _async_send(self, req: ForgeRequest, data: bytes) -> None:
         import asyncio as _asyncio
         import time as _t
 
@@ -604,7 +604,7 @@ class RepeaterTab(Widget):
 
         # Add a provisional record immediately so the history entry appears
         # before the response window runs, giving real-time feedback.
-        record = SendRecord.create(
+        record = ForgeRecord.create(
             sent_bytes=data,
             received_bytes=b"",
             response_packets=[],
@@ -704,7 +704,7 @@ class RepeaterTab(Widget):
 
             if not req.repeater_session_id:
                 try:
-                    req.repeater_session_id = await self.app.api.open_repeater_session(
+                    req.repeater_session_id = await self.app.api.open_forge_session(
                         req.host, req.port, req.tls
                     )
                 except Exception as exc:
@@ -725,7 +725,7 @@ class RepeaterTab(Widget):
                     self.notify(f"Send complete (no persistent session): {exc}", severity="warning")
                     return
 
-            final = await self.app.api.send_on_repeater_session(
+            final = await self.app.api.send_on_forge_session(
                 session_id=req.repeater_session_id,
                 data=data,
                 receive_timeout=response_window,

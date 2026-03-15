@@ -1,4 +1,4 @@
-"""SequencerTab — session-based multi-packet replay with variable substitution."""
+"""SequenceTab — session-based multi-packet replay with variable substitution."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ from textual.widget import Widget
 from textual.widgets import Button, DataTable, Input, Label, Static, Switch, TextArea
 from textual.containers import Horizontal, Vertical
 
-from ...sequencer.models import HistoryEntry, SequencerSession, SequenceStep
+from ...sequence.models import HistoryEntry, SequenceSession, SequenceStep
 from ..utils.frame_codec import hex_template_to_str, str_to_hex_template
 
 
-class SequencerTab(Widget):
+class SequenceTab(Widget):
     """
     Tab 6 — Sequencer: send ordered packet chains with {{VAR}} variable
     substitution and an optional Python script for response-driven extraction.
@@ -48,121 +48,121 @@ class SequencerTab(Widget):
     """
 
     DEFAULT_CSS = """
-    SequencerTab {
+    SequenceTab {
         layout: vertical;
     }
-    SequencerTab .seq-list-header {
+    SequenceTab .seq-list-header {
         background: $primary-darken-2;
         color: $text;
         padding: 0 1;
         height: 1;
         text-style: bold;
     }
-    SequencerTab #seq-list-pane {
+    SequenceTab #seq-list-pane {
         height: 20%;
         border-bottom: solid $primary-darken-2;
     }
-    SequencerTab #seq-list-pane DataTable {
+    SequenceTab #seq-list-pane DataTable {
         height: 1fr;
     }
-    SequencerTab .seq-controls {
+    SequenceTab .seq-controls {
         height: 3;
         align: left middle;
         padding: 0 1;
         background: $surface-darken-1;
     }
-    SequencerTab .seq-controls Button {
+    SequenceTab .seq-controls Button {
         margin-right: 1;
     }
-    SequencerTab .pane-header {
+    SequenceTab .pane-header {
         background: $primary-darken-2;
         color: $text;
         padding: 0 1;
         height: 1;
         text-style: bold;
     }
-    SequencerTab #step-list-pane {
+    SequenceTab #step-list-pane {
         height: 20%;
         border-bottom: solid $primary-darken-2;
     }
-    SequencerTab #step-list-pane DataTable {
+    SequenceTab #step-list-pane DataTable {
         height: 1fr;
     }
-    SequencerTab .step-controls {
+    SequenceTab .step-controls {
         height: 3;
         align: left middle;
         padding: 0 1;
         background: $surface-darken-1;
     }
-    SequencerTab .step-controls Button {
+    SequenceTab .step-controls Button {
         margin-right: 1;
     }
-    SequencerTab #step-editor-pane {
+    SequenceTab #step-editor-pane {
         height: 22%;
         border-bottom: solid $primary-darken-2;
     }
-    SequencerTab #step-label-bar {
+    SequenceTab #step-label-bar {
         height: 3;
         align: left middle;
         padding: 0 1;
         background: $surface-darken-2;
     }
-    SequencerTab #step-label-bar Label {
+    SequenceTab #step-label-bar Label {
         margin-right: 1;
         width: 7;
     }
-    SequencerTab #step-label-bar Input {
+    SequenceTab #step-label-bar Input {
         width: 1fr;
     }
-    SequencerTab #btn-step-mode {
+    SequenceTab #btn-step-mode {
         width: 5;
         margin-left: 1;
     }
-    SequencerTab #step-hex-editor {
+    SequenceTab #step-hex-editor {
         height: 1fr;
     }
-    SequencerTab #history-pane {
+    SequenceTab #history-pane {
         height: 1fr;
     }
-    SequencerTab #history-pane DataTable {
+    SequenceTab #history-pane DataTable {
         height: 1fr;
     }
-    SequencerTab .run-bar {
+    SequenceTab .run-bar {
         height: 5;
         padding: 0 1;
         background: $surface-darken-1;
         layout: vertical;
     }
-    SequencerTab .run-bar-row {
+    SequenceTab .run-bar-row {
         height: 2;
         align: left middle;
     }
-    SequencerTab .run-bar-row Button {
+    SequenceTab .run-bar-row Button {
         margin-right: 1;
     }
-    SequencerTab .run-bar-row Label {
+    SequenceTab .run-bar-row Label {
         margin-right: 1;
     }
-    SequencerTab .run-bar-row Input {
+    SequenceTab .run-bar-row Input {
         margin-right: 1;
     }
-    SequencerTab .run-bar-row #seq-host {
+    SequenceTab .run-bar-row #seq-host {
         width: 20;
     }
-    SequencerTab .run-bar-row #seq-port {
+    SequenceTab .run-bar-row #seq-port {
         width: 6;
     }
-    SequencerTab .run-bar-row #seq-session-id {
+    SequenceTab .run-bar-row #seq-session-id {
         width: 22;
     }
-    SequencerTab .run-bar-row #seq-window {
+    SequenceTab .run-bar-row #seq-window {
         width: 6;
     }
     """
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self._sequences: list[SequencerSession] = []
+        self._sequences: list[SequenceSession] = []
         self._current_idx: int = -1
         self._selected_step_idx: int = -1
         self._running: bool = False
@@ -265,7 +265,7 @@ class SequencerTab(Widget):
         for seq in self._sequences:
             st.add_row(seq.label, str(len(seq.steps)), key=seq.id)
 
-    def add_sequence(self, seq: SequencerSession) -> None:
+    def add_sequence(self, seq: SequenceSession) -> None:
         """Add a new sequence and switch to it."""
         self._sequences.append(seq)
         idx = len(self._sequences) - 1
@@ -299,7 +299,7 @@ class SequencerTab(Widget):
         self._refresh_history()
         self._clear_step_editor()
 
-    def load_sequences(self, sequences: list[SequencerSession]) -> None:
+    def load_sequences(self, sequences: list[SequenceSession]) -> None:
         """Reload all sequences (e.g. after project open)."""
         self._sequences = []
         self._current_idx = -1
@@ -526,7 +526,7 @@ class SequencerTab(Widget):
                 self.notify("Import failed: 'steps' must be a list.", severity="error")
                 return
 
-            seq = SequencerSession.create(label=label)
+            seq = SequenceSession.create(label=label)
             for sd in steps_data:
                 step = SequenceStep.create(
                     label=sd.get("label", ""),
@@ -624,8 +624,8 @@ class SequencerTab(Widget):
         editor.load_text(new_text)
 
     def _do_new_sequence(self) -> None:
-        from ...sequencer.models import SequencerSession
-        seq = SequencerSession.create(label=f"Sequence {len(self._sequences)+1}")
+        from ...sequencer.models import SequenceSession
+        seq = SequenceSession.create(label=f"Sequence {len(self._sequences)+1}")
         self.add_sequence(seq)
         if hasattr(self.app, "mark_dirty"):
             self.app.mark_dirty()
@@ -718,7 +718,7 @@ class SequencerTab(Widget):
         self._running = True
         self.run_worker(self._async_run(seq), exclusive=True)
 
-    async def _async_run(self, seq: SequencerSession) -> None:
+    async def _async_run(self, seq: SequenceSession) -> None:
         """Background worker: run the sequence and update the UI live."""
         from ...sequencer.models import HistoryEntry as HE
 
@@ -825,8 +825,8 @@ class SequencerTab(Widget):
                        matching the first selected frame's direction are sent).
         """
         if self._current_idx < 0:
-            from ...sequencer.models import SequencerSession
-            seq = SequencerSession.create(
+            from ...sequencer.models import SequenceSession
+            seq = SequenceSession.create(
                 label="Imported Sequence",
                 host=host,
                 port=port,

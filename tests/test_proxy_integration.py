@@ -188,7 +188,7 @@ class TestInterception:
             config = ProxyConfig(
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
-                intercept_enabled=True,
+                tamper_enabled=True,
             )
             api = ProxyAPI(config)
             await api.start()
@@ -221,7 +221,7 @@ class TestInterception:
             config = ProxyConfig(
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
-                intercept_enabled=True,
+                tamper_enabled=True,
             )
             api = ProxyAPI(config)
             await api.start()
@@ -260,7 +260,7 @@ class TestInterception:
             config = ProxyConfig(
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
-                intercept_enabled=True,
+                tamper_enabled=True,
             )
             api = ProxyAPI(config)
             await api.start()
@@ -310,13 +310,13 @@ class TestInterception:
             config = ProxyConfig(
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
-                intercept_enabled=True,
+                tamper_enabled=True,
             )
             api = ProxyAPI(config)
             await api.start()
 
             # Disable interception — everything should flow through
-            api.intercept_enabled = False
+            api.tamper_enabled = False
 
             try:
                 response = await send_recv("127.0.0.1", listen_port, b"no intercept")

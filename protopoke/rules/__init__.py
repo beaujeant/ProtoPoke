@@ -4,8 +4,8 @@ from .rule import (
     PatternError,
     RuleAction,
     ReplaceRule,
-    InterceptRule,
+    TamperRule,
     compile_binary_pattern,
     pattern_to_display,
 )
-from .engine import RulesEngine, InterceptFilter
+from .engine import RulesEngine, TamperFilter

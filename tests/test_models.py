@@ -10,7 +10,7 @@ from protopoke.models import (
     Direction,
     Frame,
     InterceptAction,
-    InterceptedUnit,
+    TamperedUnit,
     ParsedMessage,
     SessionInfo,
     SessionState,
@@ -97,26 +97,26 @@ class TestSessionInfo:
         assert before <= info.created_at <= after
 
 
-class TestInterceptedUnit:
+class TestTamperedUnit:
     def _frame(self) -> Frame:
         return Frame.create("s", Direction.CLIENT_TO_SERVER, b"data", 0)
 
     def test_from_frame_default_forward(self):
         frame = self._frame()
-        unit = InterceptedUnit.from_frame(frame)
+        unit = TamperedUnit.from_frame(frame)
         assert unit.frame is frame
         assert unit.action is InterceptAction.FORWARD
         assert unit.modified_data is None
 
     def test_effective_bytes_forward_returns_original(self):
         frame = self._frame()
-        unit = InterceptedUnit.from_frame(frame)
+        unit = TamperedUnit.from_frame(frame)
         unit.action = InterceptAction.FORWARD
         assert unit.effective_bytes() == b"data"
 
     def test_effective_bytes_modified_returns_replacement(self):
         frame = self._frame()
-        unit = InterceptedUnit.from_frame(frame)
+        unit = TamperedUnit.from_frame(frame)
         unit.action = InterceptAction.MODIFIED
         unit.modified_data = b"replaced"
         assert unit.effective_bytes() == b"replaced"
@@ -124,7 +124,7 @@ class TestInterceptedUnit:
     def test_effective_bytes_modified_no_data_falls_back_to_original(self):
         # Edge case: action=MODIFIED but modified_data is None
         frame = self._frame()
-        unit = InterceptedUnit.from_frame(frame)
+        unit = TamperedUnit.from_frame(frame)
         unit.action = InterceptAction.MODIFIED
         unit.modified_data = None
         assert unit.effective_bytes() == b"data"
@@ -133,7 +133,7 @@ class TestInterceptedUnit:
         # effective_bytes() doesn't check for DROP — the relay checks action.
         # But it should still return the original bytes if called.
         frame = self._frame()
-        unit = InterceptedUnit.from_frame(frame)
+        unit = TamperedUnit.from_frame(frame)
         unit.action = InterceptAction.DROP
         assert unit.effective_bytes() == b"data"
 

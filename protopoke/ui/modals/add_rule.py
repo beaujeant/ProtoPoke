@@ -1,4 +1,4 @@
-"""Add-rule modals: AddReplaceRuleModal and AddInterceptRuleModal."""
+"""Add-rule modals: AddReplaceRuleModal and AddTamperRuleModal."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from textual.containers import Horizontal, Vertical
 
 from ...rules.rule import (
     ReplaceRule,
-    InterceptRule,
+    TamperRule,
     RuleAction,
     compile_binary_pattern,
     compile_regex_pattern,
@@ -390,54 +390,54 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
 
 
 # ---------------------------------------------------------------------------
-# AddInterceptRuleModal
+# AddTamperRuleModal
 # ---------------------------------------------------------------------------
 
-class AddInterceptRuleModal(ModalScreen[InterceptRule | None]):
+class AddTamperRuleModal(ModalScreen[TamperRule | None]):
     """
-    Modal form to create or edit an InterceptRule.
+    Modal form to create or edit an TamperRule.
 
     Dismisses with the new/updated rule, or None if cancelled.
     """
 
     DEFAULT_CSS = """
-    AddInterceptRuleModal > Vertical {
+    AddTamperRuleModal > Vertical {
         width: 72;
         height: auto;
         border: thick $primary;
         padding: 1 2;
         background: $surface;
     }
-    AddInterceptRuleModal Label {
+    AddTamperRuleModal Label {
         margin-top: 1;
     }
-    AddInterceptRuleModal Input {
+    AddTamperRuleModal Input {
         margin-bottom: 0;
     }
-    AddInterceptRuleModal .hint {
+    AddTamperRuleModal .hint {
         color: $text-muted;
     }
-    AddInterceptRuleModal .tls-row {
+    AddTamperRuleModal .tls-row {
         height: 3;
         margin-top: 1;
         align: left middle;
     }
-    AddInterceptRuleModal .buttons {
+    AddTamperRuleModal .buttons {
         height: 3;
         margin-top: 2;
         align: right middle;
     }
-    AddInterceptRuleModal Button {
+    AddTamperRuleModal Button {
         margin-left: 1;
         padding: 0 0;
     }
-    AddInterceptRuleModal #validation-msg {
+    AddTamperRuleModal #validation-msg {
         color: $error;
         height: 1;
     }
     """
 
-    def __init__(self, existing: InterceptRule | None = None) -> None:
+    def __init__(self, existing: TamperRule | None = None) -> None:
         super().__init__()
         self._existing = existing
 
@@ -537,6 +537,6 @@ class AddInterceptRuleModal(ModalScreen[InterceptRule | None]):
             from ...rules.rule import compile_binary_pattern as _compile
             rule.compiled = _compile(pattern) if pattern else None
         else:
-            rule = InterceptRule.create(label, pattern, action, direction=direction, enabled=enabled)
+            rule = TamperRule.create(label, pattern, action, direction=direction, enabled=enabled)
 
         self.dismiss(rule)

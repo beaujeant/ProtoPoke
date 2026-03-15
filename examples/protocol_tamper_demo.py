@@ -32,7 +32,7 @@ from pathlib import Path
 
 from protopoke.api import ProxyAPI
 from protopoke.config import ProxyConfig
-from protopoke.models import InterceptedUnit, ParsedMessage
+from protopoke.models import TamperedUnit, ParsedMessage
 from protopoke.protocol.display import (
     render_field_tree,
     render_frame_header,
@@ -43,7 +43,7 @@ from protopoke.protocol.display import (
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 
 
-def print_parsed_frame(unit: InterceptedUnit, msg: ParsedMessage) -> None:
+def print_parsed_frame(unit: TamperedUnit, msg: ParsedMessage) -> None:
     """Print the full Wireshark-style view of an intercepted frame."""
     print(f"\n{'═' * 72}")
     print(render_frame_header(unit.frame, msg))
@@ -186,7 +186,7 @@ async def main() -> None:
         listen_port=8080,
         upstream_host="127.0.0.1",
         upstream_port=9090,
-        intercept_enabled=True,
+        tamper_enabled=True,
         framer_name="raw",
         protocol_definition_path=proto_path,
     )

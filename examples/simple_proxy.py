@@ -40,7 +40,7 @@ async def main() -> None:
         listen_port=8080,
         upstream_host="127.0.0.1",
         upstream_port=9090,
-        intercept_enabled=False,
+        tamper_enabled=False,
         # Change to "delimiter" for line-based protocols:
         # framer_name="delimiter",
         # framer_kwargs={"delimiter": b"\n"},

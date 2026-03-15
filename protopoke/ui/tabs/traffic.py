@@ -1,4 +1,4 @@
-"""LogsTab — session list, frame list, and hex / parsed detail pane."""
+"""TrafficTab — session list, frame list, and hex / parsed detail pane."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ class _FramesTable(DataTable):
     """DataTable that supports shift+arrow range selection.
 
     Shift+Up / Shift+Down move the cursor while signalling the parent
-    :class:`LogsTab` to extend the selection range instead of resetting it.
+    :class:`TrafficTab` to extend the selection range instead of resetting it.
     """
 
     BINDINGS = [
@@ -28,28 +28,28 @@ class _FramesTable(DataTable):
         Binding("escape", "cancel_selection", show=False),
     ]
 
-    def _logs_tab(self) -> "LogsTab":
+    def _traffic_tab(self) -> "TrafficTab":
         node = self.parent
         while node is not None:
-            if isinstance(node, LogsTab):
+            if isinstance(node, TrafficTab):
                 return node
             node = node.parent
-        raise RuntimeError("_FramesTable must be a descendant of LogsTab")
+        raise RuntimeError("_FramesTable must be a descendant of TrafficTab")
 
     def action_shift_up(self) -> None:
-        self._logs_tab()._extending_selection = True
+        self._traffic_tab()._extending_selection = True
         self.action_cursor_up()
 
     def action_shift_down(self) -> None:
-        self._logs_tab()._extending_selection = True
+        self._traffic_tab()._extending_selection = True
         self.action_cursor_down()
 
     def action_cancel_selection(self) -> None:
-        self._logs_tab()._cancel_frame_selection()
+        self._traffic_tab()._cancel_frame_selection()
 
 
 
-class LogsTab(Widget):
+class TrafficTab(Widget):
     """
     Tab 2 — Live capture log.
 
@@ -72,39 +72,39 @@ class LogsTab(Widget):
     """
 
     DEFAULT_CSS = """
-    LogsTab {
+    TrafficTab {
         layout: vertical;
     }
-    LogsTab .pane-header {
+    TrafficTab .pane-header {
         background: $primary-darken-2;
         color: $text;
         padding: 0 1;
         height: 1;
         text-style: bold;
     }
-    LogsTab #sessions-pane {
+    TrafficTab #sessions-pane {
         height: 35%;
     }
-    LogsTab #frames-pane {
+    TrafficTab #frames-pane {
         height: 30%;
     }
-    LogsTab #detail-pane {
+    TrafficTab #detail-pane {
         height: 35%;
     }
-    LogsTab DataTable {
+    TrafficTab DataTable {
         height: 1fr;
     }
-    LogsTab .toolbar {
+    TrafficTab .toolbar {
         height: 3;
         background: $primary-darken-2;
         align: left middle;
         padding: 0;
     }
-    LogsTab .toolbar Button {
+    TrafficTab .toolbar Button {
         margin: 0 1;
         padding: 0;
     }
-    LogsTab .toolbar Static {
+    TrafficTab .toolbar Static {
         width: 1fr;
         height: 100%;
         color: $text;
@@ -112,7 +112,7 @@ class LogsTab(Widget):
         content-align-horizontal: left;
         content-align-vertical: middle;
     }
-    LogsTab ParsedView {
+    TrafficTab ParsedView {
         height: 1fr;
     }
     """

@@ -1,5 +1,5 @@
 """
-SequencerEngine — runs a sequence of packets with variable substitution and
+SequenceEngine — runs a sequence of packets with variable substitution and
 optional script hooks.
 
 The engine is deliberately decoupled from ProxyAPI: it receives the network
@@ -8,7 +8,7 @@ tests) can wire in any transport without introducing import cycles.
 
 Script hooks
 ------------
-The script at ``config.sequencer_script`` (if configured) may define:
+The script at ``config.sequence_script`` (if configured) may define:
 
     def on_send(data: bytes, variables: dict, step_idx: int, step_label: str) -> bytes:
         '''Called just before each packet is sent (after ##VAR## substitution).
@@ -31,7 +31,7 @@ import logging
 import types
 from typing import Awaitable, Callable, Dict, List, Optional
 
-from .models import HistoryEntry, SequencerSession
+from .models import HistoryEntry, SequenceSession
 from .variables import resolve_hex
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,7 @@ def load_script(path: str) -> types.ModuleType:
         FileNotFoundError: If the file does not exist.
         Any exception raised during module execution.
     """
-    spec = importlib.util.spec_from_file_location("_sequencer_script", path)
+    spec = importlib.util.spec_from_file_location("_sequence_script", path)
     if spec is None or spec.loader is None:
         raise ValueError(f"Cannot create module spec for: {path}")
     mod = importlib.util.module_from_spec(spec)
@@ -59,13 +59,13 @@ def load_script(path: str) -> types.ModuleType:
     return mod
 
 
-class SequencerEngine:
+class SequenceEngine:
     """
-    Runs a :class:`~protopoke.sequencer.models.SequencerSession`.
+    Runs a :class:`~protopoke.sequence.models.SequenceSession`.
 
     Usage::
 
-        engine = SequencerEngine()
+        engine = SequenceEngine()
 
         async def send_fn(data: bytes) -> list[bytes]:
             # open connection, send data, collect + return response packets
@@ -77,7 +77,7 @@ class SequencerEngine:
 
     async def run(
         self,
-        seq:      SequencerSession,
+        seq:      SequenceSession,
         send_fn:  SendFn,
         script:   Optional[types.ModuleType] = None,
         on_entry: Optional[Callable[[HistoryEntry], None]] = None,

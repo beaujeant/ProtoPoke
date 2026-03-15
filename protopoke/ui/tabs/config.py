@@ -256,7 +256,7 @@ class ConfigTab(Widget):
             yield Static("  Sequencer", classes="section-header")
             with Horizontal(classes="field-row"):
                 yield Label("Script path:", classes="field-label")
-                yield Input(value=cfg.sequencer_script or "", id="sequencer-script",
+                yield Input(value=cfg.sequence_script or "", id="sequencer-script",
                             placeholder="/path/to/my_protocol_script.py",
                             classes="field-input")
                 yield Button("Browse", id="browse-sequencer-script", classes="btn-browse")
@@ -346,7 +346,7 @@ class ConfigTab(Widget):
         cfg.framer_kwargs      = dict(self._framer_kwargs)
         cfg.custom_framer_path = self._custom_framer_path
         cfg.protocol_definition_path = _str("proto-def") or None
-        cfg.sequencer_script         = _str("sequencer-script") or None
+        cfg.sequence_script         = _str("sequencer-script") or None
         cfg.log_level          = _sel("log-level") or "INFO"
         cfg.max_sessions       = _int("max-sessions", 0)
 
@@ -460,7 +460,7 @@ class ConfigTab(Widget):
         self._custom_framer_path = cfg.custom_framer_path
         self._update_framer_summary()
         _set("proto-def",         cfg.protocol_definition_path or "")
-        _set("sequencer-script",  cfg.sequencer_script or "")
+        _set("sequencer-script",  cfg.sequence_script or "")
         _sel("log-level",         cfg.log_level)
         _set("max-sessions", str(cfg.max_sessions))
 

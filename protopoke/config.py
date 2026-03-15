@@ -37,7 +37,7 @@ class ProxyConfig:
         max_sessions:     Maximum concurrent proxied connections. 0 = unlimited.
 
     Interception:
-        intercept_enabled: When True, frames are held in the intercept queue
+        tamper_enabled: When True, frames are held in the intercept queue
                            waiting for a human verdict. When False, everything
                            is forwarded immediately.
 
@@ -76,7 +76,7 @@ class ProxyConfig:
     max_sessions: int = 0  # 0 = unlimited
 
     # Interception
-    intercept_enabled: bool = False
+    tamper_enabled: bool = False
 
     # Framing
     framer_name:   str  = "raw"
@@ -152,7 +152,7 @@ class ProxyConfig:
     #
     # Both hooks are optional. Leave this field None to run the Sequencer
     # without any script (##VAR## substitution still works for pre-set vars).
-    sequencer_script: Optional[str] = None
+    sequence_script: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Serialisation

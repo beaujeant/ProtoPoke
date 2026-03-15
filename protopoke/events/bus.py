@@ -29,7 +29,7 @@ import logging
 from dataclasses import dataclass
 from typing import Callable, Awaitable
 
-from ..models import Frame, SessionInfo, InterceptedUnit
+from ..models import Frame, SessionInfo, TamperedUnit
 
 logger = logging.getLogger(__name__)
 
@@ -59,14 +59,14 @@ class FrameCapturedEvent:
 @dataclass
 class InterceptStartedEvent:
     """Emitted when a frame enters the intercept queue (awaiting verdict)."""
-    unit:    InterceptedUnit
+    unit:    TamperedUnit
     session: SessionInfo
 
 
 @dataclass
 class InterceptCompletedEvent:
     """Emitted when a verdict is set and the frame leaves the intercept queue."""
-    unit:    InterceptedUnit
+    unit:    TamperedUnit
     session: SessionInfo
 
 

@@ -54,7 +54,7 @@ _make_tls_stubs()
 from protopoke.api import ProxyAPI  # noqa: E402
 from protopoke.config import ProxyConfig  # noqa: E402
 from protopoke.models import Direction  # noqa: E402
-from protopoke.rules.rule import ReplaceRule, InterceptRule, RuleAction  # noqa: E402
+from protopoke.rules.rule import ReplaceRule, TamperRule, RuleAction  # noqa: E402
 from protopoke.mcp import build_mcp_server  # noqa: E402
 
 
@@ -68,7 +68,7 @@ def api():
         listen_port=19999,
         upstream_host="127.0.0.1",
         upstream_port=19998,
-        intercept_enabled=True,
+        tamper_enabled=True,
     )
     return ProxyAPI(cfg)
 
@@ -98,16 +98,16 @@ class TestProxyStatus:
     def test_contains_expected_keys(self, mcp_server):
         fn = get_tool(mcp_server, "proxy_status")
         result = fn()
-        assert "intercept_enabled" in result
+        assert "tamper_enabled" in result
         assert "pending_intercept_count" in result
         assert "total_sessions" in result
         assert "listen" in result
 
-    def test_intercept_enabled_reflects_config(self, mcp_server, api):
+    def test_tamper_enabled_reflects_config(self, mcp_server, api):
         fn = get_tool(mcp_server, "proxy_status")
-        api.intercept_enabled = True
+        api.tamper_enabled = True
         result = fn()
-        assert result["intercept_enabled"] is True
+        assert result["tamper_enabled"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -176,15 +176,15 @@ class TestInterceptTools:
     def test_intercept_status(self, mcp_server, api):
         fn = get_tool(mcp_server, "intercept_status")
         result = fn()
-        assert "intercept_enabled" in result
+        assert "tamper_enabled" in result
         assert "pending_count" in result
 
     def test_intercept_toggle(self, mcp_server, api):
         fn = get_tool(mcp_server, "intercept_toggle")
         result = fn(False)
-        assert result["intercept_enabled"] is False
+        assert result["tamper_enabled"] is False
         result2 = fn(True)
-        assert result2["intercept_enabled"] is True
+        assert result2["tamper_enabled"] is True
 
     def test_list_intercepted_empty(self, mcp_server):
         fn = get_tool(mcp_server, "list_intercepted")
@@ -285,7 +285,7 @@ class TestReplaceRuleTools:
 # Intercept rules tools
 # ---------------------------------------------------------------------------
 
-class TestInterceptRuleTools:
+class TestTamperRuleTools:
     def test_list_intercept_rules_empty(self, mcp_server):
         fn = get_tool(mcp_server, "list_intercept_rules")
         assert fn() == []
@@ -315,7 +315,7 @@ class TestInterceptRuleTools:
         assert set(result["rule"]["session_ids"]) == {"s1", "s2"}
 
     def test_remove_intercept_rule(self, mcp_server, api):
-        rule = InterceptRule.create("r1", "01", RuleAction.INTERCEPT)
+        rule = TamperRule.create("r1", "01", RuleAction.INTERCEPT)
         api.add_intercept_rule(rule)
 
         fn_remove = get_tool(mcp_server, "remove_intercept_rule")
@@ -382,19 +382,19 @@ class TestSendFrameTool:
 
 
 # ---------------------------------------------------------------------------
-# replay_session (async tool)
+# forge_session (async tool)
 # ---------------------------------------------------------------------------
 
 class TestReplaySessionTool:
     @pytest.mark.asyncio
     async def test_unknown_session_returns_error(self, mcp_server):
-        fn = get_tool(mcp_server, "replay_session")
+        fn = get_tool(mcp_server, "forge_session")
         result = await fn("nonexistent-session-id")
         # Should fail gracefully with an error in the result
         assert "error" in result or result.get("success") is False
 
     @pytest.mark.asyncio
     async def test_invalid_direction_returns_error(self, mcp_server):
-        fn = get_tool(mcp_server, "replay_session")
+        fn = get_tool(mcp_server, "forge_session")
         result = await fn("any-session", direction="bad_dir")
         assert "error" in result

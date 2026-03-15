@@ -26,7 +26,7 @@ Quick start:
         iterations=100,
     )
     engine = FuzzerEngine(
-        replay_engine=api.replay_engine,
+        forge_engine=api.forge_engine,
         session_registry=api.session_registry,
         decoder=api._decoder,
     )

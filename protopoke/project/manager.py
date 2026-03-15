@@ -5,10 +5,10 @@ A *project* is a single ``.pp`` ZIP file that bundles:
 
     project.json    — metadata (name, version, timestamps)
     config.json     — ProxyConfig serialised to JSON
-    rules.json      — replace rules + intercept rules
-    repeater.json   — repeater request tabs (current bytes + history)
-    sequencer.json  — sequencer sessions (steps, variables, history)
-    logs.json       — captured sessions and frames (the log tab content)
+    rules.json      — replace rules + tamper rules
+    repeater.json   — forge request tabs (current bytes + history)
+    sequencer.json  — sequence sessions (steps, variables, history)
+    logs.json       — captured sessions and frames (the traffic tab content)
 
 The file is a standard ZIP archive (no extra dependencies needed — Python's
 built-in ``zipfile`` module is used).  Older directory-based projects are
@@ -35,8 +35,8 @@ Usage::
     # Later: reload
     pm2 = ProjectManager()
     state = pm2.open("/tmp/capture.pp")
-    # state.config, state.rules_engine, state.intercept_filter,
-    # state.repeater_requests, state.sequencer_sessions, state.captured_sessions
+    # state.config, state.rules_engine, state.tamper_filter,
+    # state.forge_requests, state.sequence_sessions, state.captured_sessions
 """
 
 from __future__ import annotations
@@ -50,9 +50,9 @@ from pathlib import Path
 from typing import Optional
 
 from ..config import ProxyConfig
-from ..rules.engine import RulesEngine, InterceptFilter
-from ..replay.models import RepeaterRequest
-from ..sequencer.models import SequencerSession
+from ..rules.engine import RulesEngine, TamperFilter
+from ..forge.models import ForgeRequest
+from ..sequence.models import SequenceSession
 
 # Project format version — bump when the schema changes incompatibly.
 _FORMAT_VERSION = 2
@@ -76,9 +76,9 @@ class ProjectState:
     Attributes:
         config:              Proxy configuration.
         rules_engine:        Active replace rules.
-        intercept_filter:    Active intercept rules.
-        repeater_requests:   All repeater tabs (with history).
-        sequencer_sessions:  All sequencer sessions (with steps, variables, history).
+        tamper_filter:    Active intercept rules.
+        forge_requests:   All repeater tabs (with history).
+        sequence_sessions:  All sequencer sessions (with steps, variables, history).
         captured_sessions:   Serialised session + frame data for the Logs tab.
         name:                Human-readable project name.
         db_path:             Legacy: path to the SQLite sessions database, or ``None``.
@@ -86,9 +86,9 @@ class ProjectState:
 
     config:              ProxyConfig
     rules_engine:        RulesEngine
-    intercept_filter:    InterceptFilter
-    repeater_requests:   list[RepeaterRequest]
-    sequencer_sessions:  list[SequencerSession]
+    tamper_filter:    TamperFilter
+    forge_requests:   list[ForgeRequest]
+    sequence_sessions:  list[SequenceSession]
     captured_sessions:   list[dict]       = field(default_factory=list)
     name:                str              = "Untitled"
     db_path:             Optional[Path]   = None
@@ -105,9 +105,9 @@ class ProjectManager:
     Attributes:
         config:             The active :class:`~protopoke.config.ProxyConfig`.
         rules_engine:       The active :class:`~protopoke.rules.engine.RulesEngine`.
-        intercept_filter:   The active :class:`~protopoke.rules.engine.InterceptFilter`.
-        repeater_requests:  List of active :class:`~protopoke.replay.models.RepeaterRequest`.
-        sequencer_sessions: List of active :class:`~protopoke.sequencer.models.SequencerSession`.
+        tamper_filter:   The active :class:`~protopoke.rules.engine.TamperFilter`.
+        forge_requests:  List of active :class:`~protopoke.forge.models.ForgeRequest`.
+        sequence_sessions: List of active :class:`~protopoke.sequence.models.SequenceSession`.
         captured_sessions:  Serialised sessions+frames (set by the app before saving).
         name:               Current project name (shown in the title bar).
         path:               Path of the on-disk project file, or ``None``
@@ -118,9 +118,9 @@ class ProjectManager:
     def __init__(self) -> None:
         self.config:              ProxyConfig            = ProxyConfig()
         self.rules_engine:        RulesEngine            = RulesEngine()
-        self.intercept_filter:    InterceptFilter        = InterceptFilter()
-        self.repeater_requests:   list[RepeaterRequest]  = []
-        self.sequencer_sessions:  list[SequencerSession] = []
+        self.tamper_filter:    TamperFilter        = TamperFilter()
+        self.forge_requests:   list[ForgeRequest]  = []
+        self.sequence_sessions:  list[SequenceSession] = []
         self.captured_sessions:   list[dict]             = []
         self.name:                str                    = "Untitled"
         self.path:                Optional[Path]         = None
@@ -143,9 +143,9 @@ class ProjectManager:
         """
         self.config             = ProxyConfig()
         self.rules_engine       = RulesEngine()
-        self.intercept_filter   = InterceptFilter()
-        self.repeater_requests  = []
-        self.sequencer_sessions = []
+        self.tamper_filter   = TamperFilter()
+        self.forge_requests  = []
+        self.sequence_sessions = []
         self.captured_sessions  = []
         self.name               = name
         self.path               = None
@@ -231,15 +231,15 @@ class ProjectManager:
 
         rules_data = {
             "replace":   self.rules_engine.to_list(),
-            "intercept": self.intercept_filter.to_list(),
+            "intercept": self.tamper_filter.to_list(),
         }
 
         repeater_data = {
-            "requests": [r.to_dict() for r in self.repeater_requests],
+            "requests": [r.to_dict() for r in self.forge_requests],
         }
 
         sequencer_data = {
-            "sessions": [s.to_dict() for s in self.sequencer_sessions],
+            "sessions": [s.to_dict() for s in self.sequence_sessions],
         }
 
         logs_data = {
@@ -350,30 +350,30 @@ class ProjectManager:
             if rules_raw:
                 rules_data = json.loads(rules_raw)
                 self.rules_engine     = RulesEngine.from_list(rules_data.get("replace", []))
-                self.intercept_filter = InterceptFilter.from_list(rules_data.get("intercept", []))
+                self.tamper_filter = TamperFilter.from_list(rules_data.get("intercept", []))
             else:
                 self.rules_engine     = RulesEngine()
-                self.intercept_filter = InterceptFilter()
+                self.tamper_filter = TamperFilter()
 
             # Repeater
             repeater_raw = _read("repeater.json")
             if repeater_raw:
                 repeater_data = json.loads(repeater_raw)
-                self.repeater_requests = [
-                    RepeaterRequest.from_dict(r) for r in repeater_data.get("requests", [])
+                self.forge_requests = [
+                    ForgeRequest.from_dict(r) for r in repeater_data.get("requests", [])
                 ]
             else:
-                self.repeater_requests = []
+                self.forge_requests = []
 
             # Sequencer
             sequencer_raw = _read("sequencer.json")
             if sequencer_raw:
                 sequencer_data = json.loads(sequencer_raw)
-                self.sequencer_sessions = [
-                    SequencerSession.from_dict(s) for s in sequencer_data.get("sessions", [])
+                self.sequence_sessions = [
+                    SequenceSession.from_dict(s) for s in sequencer_data.get("sessions", [])
                 ]
             else:
-                self.sequencer_sessions = []
+                self.sequence_sessions = []
 
             # Logs
             logs_raw = _read("logs.json")
@@ -391,9 +391,9 @@ class ProjectManager:
         return ProjectState(
             config=self.config,
             rules_engine=self.rules_engine,
-            intercept_filter=self.intercept_filter,
-            repeater_requests=self.repeater_requests,
-            sequencer_sessions=self.sequencer_sessions,
+            tamper_filter=self.tamper_filter,
+            forge_requests=self.forge_requests,
+            sequence_sessions=self.sequence_sessions,
             captured_sessions=self.captured_sessions,
             name=self.name,
         )
@@ -426,30 +426,30 @@ class ProjectManager:
         if rules_path.exists():
             rules_data = json.loads(rules_path.read_text(encoding="utf-8"))
             self.rules_engine     = RulesEngine.from_list(rules_data.get("replace", []))
-            self.intercept_filter = InterceptFilter.from_list(rules_data.get("intercept", []))
+            self.tamper_filter = TamperFilter.from_list(rules_data.get("intercept", []))
         else:
             self.rules_engine     = RulesEngine()
-            self.intercept_filter = InterceptFilter()
+            self.tamper_filter = TamperFilter()
 
         # Repeater
         repeater_path = project_dir / "repeater.json"
         if repeater_path.exists():
             repeater_data = json.loads(repeater_path.read_text(encoding="utf-8"))
-            self.repeater_requests = [
-                RepeaterRequest.from_dict(r) for r in repeater_data.get("requests", [])
+            self.forge_requests = [
+                ForgeRequest.from_dict(r) for r in repeater_data.get("requests", [])
             ]
         else:
-            self.repeater_requests = []
+            self.forge_requests = []
 
         # Sequencer
         sequencer_path = project_dir / "sequencer.json"
         if sequencer_path.exists():
             sequencer_data = json.loads(sequencer_path.read_text(encoding="utf-8"))
-            self.sequencer_sessions = [
-                SequencerSession.from_dict(s) for s in sequencer_data.get("sessions", [])
+            self.sequence_sessions = [
+                SequenceSession.from_dict(s) for s in sequencer_data.get("sessions", [])
             ]
         else:
-            self.sequencer_sessions = []
+            self.sequence_sessions = []
 
         # Logs (legacy dirs may not have this)
         logs_path = project_dir / "logs.json"
@@ -472,9 +472,9 @@ class ProjectManager:
         return ProjectState(
             config=self.config,
             rules_engine=self.rules_engine,
-            intercept_filter=self.intercept_filter,
-            repeater_requests=self.repeater_requests,
-            sequencer_sessions=self.sequencer_sessions,
+            tamper_filter=self.tamper_filter,
+            forge_requests=self.forge_requests,
+            sequence_sessions=self.sequence_sessions,
             captured_sessions=self.captured_sessions,
             name=self.name,
             db_path=db_path,

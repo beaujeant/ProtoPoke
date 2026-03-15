@@ -6,7 +6,7 @@ SequenceStep
 One packet slot in a sequence. Stores the hex content (with optional {{VAR}}
 placeholders) and a human label.
 
-SequencerSession
+SequenceSession
 ----------------
 A named sequence tab: ordered list of steps, a runtime variable store, the
 target connection parameters, and the flat send/receive history log.
@@ -175,11 +175,11 @@ class HistoryEntry:
 
 
 # ---------------------------------------------------------------------------
-# SequencerSession
+# SequenceSession
 # ---------------------------------------------------------------------------
 
 @dataclass
-class SequencerSession:
+class SequenceSession:
     """
     A named sequence of packets (one "tab" in the Sequencer).
 
@@ -217,7 +217,7 @@ class SequencerSession:
         port:              int  = 0,
         tls:               bool = False,
         source_session_id: Optional[str] = None,
-    ) -> "SequencerSession":
+    ) -> "SequenceSession":
         return cls(
             id=str(uuid.uuid4()),
             label=label,
@@ -242,7 +242,7 @@ class SequencerSession:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "SequencerSession":
+    def from_dict(cls, d: dict) -> "SequenceSession":
         return cls(
             id=d["id"],
             label=d["label"],

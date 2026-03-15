@@ -116,7 +116,7 @@ def _make_config(args: argparse.Namespace) -> ProxyConfig:
     if args.listen_port   is not None: config.listen_port       = args.listen_port
     if args.upstream_host is not None: config.upstream_host     = args.upstream_host
     if args.upstream_port is not None: config.upstream_port     = args.upstream_port
-    if args.intercept:                 config.intercept_enabled = True
+    if args.intercept:                 config.tamper_enabled = True
     if args.tls_listen:                config.tls_listen        = True
     if args.tls_upstream:              config.tls_upstream      = True
     if args.framer        is not None: config.framer_name       = args.framer

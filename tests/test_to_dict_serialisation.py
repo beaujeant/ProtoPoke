@@ -10,13 +10,13 @@ from protopoke.models import (
     Direction,
     Frame,
     InterceptAction,
-    InterceptedUnit,
+    TamperedUnit,
     ParsedField,
     ParsedMessage,
     SessionState,
 )
 from protopoke.core.session import Session, SessionRegistry
-from protopoke.replay.models import RepeaterRequest, SendRecord
+from protopoke.forge.models import ForgeRequest, ForgeRecord
 
 
 # ---------------------------------------------------------------------------
@@ -101,13 +101,13 @@ class TestSessionInfoToDict:
 
 
 # ---------------------------------------------------------------------------
-# InterceptedUnit.to_dict()
+# TamperedUnit.to_dict()
 # ---------------------------------------------------------------------------
 
-class TestInterceptedUnitToDict:
+class TestTamperedUnitToDict:
     def test_contains_expected_keys(self):
         frame = make_frame(data=b"\xAA\xBB")
-        unit = InterceptedUnit.from_frame(frame)
+        unit = TamperedUnit.from_frame(frame)
         d = unit.to_dict()
         assert "id" in d
         assert "frame" in d
@@ -116,19 +116,19 @@ class TestInterceptedUnitToDict:
 
     def test_frame_is_nested_dict(self):
         frame = make_frame(data=b"\x01")
-        unit = InterceptedUnit.from_frame(frame)
+        unit = TamperedUnit.from_frame(frame)
         d = unit.to_dict()
         assert isinstance(d["frame"], dict)
         assert "raw_bytes" in d["frame"]
 
     def test_effective_bytes_hex(self):
         frame = make_frame(data=b"\xCA\xFE")
-        unit = InterceptedUnit.from_frame(frame)
+        unit = TamperedUnit.from_frame(frame)
         assert unit.to_dict()["effective_bytes"] == "cafe"
 
     def test_modified_effective_bytes(self):
         frame = make_frame(data=b"\x01\x02")
-        unit = InterceptedUnit.from_frame(frame)
+        unit = TamperedUnit.from_frame(frame)
         unit.modified_data = b"\xFF\xFE"
         unit.action = InterceptAction.MODIFIED
         d = unit.to_dict()
@@ -136,7 +136,7 @@ class TestInterceptedUnitToDict:
         assert d["action"] == "modified"
 
     def test_json_serialisable(self):
-        json.dumps(InterceptedUnit.from_frame(make_frame()).to_dict())
+        json.dumps(TamperedUnit.from_frame(make_frame()).to_dict())
 
 
 # ---------------------------------------------------------------------------
@@ -209,16 +209,16 @@ class TestParsedMessageToDict:
 
 
 # ---------------------------------------------------------------------------
-# RepeaterRequest.to_dict() / from_dict()
+# ForgeRequest.to_dict() / from_dict()
 # ---------------------------------------------------------------------------
 
-class TestRepeaterRequestToDict:
+class TestForgeRequestToDict:
     def test_round_trip(self):
-        req = RepeaterRequest.create("Tab 1", "10.0.0.1", 443, current_bytes=b"\x01\x02")
-        rec = SendRecord.create(b"\x01\x02", b"\x03\x04", "10.0.0.1", 443)
+        req = ForgeRequest.create("Tab 1", "10.0.0.1", 443, current_bytes=b"\x01\x02")
+        rec = ForgeRecord.create(b"\x01\x02", b"\x03\x04", "10.0.0.1", 443)
         req.add_record(rec)
         d = req.to_dict()
-        restored = RepeaterRequest.from_dict(d)
+        restored = ForgeRequest.from_dict(d)
         assert restored.label == "Tab 1"
         assert restored.host == "10.0.0.1"
         assert restored.current_bytes == b"\x01\x02"
@@ -226,27 +226,27 @@ class TestRepeaterRequestToDict:
         assert restored.history[0].sent_bytes == b"\x01\x02"
 
     def test_json_serialisable(self):
-        req = RepeaterRequest.create("T", "localhost", 80)
+        req = ForgeRequest.create("T", "localhost", 80)
         json.dumps(req.to_dict())
 
 
 # ---------------------------------------------------------------------------
-# SendRecord.to_dict() / from_dict()
+# ForgeRecord.to_dict() / from_dict()
 # ---------------------------------------------------------------------------
 
-class TestSendRecordToDict:
+class TestForgeRecordToDict:
     def test_bytes_are_hex(self):
-        rec = SendRecord.create(b"\xAA", b"\xBB", "host", 1234)
+        rec = ForgeRecord.create(b"\xAA", b"\xBB", "host", 1234)
         d = rec.to_dict()
         assert d["sent_bytes"] == "aa"
         assert d["received_bytes"] == "bb"
 
     def test_round_trip(self):
-        rec = SendRecord.create(b"\x01", b"\x02", "localhost", 8080, tls=True)
-        rec2 = SendRecord.from_dict(rec.to_dict())
+        rec = ForgeRecord.create(b"\x01", b"\x02", "localhost", 8080, tls=True)
+        rec2 = ForgeRecord.from_dict(rec.to_dict())
         assert rec2.sent_bytes == b"\x01"
         assert rec2.received_bytes == b"\x02"
         assert rec2.tls is True
 
     def test_json_serialisable(self):
-        json.dumps(SendRecord.create(b"\x00", b"\x00", "h", 1).to_dict())
+        json.dumps(ForgeRecord.create(b"\x00", b"\x00", "h", 1).to_dict())

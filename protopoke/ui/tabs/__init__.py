@@ -1,6 +1,6 @@
 from .config import ConfigTab
-from .logs import LogsTab
-from .intercept import InterceptTab
-from .repeater import RepeaterTab
+from .traffic import TrafficTab
+from .tamper import TamperTab
+from .forge import ForgeTab
 
-__all__ = ["ConfigTab", "LogsTab", "InterceptTab", "RepeaterTab"]
+__all__ = ["ConfigTab", "TrafficTab", "TamperTab", "ForgeTab"]

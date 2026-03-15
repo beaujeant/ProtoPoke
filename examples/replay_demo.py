@@ -74,7 +74,7 @@ async def main() -> None:
     print()
     input("Press Enter to replay the session (unmodified)...")
 
-    result = await api.replay_session(session_id)
+    result = await api.forge_session(session_id)
 
     if result.success:
         print(f"\nReplay successful!")
@@ -94,7 +94,7 @@ async def main() -> None:
         if answer == "y":
             new_data = input("  Enter new bytes for first frame: ").encode()
             modified = {client_frames[0].id: new_data}
-            result2 = await api.replay_session(session_id, modified_frames=modified)
+            result2 = await api.forge_session(session_id, modified_frames=modified)
             if result2.success:
                 print("  Modified replay successful!")
                 for f in result2.server_frames_received():

@@ -79,7 +79,7 @@ async def main() -> None:
 
     # ── Replay 1: unmodified ─────────────────────────────────────────────────
     input("\nPress Enter to replay unmodified...")
-    result = await api.replay_session(session_id)
+    result = await api.forge_session(session_id)
 
     if result.success:
         print(f"Replay OK — sent {len(result.frames_sent())} frames, "
@@ -113,7 +113,7 @@ async def main() -> None:
 
         if field_edits:
             try:
-                result2 = await api.replay_session_with_field_edits(
+                result2 = await api.forge_session_with_field_edits(
                     session_id=session_id,
                     field_edits=field_edits,
                 )

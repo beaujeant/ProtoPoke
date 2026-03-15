@@ -7,7 +7,7 @@ import asyncio
 import pytest
 
 from protopoke.models import Direction, Frame, InterceptAction
-from protopoke.intercept.controller import PassthroughController, QueuedInterceptController
+from protopoke.tamper.controller import PassthroughController, QueuedTamperController
 
 
 def make_frame(data: bytes = b"test", seq: int = 0) -> Frame:
@@ -39,31 +39,31 @@ class TestPassthroughController:
 
 
 # ---------------------------------------------------------------------------
-# QueuedInterceptController — disabled mode
+# QueuedTamperController — disabled mode
 # ---------------------------------------------------------------------------
 
 class TestQueuedControllerDisabled:
     @pytest.mark.asyncio
     async def test_disabled_forwards_immediately(self):
-        ctrl = QueuedInterceptController(intercept_enabled=False)
+        ctrl = QueuedTamperController(tamper_enabled=False)
         unit = await ctrl.process(make_frame())
         assert unit.action is InterceptAction.FORWARD
 
     @pytest.mark.asyncio
     async def test_disabled_no_pending(self):
-        ctrl = QueuedInterceptController(intercept_enabled=False)
+        ctrl = QueuedTamperController(tamper_enabled=False)
         await ctrl.process(make_frame())
         assert ctrl.pending_count() == 0
 
 
 # ---------------------------------------------------------------------------
-# QueuedInterceptController — enabled mode
+# QueuedTamperController — enabled mode
 # ---------------------------------------------------------------------------
 
 class TestQueuedControllerEnabled:
     @pytest.mark.asyncio
     async def test_intercepts_and_blocks(self):
-        ctrl = QueuedInterceptController(intercept_enabled=True)
+        ctrl = QueuedTamperController(tamper_enabled=True)
         frame = make_frame(b"blocked")
 
         # Start processing in a task — it will block
@@ -81,7 +81,7 @@ class TestQueuedControllerEnabled:
 
     @pytest.mark.asyncio
     async def test_drop_verdict(self):
-        ctrl = QueuedInterceptController(intercept_enabled=True)
+        ctrl = QueuedTamperController(tamper_enabled=True)
         task = asyncio.create_task(ctrl.process(make_frame(b"drop me")))
         await asyncio.sleep(0)
 
@@ -93,7 +93,7 @@ class TestQueuedControllerEnabled:
 
     @pytest.mark.asyncio
     async def test_modify_verdict(self):
-        ctrl = QueuedInterceptController(intercept_enabled=True)
+        ctrl = QueuedTamperController(tamper_enabled=True)
         task = asyncio.create_task(ctrl.process(make_frame(b"original")))
         await asyncio.sleep(0)
 
@@ -107,7 +107,7 @@ class TestQueuedControllerEnabled:
 
     @pytest.mark.asyncio
     async def test_multiple_pending(self):
-        ctrl = QueuedInterceptController(intercept_enabled=True)
+        ctrl = QueuedTamperController(tamper_enabled=True)
         task1 = asyncio.create_task(ctrl.process(make_frame(b"a", 0)))
         task2 = asyncio.create_task(ctrl.process(make_frame(b"b", 1)))
         await asyncio.sleep(0)
@@ -122,12 +122,12 @@ class TestQueuedControllerEnabled:
 
     @pytest.mark.asyncio
     async def test_toggle_off_forwards_pending(self):
-        ctrl = QueuedInterceptController(intercept_enabled=True)
+        ctrl = QueuedTamperController(tamper_enabled=True)
         task = asyncio.create_task(ctrl.process(make_frame()))
         await asyncio.sleep(0)
 
         assert ctrl.pending_count() == 1
-        ctrl.intercept_enabled = False  # Should forward all pending
+        ctrl.tamper_enabled = False  # Should forward all pending
 
         unit = await task
         assert unit.action is InterceptAction.FORWARD
@@ -135,7 +135,7 @@ class TestQueuedControllerEnabled:
 
     @pytest.mark.asyncio
     async def test_get_pending_returns_next_queued(self):
-        ctrl = QueuedInterceptController(intercept_enabled=True)
+        ctrl = QueuedTamperController(tamper_enabled=True)
         frame = make_frame(b"queued")
 
         process_task = asyncio.create_task(ctrl.process(frame))
@@ -149,7 +149,7 @@ class TestQueuedControllerEnabled:
 
     @pytest.mark.asyncio
     async def test_forward_all(self):
-        ctrl = QueuedInterceptController(intercept_enabled=True)
+        ctrl = QueuedTamperController(tamper_enabled=True)
         tasks = [asyncio.create_task(ctrl.process(make_frame(bytes([i])))) for i in range(5)]
         await asyncio.sleep(0)
 
@@ -161,13 +161,13 @@ class TestQueuedControllerEnabled:
 
     @pytest.mark.asyncio
     async def test_set_verdict_unknown_id_returns_false(self):
-        ctrl = QueuedInterceptController(intercept_enabled=True)
+        ctrl = QueuedTamperController(tamper_enabled=True)
         result = ctrl.set_verdict("nonexistent-id", InterceptAction.FORWARD)
         assert result is False
 
     @pytest.mark.asyncio
     async def test_shutdown_forwards_pending(self):
-        ctrl = QueuedInterceptController(intercept_enabled=True)
+        ctrl = QueuedTamperController(tamper_enabled=True)
         task = asyncio.create_task(ctrl.process(make_frame()))
         await asyncio.sleep(0)
 

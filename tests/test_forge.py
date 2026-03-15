@@ -9,7 +9,7 @@ import pytest
 from protopoke.config import ProxyConfig
 from protopoke.api import ProxyAPI
 from protopoke.models import Direction
-from protopoke.replay.engine import parse_frame_selector, ReplayEngine
+from protopoke.forge.engine import parse_frame_selector, ForgeEngine
 from protopoke.core.session import SessionRegistry
 from tests.conftest import echo_server_ctx, free_port
 
@@ -104,7 +104,7 @@ class TestReplayCore:
             await api.start()
             try:
                 session_id = await capture_session(api, listen_port, b"replay me")
-                result = await api.replay_session(session_id)
+                result = await api.forge_session(session_id)
 
                 assert result.success
                 assert result.original_session_id == session_id
@@ -132,7 +132,7 @@ class TestReplayCore:
                 assert client_frames
 
                 modified = {client_frames[0].id: b"replaced"}
-                result = await api.replay_session(session_id, modified_frames=modified)
+                result = await api.forge_session(session_id, modified_frames=modified)
 
                 assert result.success
                 sent = b"".join(f.raw_bytes for f in result.frames_sent())
@@ -142,8 +142,8 @@ class TestReplayCore:
 
     @pytest.mark.asyncio
     async def test_replay_unknown_session(self):
-        engine = ReplayEngine(session_registry=SessionRegistry())
-        result = await engine.replay_session("nonexistent-id")
+        engine = ForgeEngine(session_registry=SessionRegistry())
+        result = await engine.forge_session("nonexistent-id")
         assert not result.success
         assert "not found" in result.error
 
@@ -159,7 +159,7 @@ class TestReplayCore:
             await api.start()
             try:
                 session_id = await capture_session(api, listen_port, b"original")
-                result = await api.replay_session(session_id)
+                result = await api.forge_session(session_id)
 
                 all_sessions = api.list_sessions()
                 assert len(all_sessions) == 2
@@ -182,7 +182,7 @@ class TestReplayCore:
                 await api.start()
                 try:
                     session_id = await capture_session(api, listen_port, b"cross server")
-                    result = await api.replay_session(
+                    result = await api.forge_session(
                         session_id, server_host=host2, server_port=port2,
                     )
                     assert result.success
@@ -204,7 +204,7 @@ class TestReplayCore:
             await api.start()
             try:
                 session_id = await capture_session(api, listen_port, b"compat")
-                result = await api.replay_session(session_id)
+                result = await api.forge_session(session_id)
                 assert result.success
                 # Old method names still work
                 assert result.client_frames_sent() == result.frames_sent()
@@ -252,7 +252,7 @@ class TestFrameSelector:
         async with echo_server_ctx() as (h, p):
             api, session_id = await self._setup(h, p)
             try:
-                result = await api.replay_session(session_id, frame_selector="2")
+                result = await api.forge_session(session_id, frame_selector="2")
                 assert result.success
                 sent = b"".join(f.raw_bytes for f in result.frames_sent())
                 assert sent == b"frame2\n"
@@ -264,7 +264,7 @@ class TestFrameSelector:
         async with echo_server_ctx() as (h, p):
             api, session_id = await self._setup(h, p)
             try:
-                result = await api.replay_session(session_id, frame_selector="1-3")
+                result = await api.forge_session(session_id, frame_selector="1-3")
                 assert result.success
                 sent = b"".join(f.raw_bytes for f in result.frames_sent())
                 assert sent == b"frame1\nframe2\nframe3\n"
@@ -276,7 +276,7 @@ class TestFrameSelector:
         async with echo_server_ctx() as (h, p):
             api, session_id = await self._setup(h, p)
             try:
-                result = await api.replay_session(session_id, frame_selector="0,2,4")
+                result = await api.forge_session(session_id, frame_selector="0,2,4")
                 assert result.success
                 sent = b"".join(f.raw_bytes for f in result.frames_sent())
                 assert sent == b"frame0\nframe2\nframe4\n"
@@ -289,7 +289,7 @@ class TestFrameSelector:
             api, session_id = await self._setup(h, p)
             try:
                 # "0,2-3" → frames 0, 2, 3
-                result = await api.replay_session(session_id, frame_selector="0,2-3")
+                result = await api.forge_session(session_id, frame_selector="0,2-3")
                 assert result.success
                 sent = b"".join(f.raw_bytes for f in result.frames_sent())
                 assert sent == b"frame0\nframe2\nframe3\n"
@@ -302,7 +302,7 @@ class TestFrameSelector:
             api, session_id = await self._setup(h, p)
             try:
                 # Sequences 0 and 99 requested; 99 doesn't exist — silently ignored
-                result = await api.replay_session(session_id, frame_selector="0,99")
+                result = await api.forge_session(session_id, frame_selector="0,99")
                 assert result.success
                 sent = b"".join(f.raw_bytes for f in result.frames_sent())
                 assert sent == b"frame0\n"
@@ -315,7 +315,7 @@ class TestFrameSelector:
             api, session_id = await self._setup(h, p)
             try:
                 # Sequences 99-100 don't exist
-                result = await api.replay_session(session_id, frame_selector="99-100")
+                result = await api.forge_session(session_id, frame_selector="99-100")
                 assert not result.success
                 assert "no" in result.error.lower() or "frame" in result.error.lower()
             finally:
@@ -326,7 +326,7 @@ class TestFrameSelector:
         async with echo_server_ctx() as (h, p):
             api, session_id = await self._setup(h, p)
             try:
-                result = await api.replay_session(session_id, frame_selector="abc")
+                result = await api.forge_session(session_id, frame_selector="abc")
                 assert not result.success
                 assert "Invalid frame_selector" in result.error
             finally:
@@ -350,7 +350,7 @@ class TestDirectionFilter:
             await api.start()
             try:
                 session_id = await capture_session(api, listen_port, b"client data")
-                result = await api.replay_session(session_id)
+                result = await api.forge_session(session_id)
                 assert result.success
                 sent = b"".join(f.raw_bytes for f in result.frames_sent())
                 assert sent == b"client data"
@@ -372,7 +372,7 @@ class TestDirectionFilter:
                 session_id = await capture_session(api, listen_port, b"ping")
 
                 # The echo server replied with "ping"; replay that back to the server
-                result = await api.replay_session(
+                result = await api.forge_session(
                     session_id,
                     direction=Direction.SERVER_TO_CLIENT,
                 )
@@ -391,7 +391,7 @@ class TestDirectionFilter:
         """Asking for SERVER_TO_CLIENT on a session with no server frames fails cleanly."""
         from protopoke.core.session import Session, SessionRegistry
         from protopoke.models import SessionInfo, Frame
-        from protopoke.replay.engine import ReplayEngine
+        from protopoke.forge.engine import ForgeEngine
 
         reg = SessionRegistry()
         info = SessionInfo.create("127.0.0.1", 1, "127.0.0.1", 2)
@@ -401,8 +401,8 @@ class TestDirectionFilter:
         sess.add_frame(Frame.create(sess.id, Direction.CLIENT_TO_SERVER, b"data", 0))
         reg._sessions[sess.id] = sess
 
-        engine = ReplayEngine(session_registry=reg)
-        result = await engine.replay_session(
+        engine = ForgeEngine(session_registry=reg)
+        result = await engine.forge_session(
             sess.id,
             direction=Direction.SERVER_TO_CLIENT,
         )
@@ -439,7 +439,7 @@ class TestDirectionFilter:
                 session_id = api.list_sessions()[-1].id
 
                 # Replay only sequences 1 and 3 from the client direction
-                result = await api.replay_session(
+                result = await api.forge_session(
                     session_id,
                     direction=Direction.CLIENT_TO_SERVER,
                     frame_selector="1,3",

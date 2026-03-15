@@ -1,5 +1,5 @@
 """
-Binary pattern rules: ReplaceRule and InterceptRule.
+Binary pattern rules: ReplaceRule and TamperRule.
 
 Both use a user-friendly binary hex pattern syntax that is compiled to a
 Python bytes regex (re.compile on bytes).  Python's ``re`` module works
@@ -341,7 +341,7 @@ def pattern_to_display(pattern_str: str) -> str:
 
 class RuleAction(Enum):
     """
-    Decision produced by an InterceptRule when it matches a frame.
+    Decision produced by an TamperRule when it matches a frame.
 
     INTERCEPT: hold the frame in the operator queue for manual review.
     FORWARD:   auto-forward the frame, skipping the queue entirely.
@@ -598,11 +598,11 @@ class ReplaceRule:
 
 
 # ---------------------------------------------------------------------------
-# InterceptRule
+# TamperRule
 # ---------------------------------------------------------------------------
 
 @dataclass
-class InterceptRule:
+class TamperRule:
     """
     A rule that controls whether a frame is held in the intercept queue.
 
@@ -651,7 +651,7 @@ class InterceptRule:
         direction:   Optional[Direction] = None,
         session_ids: Optional[set[str]] = None,
         enabled:     bool = True,
-    ) -> "InterceptRule":
+    ) -> "TamperRule":
         """Factory: generates a unique ID and compiles the pattern."""
         return cls(
             id=str(uuid.uuid4()),
@@ -703,7 +703,7 @@ class InterceptRule:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "InterceptRule":
+    def from_dict(cls, d: dict) -> "TamperRule":
         """Deserialise from a dict produced by ``to_dict()``."""
         direction: Optional[Direction] = None
         if d.get("direction"):

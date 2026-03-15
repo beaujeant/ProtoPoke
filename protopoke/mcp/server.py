@@ -13,7 +13,7 @@ Tools are grouped by concern:
     Replace rules           : list_replace_rules, add_replace_rule, remove_replace_rule
     Intercept rules         : list_intercept_rules, add_intercept_rule, remove_intercept_rule
     Repeater / send         : send_frame
-    Replay                  : replay_session
+    Replay                  : forge_session
     Fuzzing                 : fuzz_start, fuzz_status, fuzz_results, fuzz_stop, list_campaigns
                               list_intercepted, intercept_decode_pending,
                               intercept_forward, intercept_drop,
@@ -30,11 +30,11 @@ Tools are grouped by concern:
                               reorder_intercept_rule, clear_intercept_rules
     Protocol management     : set_protocol_file, set_protocol_dict,
                               get_protocol_info
-    Repeater / send         : send_frame, list_repeater_requests,
-                              create_repeater_request, get_repeater_request,
-                              update_repeater_request, delete_repeater_request,
-                              send_repeater_request, frame_to_repeater
-    Replay                  : replay_session, replay_with_field_edits
+    Repeater / send         : send_frame, list_forge_requests,
+                              create_forge_request, get_forge_request,
+                              update_forge_request, delete_forge_request,
+                              send_forge_request, frame_to_repeater
+    Replay                  : forge_session, replay_with_field_edits
     TLS / CA                : get_ca_cert
     Config                  : get_config, set_config
 """
@@ -70,13 +70,13 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         ) from exc
 
     from protopoke.models import Direction
-    from protopoke.rules.rule import ReplaceRule, InterceptRule, RuleAction
-    from protopoke.replay.models import RepeaterRequest, SendRecord
+    from protopoke.rules.rule import ReplaceRule, TamperRule, RuleAction
+    from protopoke.forge.models import ForgeRequest, ForgeRecord
 
     mcp = FastMCP(name)
 
     # In-memory repeater request store (MCP-side, mirrors UI repeater tabs)
-    _repeater_requests: dict[str, RepeaterRequest] = {}
+    _forge_requests: dict[str, ForgeRequest] = {}
 
     # ------------------------------------------------------------------ #
     # Proxy lifecycle                                                       #
@@ -89,7 +89,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         active = api.list_active_sessions()
         return {
             "running": api.engine.is_running if hasattr(api.engine, "is_running") else None,
-            "intercept_enabled": api.intercept_enabled,
+            "tamper_enabled": api.tamper_enabled,
             "pending_intercept_count": api.pending_count(),
             "total_sessions": len(sessions),
             "active_sessions": len(active),
@@ -425,16 +425,16 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
     def intercept_status() -> dict:
         """Return interception state: enabled flag, pending queue size, and filters."""
         return {
-            "intercept_enabled": api.intercept_enabled,
+            "tamper_enabled": api.tamper_enabled,
             "pending_count": api.pending_count(),
             "direction_filter": (
-                api.intercept_direction_filter.value
-                if api.intercept_direction_filter is not None
+                api.tamper_direction_filter.value
+                if api.tamper_direction_filter is not None
                 else None
             ),
             "session_filter": (
-                list(api.intercept_session_filter)
-                if api.intercept_session_filter is not None
+                list(api.tamper_session_filter)
+                if api.tamper_session_filter is not None
                 else None
             ),
         }
@@ -450,8 +450,8 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         Args:
             enabled: True to enable, False to disable.
         """
-        api.intercept_enabled = enabled
-        return {"intercept_enabled": api.intercept_enabled}
+        api.tamper_enabled = enabled
+        return {"tamper_enabled": api.tamper_enabled}
 
     @mcp.tool()
     def list_intercepted() -> list[dict]:
@@ -473,7 +473,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         protocol definition to be loaded via set_protocol_file() for useful output.
 
         Returns:
-            List of dicts, each with "unit" (InterceptedUnit) and "parsed"
+            List of dicts, each with "unit" (TamperedUnit) and "parsed"
             (ParsedMessage) sub-dicts.
         """
         results = []
@@ -580,10 +580,10 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
             direction: "client_to_server", "server_to_client", or null to clear.
         """
         if direction is None:
-            api.intercept_direction_filter = None
+            api.tamper_direction_filter = None
             return {"direction_filter": None}
         try:
-            api.intercept_direction_filter = Direction(direction)
+            api.tamper_direction_filter = Direction(direction)
             return {"direction_filter": direction}
         except ValueError as exc:
             return {"error": str(exc)}
@@ -597,9 +597,9 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
             session_ids: List of session UUIDs to intercept, or null to clear.
         """
         if session_ids is None:
-            api.intercept_session_filter = None
+            api.tamper_session_filter = None
             return {"session_filter": None}
-        api.intercept_session_filter = set(session_ids)
+        api.tamper_session_filter = set(session_ids)
         return {"session_filter": session_ids}
 
     # ------------------------------------------------------------------ #
@@ -773,7 +773,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         sids = set(session_ids) if session_ids else None
 
         try:
-            rule = InterceptRule.create(
+            rule = TamperRule.create(
                 label, pattern, action_enum,
                 direction=dir_enum,
                 session_ids=sids,
@@ -807,7 +807,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         Returns:
             Updated rule dict, or {"ok": False} if not found.
         """
-        rule = api.intercept_filter.get_rule(rule_id)
+        rule = api.tamper_filter.get_rule(rule_id)
         if rule is None:
             return {"ok": False, "error": f"Rule '{rule_id}' not found."}
         if label is not None:
@@ -847,7 +847,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         Returns:
             {"ok": True} on success, or {"ok": False} if rule not found.
         """
-        ok = api.intercept_filter.move_rule(rule_id, new_index)
+        ok = api.tamper_filter.move_rule(rule_id, new_index)
         return {"ok": ok, "rule_id": rule_id, "new_index": new_index}
 
     @mcp.tool()
@@ -856,9 +856,9 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         Remove all intercept filter rules.
 
         After clearing, the default behaviour resumes: all frames are intercepted
-        (when intercept_enabled is True).
+        (when tamper_enabled is True).
         """
-        api.intercept_filter.clear()
+        api.tamper_filter.clear()
         return {"ok": True, "message": "All intercept rules cleared."}
 
     # ------------------------------------------------------------------ #
@@ -892,7 +892,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
                              connect timeout.
 
         Returns:
-            SendRecord dict: sent_bytes_hex, received_bytes_hex, success, error.
+            ForgeRecord dict: sent_bytes_hex, received_bytes_hex, success, error.
         """
         try:
             data = bytes.fromhex(data_hex)
@@ -914,7 +914,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
     # ------------------------------------------------------------------ #
 
     @mcp.tool()
-    def list_repeater_requests() -> list[dict]:
+    def list_forge_requests() -> list[dict]:
         """
         List all repeater request tabs.
 
@@ -926,7 +926,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
             List of repeater request dicts (without full history).
         """
         result = []
-        for req in _repeater_requests.values():
+        for req in _forge_requests.values():
             d = req.to_dict()
             d["history_count"] = len(req.history)
             d.pop("history", None)  # Omit full history from list view
@@ -934,7 +934,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         return result
 
     @mcp.tool()
-    def create_repeater_request(
+    def create_forge_request(
         label:             str,
         host:              str,
         port:              int,
@@ -961,7 +961,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         except ValueError as exc:
             return {"ok": False, "error": f"Invalid data hex: {exc}"}
 
-        req = RepeaterRequest.create(
+        req = ForgeRequest.create(
             label=label,
             host=host,
             port=port,
@@ -969,27 +969,27 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
             current_bytes=current_bytes,
             source_session_id=source_session_id,
         )
-        _repeater_requests[req.id] = req
+        _forge_requests[req.id] = req
         return {"ok": True, "request": req.to_dict()}
 
     @mcp.tool()
-    def get_repeater_request(request_id: str) -> Optional[dict]:
+    def get_forge_request(request_id: str) -> Optional[dict]:
         """
         Get a repeater request tab, including its full send history.
 
         Args:
-            request_id: The repeater request UUID from list_repeater_requests.
+            request_id: The repeater request UUID from list_forge_requests.
 
         Returns:
             Full repeater request dict with history, or None if not found.
         """
-        req = _repeater_requests.get(request_id)
+        req = _forge_requests.get(request_id)
         if req is None:
             return None
         return req.to_dict()
 
     @mcp.tool()
-    def update_repeater_request(
+    def update_forge_request(
         request_id: str,
         label:      Optional[str]  = None,
         host:       Optional[str]  = None,
@@ -1011,7 +1011,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         Returns:
             Updated request dict, or {"ok": False} if not found.
         """
-        req = _repeater_requests.get(request_id)
+        req = _forge_requests.get(request_id)
         if req is None:
             return {"ok": False, "error": f"Request '{request_id}' not found."}
         if label    is not None: req.label = label
@@ -1026,37 +1026,37 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         return {"ok": True, "request": req.to_dict()}
 
     @mcp.tool()
-    def delete_repeater_request(request_id: str) -> dict:
+    def delete_forge_request(request_id: str) -> dict:
         """
         Delete a repeater request tab and its history.
 
         Args:
             request_id: The repeater request UUID to delete.
         """
-        if request_id not in _repeater_requests:
+        if request_id not in _forge_requests:
             return {"ok": False, "error": f"Request '{request_id}' not found."}
-        del _repeater_requests[request_id]
+        del _forge_requests[request_id]
         return {"ok": True, "request_id": request_id}
 
     @mcp.tool()
-    async def send_repeater_request(request_id: str) -> dict:
+    async def send_forge_request(request_id: str) -> dict:
         """
         Send the current bytes of a repeater request to its target.
 
         Records the send+response in the request's history. Retrieve the
-        full history via get_repeater_request().
+        full history via get_forge_request().
 
         Args:
-            request_id: The repeater request UUID from list_repeater_requests.
+            request_id: The repeater request UUID from list_forge_requests.
 
         Returns:
-            The SendRecord dict for this send, including received bytes.
+            The ForgeRecord dict for this send, including received bytes.
         """
-        req = _repeater_requests.get(request_id)
+        req = _forge_requests.get(request_id)
         if req is None:
             return {"ok": False, "error": f"Request '{request_id}' not found."}
         if not req.current_bytes:
-            return {"ok": False, "error": "Request has no bytes to send. Update it via update_repeater_request()."}
+            return {"ok": False, "error": "Request has no bytes to send. Update it via update_forge_request()."}
 
         record = await api.send_frame(
             data=req.current_bytes,
@@ -1095,7 +1095,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         if frame is None:
             return {"ok": False, "error": f"Frame '{frame_id}' not found in session."}
 
-        req = RepeaterRequest.create(
+        req = ForgeRequest.create(
             label=label or f"From {session_id[:8]}",
             host=session.info.server_host,
             port=session.info.server_port,
@@ -1103,7 +1103,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
             current_bytes=frame.raw_bytes,
             source_session_id=session_id,
         )
-        _repeater_requests[req.id] = req
+        _forge_requests[req.id] = req
         return {"ok": True, "request": req.to_dict()}
 
     # ------------------------------------------------------------------ #
@@ -1111,7 +1111,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
     # ------------------------------------------------------------------ #
 
     @mcp.tool()
-    async def replay_session(
+    async def forge_session(
         session_id:     str,
         server_host:    Optional[str]  = None,
         server_port:    Optional[int]  = None,
@@ -1136,14 +1136,14 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
                             "0,2,4-6" or "3". None means all frames.
 
         Returns:
-            ReplayResult dict with replayed_session_id, success, frame counts, etc.
+            ForgeResult dict with replayed_session_id, success, frame counts, etc.
         """
         try:
             dir_enum = Direction(direction)
         except ValueError:
             return {"ok": False, "error": f"Invalid direction '{direction}'."}
 
-        result = await api.replay_session(
+        result = await api.forge_session(
             session_id=session_id,
             server_host=server_host,
             server_port=server_port,
@@ -1187,7 +1187,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
             frame_selector: Selector string for specific frames (e.g. "0,2,4-6").
 
         Returns:
-            ReplayResult dict. Falls back to original bytes for frames whose
+            ForgeResult dict. Falls back to original bytes for frames whose
             message type is not in field_edits or whose encoding fails.
         """
         if api._encoder is None:
@@ -1205,7 +1205,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
             return {"ok": False, "error": f"Invalid direction '{direction}'."}
 
         try:
-            result = await api.replay_session_with_field_edits(
+            result = await api.forge_session_with_field_edits(
                 session_id=session_id,
                 field_edits=field_edits,
                 server_host=server_host,
@@ -1530,7 +1530,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         upstream_port:      Optional[int]  = None,
         tls_listen:         Optional[bool] = None,
         tls_upstream:       Optional[bool] = None,
-        intercept_enabled:  Optional[bool] = None,
+        tamper_enabled:  Optional[bool] = None,
         framer_name:        Optional[str]  = None,
         protocol_definition_path: Optional[str] = None,
     ) -> dict:
@@ -1551,7 +1551,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
             upstream_port:            Default upstream port to forward to.
             tls_listen:               Terminate TLS on the listening side.
             tls_upstream:             Use TLS when connecting upstream.
-            intercept_enabled:        Master intercept on/off switch.
+            tamper_enabled:        Master intercept on/off switch.
             framer_name:              Framer: "raw", "delimiter", "length_prefix".
             protocol_definition_path: Path to a protocol .yaml/.json file.
 
@@ -1564,7 +1564,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         if upstream_port      is not None: api.config.upstream_port     = upstream_port
         if tls_listen         is not None: api.config.tls_listen        = tls_listen
         if tls_upstream       is not None: api.config.tls_upstream      = tls_upstream
-        if intercept_enabled  is not None: api.config.intercept_enabled = intercept_enabled
+        if tamper_enabled  is not None: api.config.tamper_enabled = tamper_enabled
         if framer_name        is not None: api.config.framer_name       = framer_name
         if protocol_definition_path is not None:
             api.config.protocol_definition_path = protocol_definition_path
