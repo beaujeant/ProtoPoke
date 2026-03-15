@@ -7,12 +7,12 @@ import time as _time
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.widget import Widget
-from textual.widgets import DataTable, TextArea, Button, Label, Static, Input, Select, Switch
+from textual.widgets import DataTable, TextArea, Button, Label, Static, Input
 from textual.containers import Horizontal, Vertical
 
-from ...models import Direction, Frame
+from ...models import Direction
 from ...replay.models import RepeaterRequest, SendRecord
-from ..modals.rename import RenameModal
+from ..modals.edit_request import EditRequestModal, EditRequestResult
 from ..utils.frame_codec import bytes_to_str, str_to_bytes, hex_pairs_to_str, str_to_hex_pairs
 
 # Direction mapping for replace-rule scope application
@@ -20,9 +20,6 @@ _DIR_MAP = {
     "to_server": Direction.CLIENT_TO_SERVER,
     "to_client": Direction.SERVER_TO_CLIENT,
 }
-
-# Sentinel value used as the Select option for "Custom host:port"
-_CUSTOM = "custom"
 
 
 class RepeaterTab(Widget):
@@ -34,10 +31,7 @@ class RepeaterTab(Widget):
       │ Forged Frames (DataTable list)  h=20%   │  req-list-pane
       │  #   Name     Host:Port   Dir           │
       ├─────────────────────────────────────────┤
-      │ [+ New]  [Rename (R)]           h=3     │  req-controls
-      ├─────────────────────────────────────────┤
-      │ [Session ▼]  Host: <input>  Port: <in>  │  target bar
-      │ TLS: [sw]  Dir: [→ To Server ▼]         │
+      │ [+ New]  [Edit (E)]             h=3     │  req-controls
       ├──────────────────────┬──────────────────┤
       │ Hex editor (editable)│ Response packets  │  editor pane
       │                      │ ┌──────────────┐ │
@@ -52,12 +46,12 @@ class RepeaterTab(Widget):
       └─────────────────────────────────────────┘
 
     Keyboard:
-      R       — rename the selected forged frame (when a text editor is not focused)
+      E       — edit the selected forged frame (when a text editor is not focused)
       Ctrl+R  — send current Logs frame to Repeater (handled at app level)
     """
 
     BINDINGS = [
-        Binding("r", "rename_request", "Rename", show=False),
+        Binding("e", "edit_request", "Edit", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -85,33 +79,6 @@ class RepeaterTab(Widget):
     }
     RepeaterTab .req-controls Button {
         margin-right: 1;
-    }
-    RepeaterTab .target-bar {
-        height: 3;
-        align: left middle;
-        background: $surface-darken-2;
-        padding: 0 1;
-    }
-    RepeaterTab .target-bar Label {
-        margin-right: 1;
-    }
-    RepeaterTab .target-bar #session-select {
-        width: 30;
-        margin-right: 2;
-    }
-    RepeaterTab .target-bar #target-host-input {
-        width: 18;
-        margin-right: 1;
-    }
-    RepeaterTab .target-bar #target-port-input {
-        width: 7;
-        margin-right: 1;
-    }
-    RepeaterTab .target-bar #target-tls-switch {
-        margin-right: 2;
-    }
-    RepeaterTab .target-bar #direction-select {
-        width: 18;
     }
     RepeaterTab #editor-pane {
         height: 40%;
@@ -198,31 +165,8 @@ class RepeaterTab(Widget):
 
         # Request controls
         with Horizontal(classes="req-controls"):
-            yield Button("+ New",    id="btn-new-request", variant="success", flat=True)
-            yield Button("Rename",   id="btn-rename-request", flat=True)
-
-        # Target bar — session dropdown + host/port/tls + direction
-        with Horizontal(classes="target-bar"):
-            yield Select(
-                options=[("Custom (manual host:port)", _CUSTOM)],
-                value=_CUSTOM,
-                id="session-select",
-                prompt="Target session",
-            )
-            yield Label("Host:")
-            yield Input("", id="target-host-input", placeholder="host")
-            yield Label("Port:")
-            yield Input("", id="target-port-input", placeholder="port")
-            yield Label("TLS:")
-            yield Switch(False, id="target-tls-switch")
-            yield Select(
-                options=[
-                    ("→ To Server", "to_server"),
-                    ("← To Client", "to_client"),
-                ],
-                value="to_server",
-                id="direction-select",
-            )
+            yield Button("+ New", id="btn-new-request", variant="success", flat=True)
+            yield Button("Edit",  id="btn-edit-request", flat=True)
 
         # Request / Response editors side by side
         with Horizontal(id="editor-pane"):
@@ -307,15 +251,6 @@ class RepeaterTab(Widget):
         except Exception:
             pass
 
-        # Refresh session dropdown options and set correct value
-        self._rebuild_session_dropdown(req)
-
-        # Direction
-        try:
-            self.query_one("#direction-select", Select).value = req.direction
-        except Exception:
-            pass
-
         # Sync the response-window input
         self.query_one("#resp-window", Input).value = str(req.response_window)
 
@@ -334,75 +269,8 @@ class RepeaterTab(Widget):
         # Refresh history table — select last entry to match the displayed response
         self._refresh_history(req, select_last=True)
 
-    def _rebuild_session_dropdown(self, req: RepeaterRequest) -> None:
-        """Rebuild the session Select options and set the correct value."""
-        try:
-            sessions = self.app.api.list_sessions()
-        except Exception:
-            sessions = []
-
-        options: list[tuple[str, str]] = [("Custom (manual host:port)", _CUSTOM)]
-        for s in sessions:
-            label = f"Session {s.id[:8]}: {s.info.server_host}:{s.info.server_port}"
-            options.append((label, s.id))
-
-        sel = self.query_one("#session-select", Select)
-        sel.set_options(options)
-
-        if req.source_session_id and any(v == req.source_session_id for _, v in options):
-            sel.value = req.source_session_id
-            self._apply_session_mode(req.source_session_id)
-        else:
-            sel.value = _CUSTOM
-            self._apply_custom_mode(req)
-
-    def _apply_custom_mode(self, req: RepeaterRequest) -> None:
-        """Show editable host/port/TLS fields from req."""
-        host_input = self.query_one("#target-host-input", Input)
-        port_input = self.query_one("#target-port-input", Input)
-        tls_switch = self.query_one("#target-tls-switch", Switch)
-
-        host_input.value = req.host
-        port_input.value = str(req.port)
-        tls_switch.value = req.tls
-
-        host_input.disabled = False
-        port_input.disabled = False
-        tls_switch.disabled = False
-
-    def _apply_session_mode(self, session_id: str) -> None:
-        """Show read-only host/port/TLS derived from the given session."""
-        try:
-            session = self.app.api.get_session(session_id)
-        except Exception:
-            session = None
-
-        host_input = self.query_one("#target-host-input", Input)
-        port_input = self.query_one("#target-port-input", Input)
-        tls_switch = self.query_one("#target-tls-switch", Switch)
-
-        if session:
-            host_input.value = session.info.server_host
-            port_input.value = str(session.info.server_port)
-            try:
-                tls_switch.value = self.app.api.config.tls_upstream
-            except Exception:
-                tls_switch.value = False
-        else:
-            host_input.value = "—"
-            port_input.value = "—"
-            tls_switch.value = False
-
-        host_input.disabled = True
-        port_input.disabled = True
-        tls_switch.disabled = True
-
     def refresh_session_dropdown(self) -> None:
-        """Called by the app when a session opens or closes."""
-        if self._current_idx < 0 or self._current_idx >= len(self._requests):
-            return
-        req = self._requests[self._current_idx]
-        self._rebuild_session_dropdown(req)
+        """Called by the app when a session opens or closes (no-op: sessions are fetched fresh when the Edit modal opens)."""
 
     def _display_record_response(self, record: SendRecord) -> None:
         """Populate the response packet list and viewer from a SendRecord."""
@@ -501,21 +369,66 @@ class RepeaterTab(Widget):
         self._request_counter = max(len(self._requests), max_num)
 
     # ------------------------------------------------------------------
-    # Rename action (R key)
+    # Edit action (E key)
     # ------------------------------------------------------------------
 
-    def action_rename_request(self) -> None:
-        """Open the rename modal for the current request."""
+    def action_edit_request(self) -> None:
+        """Open the edit modal for the current request."""
         if self._current_idx < 0:
             return
         req = self._requests[self._current_idx]
-        self.app.push_screen(RenameModal(req.label), self._on_rename)
 
-    def _on_rename(self, new_name: str | None) -> None:
-        if not new_name:
+        try:
+            all_sessions = self.app.api.list_sessions()
+        except Exception:
+            all_sessions = []
+
+        sessions = [
+            (
+                s.id,
+                f"Session {s.id[:8]}",
+                s.info.server_host,
+                s.info.server_port,
+            )
+            for s in all_sessions
+        ]
+
+        self.app.push_screen(
+            EditRequestModal(
+                current_label=req.label,
+                current_host=req.host,
+                current_port=req.port,
+                current_tls=req.tls,
+                current_direction=req.direction,
+                current_session_id=req.source_session_id,
+                sessions=sessions,
+            ),
+            self._on_edit_request,
+        )
+
+    def _on_edit_request(self, result: EditRequestResult | None) -> None:
+        if result is None:
             return
         req = self._requests[self._current_idx]
-        req.label = new_name
+
+        req.label     = result.label
+        req.direction = result.direction
+
+        # If the session or connection target changed, reset the persistent
+        # repeater session so a new connection is opened on the next send.
+        if (
+            result.session_id != req.source_session_id
+            or result.host != req.host
+            or result.port != req.port
+            or result.tls  != req.tls
+        ):
+            req.repeater_session_id = None
+
+        req.source_session_id = result.session_id
+        req.host  = result.host
+        req.port  = result.port
+        req.tls   = result.tls
+
         self._update_req_list_row(self._current_idx)
         if hasattr(self.app, "mark_dirty"):
             self.app.mark_dirty()
@@ -531,9 +444,9 @@ class RepeaterTab(Widget):
             event.stop()
             self.app.open_new_request_modal()
 
-        elif bid == "btn-rename-request":
+        elif bid == "btn-edit-request":
             event.stop()
-            self.action_rename_request()
+            self.action_edit_request()
 
         elif bid == "btn-req-mode":
             event.stop()
@@ -563,68 +476,17 @@ class RepeaterTab(Widget):
             return 1.0
 
     # ------------------------------------------------------------------
-    # Select / Input / Switch event handlers
+    # Input event handlers
     # ------------------------------------------------------------------
-
-    def on_select_changed(self, event: Select.Changed) -> None:
-        if self._current_idx < 0:
-            return
-        req = self._requests[self._current_idx]
-
-        if event.select.id == "session-select":
-            value = event.value
-            if value is Select.BLANK or value == _CUSTOM:
-                req.source_session_id = None
-                self._apply_custom_mode(req)
-            else:
-                req.source_session_id = str(value)
-                self._apply_session_mode(str(value))
-            if hasattr(self.app, "mark_dirty"):
-                self.app.mark_dirty()
-
-        elif event.select.id == "direction-select":
-            if event.value is not Select.BLANK:
-                req.direction = str(event.value)
-                self._update_req_list_row(self._current_idx)
-                if hasattr(self.app, "mark_dirty"):
-                    self.app.mark_dirty()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if self._current_idx < 0:
             return
-        req = self._requests[self._current_idx]
-
         if event.input.id == "resp-window":
             try:
-                req.response_window = max(0.0, float(event.value))
+                self._requests[self._current_idx].response_window = max(0.0, float(event.value))
             except ValueError:
                 pass
-
-        elif event.input.id == "target-host-input":
-            if not event.input.disabled:
-                req.host = event.value
-                self._update_req_list_row(self._current_idx)
-                if hasattr(self.app, "mark_dirty"):
-                    self.app.mark_dirty()
-
-        elif event.input.id == "target-port-input":
-            if not event.input.disabled:
-                try:
-                    req.port = int(event.value)
-                    self._update_req_list_row(self._current_idx)
-                    if hasattr(self.app, "mark_dirty"):
-                        self.app.mark_dirty()
-                except ValueError:
-                    pass
-
-    def on_switch_changed(self, event: Switch.Changed) -> None:
-        if event.switch.id != "target-tls-switch":
-            return
-        if self._current_idx < 0 or event.switch.disabled:
-            return
-        self._requests[self._current_idx].tls = event.value
-        if hasattr(self.app, "mark_dirty"):
-            self.app.mark_dirty()
 
     # ------------------------------------------------------------------
     # DataTable navigation — highlighted (arrow / single-click)
