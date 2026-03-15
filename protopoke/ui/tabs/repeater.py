@@ -12,7 +12,7 @@ from textual.containers import Horizontal, Vertical
 
 from ...models import Direction
 from ...replay.models import RepeaterRequest, SendRecord
-from ..modals.edit_request import EditRequestModal, EditRequestResult
+from ..modals.request_modal import RequestModal, RequestResult
 from ..utils.frame_codec import bytes_to_str, str_to_bytes, hex_pairs_to_str, str_to_hex_pairs
 
 # Direction mapping for replace-rule scope application
@@ -394,19 +394,20 @@ class RepeaterTab(Widget):
         ]
 
         self.app.push_screen(
-            EditRequestModal(
-                current_label=req.label,
-                current_host=req.host,
-                current_port=req.port,
-                current_tls=req.tls,
-                current_direction=req.direction,
-                current_session_id=req.source_session_id,
-                sessions=sessions,
+            RequestModal(
+                sessions,
+                label=req.label,
+                host=req.host,
+                port=req.port,
+                tls=req.tls,
+                direction=req.direction,
+                session_id=req.source_session_id,
+                edit=True,
             ),
             self._on_edit_request,
         )
 
-    def _on_edit_request(self, result: EditRequestResult | None) -> None:
+    def _on_edit_request(self, result: RequestResult | None) -> None:
         if result is None:
             return
         req = self._requests[self._current_idx]
