@@ -1,6 +1,6 @@
 """Tests for ProxyEngine.inject_to_server() and ProxyAPI.inject_to_server().
 
-The inject path lets the Repeater write forged bytes into the upstream TCP
+The inject path lets the Forge feature write forged bytes into the upstream TCP
 connection of an *existing* proxy session — the bytes arrive on the same
 connection the real client is using, so the server can process them with
 full session context.

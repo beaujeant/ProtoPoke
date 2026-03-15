@@ -1,4 +1,4 @@
-"""RenameModal — simple single-input modal for renaming a repeater tab."""
+"""RenameModal — simple single-input modal for renaming a forge tab."""
 
 from __future__ import annotations
 

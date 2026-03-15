@@ -78,7 +78,7 @@ class TestProjectManager:
         assert len(state.rules_engine.rules) == 1
         assert state.rules_engine.rules[0].label == "r1"
 
-    def test_open_loads_intercept_rules(self, tmp_path):
+    def test_open_loads_tamper_rules(self, tmp_path):
         pm = ProjectManager()
         rule = TamperRule.create("catch", "FF", RuleAction.FORWARD)
         pm.tamper_filter.add_rule(rule)
@@ -89,7 +89,7 @@ class TestProjectManager:
         assert len(state.tamper_filter.rules) == 1
         assert state.tamper_filter.rules[0].action == RuleAction.FORWARD
 
-    def test_open_loads_repeater(self, tmp_path):
+    def test_open_loads_forge_requests(self, tmp_path):
         pm = ProjectManager()
         req = ForgeRequest.create("10.0.0.1", 443, label="Tab 1", current_bytes=b"\x01\x02")
         rec = ForgeRecord.create(b"\x01\x02", b"\x03\x04", "10.0.0.1", 443)

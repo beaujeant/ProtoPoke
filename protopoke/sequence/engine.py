@@ -123,7 +123,7 @@ class SequenceEngine:
                 data = resolve_hex(step.raw_hex, variables)
             except ValueError as exc:
                 logger.error(
-                    "Sequencer step %d (%r): placeholder resolution failed — %s",
+                    "Sequence step %d (%r): placeholder resolution failed — %s",
                     idx, step.label, exc,
                 )
                 continue
@@ -157,7 +157,7 @@ class SequenceEngine:
                 received_packets = await send_fn(data, step.direction)
             except Exception as exc:
                 logger.error(
-                    "Sequencer step %d (%r): send_fn raised — %s", idx, step.label, exc
+                    "Sequence step %d (%r): send_fn raised — %s", idx, step.label, exc
                 )
 
             # ------------------------------------------------------------------

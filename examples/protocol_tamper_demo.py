@@ -1,7 +1,7 @@
 """
 Protocol-aware interception demo.
 
-Like intercept_demo.py, but loads a protocol definition so intercepted
+Like tamper_demo.py, but loads a protocol definition so tampered
 frames are displayed as a Wireshark-style field tree + hex dump, and the
 operator can edit individual fields by name.
 
@@ -10,7 +10,7 @@ Usage:
     nc -lk 9090
 
     # Terminal 2: run this demo with a protocol definition
-    python examples/protocol_intercept_demo.py examples/protocols/chat.proto.yaml
+    python examples/protocol_tamper_demo.py examples/protocols/chat.proto.yaml
 
     # Terminal 3: connect and send binary data
     nc 127.0.0.1 8080

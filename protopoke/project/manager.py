@@ -79,7 +79,7 @@ class ProjectState:
         tamper_filter:    Active intercept rules.
         forge_requests:   All repeater tabs (with history).
         sequence_sessions:  All sequencer sessions (with steps, variables, history).
-        captured_sessions:   Serialised session + frame data for the Logs tab.
+        captured_sessions:   Serialised session + frame data for the Traffic tab.
         name:                Human-readable project name.
         db_path:             Legacy: path to the SQLite sessions database, or ``None``.
     """
@@ -355,7 +355,7 @@ class ProjectManager:
                 self.rules_engine     = RulesEngine()
                 self.tamper_filter = TamperFilter()
 
-            # Repeater
+            # Forge
             repeater_raw = _read("repeater.json")
             if repeater_raw:
                 repeater_data = json.loads(repeater_raw)
@@ -365,7 +365,7 @@ class ProjectManager:
             else:
                 self.forge_requests = []
 
-            # Sequencer
+            # Sequence
             sequencer_raw = _read("sequencer.json")
             if sequencer_raw:
                 sequencer_data = json.loads(sequencer_raw)
@@ -431,7 +431,7 @@ class ProjectManager:
             self.rules_engine     = RulesEngine()
             self.tamper_filter = TamperFilter()
 
-        # Repeater
+        # Forge
         repeater_path = project_dir / "repeater.json"
         if repeater_path.exists():
             repeater_data = json.loads(repeater_path.read_text(encoding="utf-8"))
@@ -441,7 +441,7 @@ class ProjectManager:
         else:
             self.forge_requests = []
 
-        # Sequencer
+        # Sequence
         sequencer_path = project_dir / "sequencer.json"
         if sequencer_path.exists():
             sequencer_data = json.loads(sequencer_path.read_text(encoding="utf-8"))

@@ -336,7 +336,7 @@ class ProxyEngine:
             logger.info("Session %s done", session.id)
 
     # ------------------------------------------------------------------
-    # Repeater injection
+    # Forge injection
     # ------------------------------------------------------------------
 
     async def terminate_session(self, session_id: str) -> bool:

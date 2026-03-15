@@ -8,7 +8,7 @@ This is a minimal demonstration of the interception API. A real UI would
 wrap the same ProxyAPI calls in a graphical interface.
 
 Usage:
-    python examples/intercept_demo.py
+    python examples/tamper_demo.py
 
     # In another terminal:
     nc 127.0.0.1 8080

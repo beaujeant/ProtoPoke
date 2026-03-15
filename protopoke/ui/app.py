@@ -52,7 +52,7 @@ class _FrameCaptured(Message):
         self.frame_id   = frame_id
 
 
-class _InterceptedArrived(Message):
+class _TamperedArrived(Message):
     def __init__(self, unit_id: str) -> None:
         super().__init__()
         self.unit_id = unit_id
@@ -151,7 +151,7 @@ class ProtoPoke(App):
     def on_mount(self) -> None:
         self._register_event_handlers()
         self._update_title()
-        # Start polling the intercept queue in the background
+        # Start polling the tamper queue in the background
         self.set_interval(0.2, self._poll_tamper_queue)
 
     # ------------------------------------------------------------------
@@ -198,15 +198,15 @@ class ProtoPoke(App):
                     break
 
     # ------------------------------------------------------------------
-    # Intercept queue polling
+    # Tamper queue polling
     # ------------------------------------------------------------------
 
     async def _poll_tamper_queue(self) -> None:
-        """Drain any newly queued intercepted units and post them to the UI."""
+        """Drain any newly queued tampered units and post them to the UI."""
         for unit in self.api.list_intercepted():
-            intercept_tab = self.query_one("#tamper-tab", TamperTab)
-            if unit.id not in intercept_tab._units:
-                intercept_tab.add_unit(unit)
+            tamper_tab = self.query_one("#tamper-tab", TamperTab)
+            if unit.id not in tamper_tab._units:
+                tamper_tab.add_unit(unit)
 
     # ------------------------------------------------------------------
     # Config tab events
@@ -274,7 +274,7 @@ class ProtoPoke(App):
         Changes that apply to new connections / next run (no extra action needed,
         they are read from api.config at the relevant time):
         - Framing (new connections use updated framer_name / framer_kwargs)
-        - Sequencer script (loaded fresh at the start of each run)
+        - Sequence script (loaded fresh at the start of each run)
         - Max sessions (checked per new connection)
         """
         import logging as _logging
@@ -312,7 +312,7 @@ class ProtoPoke(App):
         """Ctrl+R — send the selected Traffic frame to Forge."""
         traffic_tab = self.query_one("#traffic-tab", TrafficTab)
         if traffic_tab._current_frame_id and traffic_tab._current_session_id:
-            self.send_frame_to_repeater(
+            self.send_frame_to_forge(
                 traffic_tab._current_session_id, traffic_tab._current_frame_id
             )
         else:
@@ -403,11 +403,11 @@ class ProtoPoke(App):
 
     def _sync_forge_requests(self) -> None:
         """Copy the current UI state (forge, sequence, traffic) into the project."""
-        repeater_tab = self.query_one("#forge-tab", ForgeTab)
-        self._project.forge_requests = list(repeater_tab._requests)
-        sequencer_tab = self.query_one("#sequence-tab", SequenceTab)
-        sequencer_tab._save_step_editor()
-        self._project.sequence_sessions = list(sequencer_tab._sequences)
+        forge_tab = self.query_one("#forge-tab", ForgeTab)
+        self._project.forge_requests = list(forge_tab._requests)
+        sequence_tab = self.query_one("#sequence-tab", SequenceTab)
+        sequence_tab._save_step_editor()
+        self._project.sequence_sessions = list(sequence_tab._sequences)
         # Sync logs: capture all sessions and their frames
         self._project.captured_sessions = [
             self.api.session_to_dict(session)
@@ -477,7 +477,7 @@ class ProtoPoke(App):
         else:
             self.notify("Session not found.", severity="warning")
 
-    def send_frames_to_sequencer(
+    def send_frames_to_sequence(
         self, session_id: str, frame_ids: list[str]
     ) -> None:
         """
@@ -530,18 +530,18 @@ class ProtoPoke(App):
         self._project.mark_dirty()
         # Double call_after_refresh: lets all widget mounts (new sequence buttons,
         # DataTable updates) settle before the tab switch is applied.
-        def _do_switch_sequencer() -> None:
+        def _do_switch_sequence() -> None:
             self.action_switch_tab("sequence")
-        def _schedule_switch_sequencer() -> None:
-            self.call_after_refresh(_do_switch_sequencer)
-        self.call_after_refresh(_schedule_switch_sequencer)
+        def _schedule_switch_sequence() -> None:
+            self.call_after_refresh(_do_switch_sequence)
+        self.call_after_refresh(_schedule_switch_sequence)
         skipped = len(frame_ids) - len(selected_frames)
         msg = f"{len(selected_frames)} frame(s) added to Sequence"
         if skipped:
             msg += f" ({skipped} skipped — wrong direction)"
         self.notify(msg)
 
-    def send_frame_to_repeater(self, session_id: str, frame_id: str) -> None:
+    def send_frame_to_forge(self, session_id: str, frame_id: str) -> None:
         """Called by TrafficTab — create a forge request from a captured frame."""
         session = self.api.get_session(session_id)
         if not session:

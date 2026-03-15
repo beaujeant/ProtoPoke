@@ -21,7 +21,7 @@ Options
     --listen-port PORT          Proxy listen port    (default: 8080)
     --upstream-host HOST        Upstream host        (default: 127.0.0.1)
     --upstream-port PORT        Upstream port        (default: 9090)
-    --intercept                 Enable interception on startup
+    --tamper                    Enable tamper on startup
     --tls-listen                Wrap client side with TLS (MITM mode)
     --tls-upstream              Connect to upstream over TLS
     --framer NAME               Framer: raw | delimiter | length_prefix
@@ -74,9 +74,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--upstream-port", default=None,  type=int, metavar="PORT",
                    help="Upstream port (default: 9090)")
 
-    # Interception
-    p.add_argument("--intercept", action="store_true",
-                   help="Enable interception on startup (frames held for review)")
+    # Tamper
+    p.add_argument("--tamper", action="store_true",
+                   help="Enable tamper on startup (frames held for review)")
 
     # TLS (upstream cert verification is always disabled in reverser mode)
     p.add_argument("--tls-listen", action="store_true",
@@ -116,7 +116,7 @@ def _make_config(args: argparse.Namespace) -> ProxyConfig:
     if args.listen_port   is not None: config.listen_port       = args.listen_port
     if args.upstream_host is not None: config.upstream_host     = args.upstream_host
     if args.upstream_port is not None: config.upstream_port     = args.upstream_port
-    if args.intercept:                 config.tamper_enabled = True
+    if args.tamper:                    config.tamper_enabled = True
     if args.tls_listen:                config.tls_listen        = True
     if args.tls_upstream:              config.tls_upstream      = True
     if args.framer        is not None: config.framer_name       = args.framer

@@ -1,5 +1,5 @@
 """
-Variable substitution for {{VAR}} placeholders in sequencer hex templates.
+Variable substitution for {{VAR}} placeholders in sequence hex templates.
 
 Placeholder syntax (embedded as whitespace-separated tokens in a hex template):
 
@@ -102,7 +102,7 @@ def _resolve_placeholder(inner: str, variables: Dict[str, str]) -> str:
 
     if name not in variables:
         raise ValueError(
-            f"Sequencer variable '{{{{ {name} }}}}' is not defined. "
+            f"Sequence variable '{{{{ {name} }}}}' is not defined. "
             f"Define it in the variable store or capture it via the script."
         )
 

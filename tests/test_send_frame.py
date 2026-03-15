@@ -1,4 +1,4 @@
-"""Tests for ForgeEngine.send_frame() (Repeater single-frame send)."""
+"""Tests for ForgeEngine.send_frame() (Forge single-frame send)."""
 
 from __future__ import annotations
 

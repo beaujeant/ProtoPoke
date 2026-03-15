@@ -1,16 +1,16 @@
 """
-Data models for the Repeater feature.
+Data models for the Forge feature.
 
 These are separate from the core models (protopoke.models) because they are
 UI-level constructs, not transport-level ones.
 
 ForgeRecord
 ----------
-An immutable record of one send+receive cycle in the Repeater.
+An immutable record of one send+receive cycle in Forge.
 
 ForgeRequest
 ---------------
-A named "tab" in the Repeater, holding the current editable bytes, the
+A named "tab" in Forge, holding the current editable bytes, the
 target destination, and the history of all sends made from this tab.
 """
 
@@ -25,7 +25,7 @@ from typing import Optional
 @dataclass
 class ForgeRecord:
     """
-    A single send+response pair recorded in the Repeater history.
+    A single send+response pair recorded in the Forge history.
 
     Attributes:
         id:               Unique ID (UUID4).
@@ -116,7 +116,7 @@ class ForgeRecord:
 @dataclass
 class ForgeRequest:
     """
-    One named "tab" in the Repeater.
+    One named "tab" in Forge.
 
     Holds the current editable bytes (``current_bytes``), the target
     destination (``host``, ``port``, ``tls``), and the full send history.
@@ -147,7 +147,7 @@ class ForgeRequest:
     direction:           str               = "to_server"
     # ID of the persistent TCP session created for custom host:port sends.
     # Not persisted to disk — connections don't survive restarts.
-    repeater_session_id: Optional[str]     = field(default=None, compare=False)
+    forge_session_id: Optional[str]     = field(default=None, compare=False)
 
     @classmethod
     def create(

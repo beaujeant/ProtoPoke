@@ -25,7 +25,7 @@ _DIRECTION_OPTIONS = [
 ]
 
 _ACTION_OPTIONS = [
-    ("Intercept (hold for review)", "intercept"),
+    ("Tamper (hold for review)", "tamper"),
     ("Forward (bypass queue)", "forward"),
 ]
 
@@ -193,19 +193,19 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
             yield Label("Apply in:")
             with Horizontal(classes="scope-row"):
                 yield Checkbox(
-                    "Intercept (relay)",
-                    value=ex.apply_to_intercept if ex else True,
-                    id="r-scope-intercept",
+                    "Tamper (relay)",
+                    value=ex.apply_to_tamper if ex else True,
+                    id="r-scope-tamper",
                 )
                 yield Checkbox(
-                    "Repeater",
-                    value=ex.apply_to_repeater if ex else True,
-                    id="r-scope-repeater",
+                    "Forge",
+                    value=ex.apply_to_forge if ex else True,
+                    id="r-scope-forge",
                 )
                 yield Checkbox(
-                    "Sequencer",
-                    value=ex.apply_to_sequencer if ex else True,
-                    id="r-scope-sequencer",
+                    "Sequence",
+                    value=ex.apply_to_sequence if ex else True,
+                    id="r-scope-sequence",
                 )
 
             yield Static("", id="validation-msg")
@@ -261,9 +261,9 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
         enabled  = self.query_one("#r-enabled", Switch).value
         rule_type_val = str(self.query_one("#r-type", Select).value)
 
-        scope_intercept = self.query_one("#r-scope-intercept", Checkbox).value
-        scope_repeater  = self.query_one("#r-scope-repeater",  Checkbox).value
-        scope_sequencer = self.query_one("#r-scope-sequencer", Checkbox).value
+        scope_tamper = self.query_one("#r-scope-tamper", Checkbox).value
+        scope_forge  = self.query_one("#r-scope-forge",  Checkbox).value
+        scope_sequence = self.query_one("#r-scope-sequence", Checkbox).value
 
         direction: Direction | None = None
         if dir_val and dir_val != "Select.BLANK":
@@ -299,9 +299,9 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
                 rule.replacement = replacement
                 rule.direction  = direction
                 rule.enabled    = enabled
-                rule.apply_to_intercept = scope_intercept
-                rule.apply_to_repeater  = scope_repeater
-                rule.apply_to_sequencer = scope_sequencer
+                rule.apply_to_tamper = scope_tamper
+                rule.apply_to_forge  = scope_forge
+                rule.apply_to_sequence = scope_sequence
                 rule.compiled = compile_binary_pattern(pattern) if pattern else None
                 rule.regex_compiled = None
             else:
@@ -309,9 +309,9 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
                     label, pattern, replacement,
                     direction=direction, enabled=enabled,
                     rule_type="binary",
-                    apply_to_intercept=scope_intercept,
-                    apply_to_repeater=scope_repeater,
-                    apply_to_sequencer=scope_sequencer,
+                    apply_to_tamper=scope_tamper,
+                    apply_to_forge=scope_forge,
+                    apply_to_sequence=scope_sequence,
                 )
 
         elif rule_type_val == "regex":
@@ -334,9 +334,9 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
                 rule.regex_replacement = regex_replacement
                 rule.direction        = direction
                 rule.enabled          = enabled
-                rule.apply_to_intercept = scope_intercept
-                rule.apply_to_repeater  = scope_repeater
-                rule.apply_to_sequencer = scope_sequencer
+                rule.apply_to_tamper = scope_tamper
+                rule.apply_to_forge  = scope_forge
+                rule.apply_to_sequence = scope_sequence
                 rule.regex_compiled = compile_regex_pattern(regex_pattern) if regex_pattern else None
                 rule.compiled = None
             else:
@@ -346,9 +346,9 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
                     rule_type="regex",
                     regex_pattern=regex_pattern,
                     regex_replacement=regex_replacement,
-                    apply_to_intercept=scope_intercept,
-                    apply_to_repeater=scope_repeater,
-                    apply_to_sequencer=scope_sequencer,
+                    apply_to_tamper=scope_tamper,
+                    apply_to_forge=scope_forge,
+                    apply_to_sequence=scope_sequence,
                 )
 
         elif rule_type_val == "script":
@@ -365,9 +365,9 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
                 rule.script_path = script_path
                 rule.direction   = direction
                 rule.enabled     = enabled
-                rule.apply_to_intercept = scope_intercept
-                rule.apply_to_repeater  = scope_repeater
-                rule.apply_to_sequencer = scope_sequencer
+                rule.apply_to_tamper = scope_tamper
+                rule.apply_to_forge  = scope_forge
+                rule.apply_to_sequence = scope_sequence
                 rule.compiled = None
                 rule.regex_compiled = None
                 rule._script_module = None  # force reload on next apply
@@ -377,9 +377,9 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
                     direction=direction, enabled=enabled,
                     rule_type="script",
                     script_path=script_path,
-                    apply_to_intercept=scope_intercept,
-                    apply_to_repeater=scope_repeater,
-                    apply_to_sequencer=scope_sequencer,
+                    apply_to_tamper=scope_tamper,
+                    apply_to_forge=scope_forge,
+                    apply_to_sequence=scope_sequence,
                 )
 
         else:
@@ -444,10 +444,10 @@ class AddTamperRuleModal(ModalScreen[TamperRule | None]):
     def compose(self) -> ComposeResult:
         ex = self._existing
         with Vertical():
-            yield Label("Intercept Rule", classes="modal-title")
+            yield Label("Tamper Rule", classes="modal-title")
 
             yield Label("Label:")
-            yield Input(value=ex.label if ex else "", placeholder="My intercept rule", id="i-label")
+            yield Input(value=ex.label if ex else "", placeholder="My tamper rule", id="i-label")
 
             yield Label("Pattern (hex binary syntax, empty = match all):")
             yield Input(
@@ -461,7 +461,7 @@ class AddTamperRuleModal(ModalScreen[TamperRule | None]):
             )
 
             yield Label("Action when matched:")
-            action_val = ex.action.value if ex else "intercept"
+            action_val = ex.action.value if ex else "tamper"
             yield Select(
                 [(lbl, val) for lbl, val in _ACTION_OPTIONS],
                 value=action_val,

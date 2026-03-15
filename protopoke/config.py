@@ -37,7 +37,7 @@ class ProxyConfig:
         max_sessions:     Maximum concurrent proxied connections. 0 = unlimited.
 
     Interception:
-        tamper_enabled: When True, frames are held in the intercept queue
+        tamper_enabled: When True, frames are held in the tamper queue
                            waiting for a human verdict. When False, everything
                            is forwarded immediately.
 
@@ -133,11 +133,11 @@ class ProxyConfig:
     custom_framer_path: Optional[str] = None
 
     # ------------------------------------------------------------------
-    # Sequencer script
+    # Sequence script
     # ------------------------------------------------------------------
 
-    # Path to a Python file used by the Sequencer to extract variables from
-    # server responses and optionally transform outgoing packets.
+    # Path to a Python file used by the Sequence engine to extract variables
+    # from server responses and optionally transform outgoing packets.
     #
     # The script may define two optional hooks:
     #
@@ -150,7 +150,7 @@ class ProxyConfig:
     #       """Called before each send (after ##VAR## substitution).
     #       Return the bytes to actually transmit."""
     #
-    # Both hooks are optional. Leave this field None to run the Sequencer
+    # Both hooks are optional. Leave this field None to run the Sequence
     # without any script (##VAR## substitution still works for pre-set vars).
     sequence_script: Optional[str] = None
 

@@ -24,7 +24,7 @@ _DIR_MAP = {
 
 class ForgeTab(Widget):
     """
-    Tab 4 — Repeater: send single frames to the target.
+    Tab 4 — Forge: send single frames to the target.
 
     Layout:
       ┌─────────────────────────────────────────┐
@@ -47,7 +47,7 @@ class ForgeTab(Widget):
 
     Keyboard:
       E       — edit the selected forged frame (when a text editor is not focused)
-      Ctrl+R  — send current Logs frame to Repeater (handled at app level)
+      Ctrl+R  — send current Traffic frame to Forge (handled at app level)
     """
 
     BINDINGS = [
@@ -217,7 +217,7 @@ class ForgeTab(Widget):
     # ------------------------------------------------------------------
 
     def add_request(self, req: ForgeRequest, _preserve_label: bool = False) -> None:
-        """Add a new repeater request and switch to it.
+        """Add a new forge request and switch to it.
 
         When *_preserve_label* is False (default), the request label is
         overwritten with the next auto-incremented number.
@@ -427,14 +427,14 @@ class ForgeTab(Widget):
         req.response_window = result.window
 
         # If the session or connection target changed, reset the persistent
-        # repeater session so a new connection is opened on the next send.
+        # forge session so a new connection is opened on the next send.
         if (
             result.session_id != req.source_session_id
             or result.host != req.host
             or result.port != req.port
             or result.tls  != req.tls
         ):
-            req.repeater_session_id = None
+            req.forge_session_id = None
 
         req.source_session_id = result.session_id
         req.host  = result.host
@@ -587,10 +587,10 @@ class ForgeTab(Widget):
         if hasattr(self.app, "mark_dirty"):
             self.app.mark_dirty()
 
-        # Apply replace rules (repeater scope) before sending
+        # Apply replace rules (forge scope) before sending
         try:
             _direction = _DIR_MAP.get(req.direction, Direction.CLIENT_TO_SERVER)
-            data = self.app.api.rules_engine.apply_bytes(data, _direction, scope="repeater")
+            data = self.app.api.rules_engine.apply_bytes(data, _direction, scope="forge")
         except Exception:
             pass  # Don't block the send if rule application fails
 
@@ -697,14 +697,14 @@ class ForgeTab(Widget):
         # Path 2: custom host:port — use (or create) a persistent session
         # ------------------------------------------------------------------
         else:
-            if req.repeater_session_id:
-                session = self.app.api.get_session(req.repeater_session_id)
+            if req.forge_session_id:
+                session = self.app.api.get_session(req.forge_session_id)
                 if not (session and session.is_active()):
-                    req.repeater_session_id = None
+                    req.forge_session_id = None
 
-            if not req.repeater_session_id:
+            if not req.forge_session_id:
                 try:
-                    req.repeater_session_id = await self.app.api.open_forge_session(
+                    req.forge_session_id = await self.app.api.open_forge_session(
                         req.host, req.port, req.tls
                     )
                 except Exception as exc:
@@ -726,7 +726,7 @@ class ForgeTab(Widget):
                     return
 
             final = await self.app.api.send_on_forge_session(
-                session_id=req.repeater_session_id,
+                session_id=req.forge_session_id,
                 data=data,
                 receive_timeout=response_window,
                 packet_callback=_on_packet,
@@ -738,10 +738,10 @@ class ForgeTab(Widget):
             record.success = final.success
             record.error = final.error
 
-            if req.repeater_session_id:
-                session = self.app.api.get_session(req.repeater_session_id)
+            if req.forge_session_id:
+                session = self.app.api.get_session(req.forge_session_id)
                 if session and not session.is_active():
-                    req.repeater_session_id = None
+                    req.forge_session_id = None
 
         # Refresh history to update the recv-bytes column, preserving the
         # user's current selection in case they navigated while waiting.

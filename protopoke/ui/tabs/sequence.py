@@ -16,7 +16,7 @@ from ..utils.frame_codec import hex_template_to_str, str_to_hex_template
 
 class SequenceTab(Widget):
     """
-    Tab 6 — Sequencer: send ordered packet chains with {{VAR}} variable
+    Tab 6 — Sequence: send ordered packet chains with {{VAR}} variable
     substitution and an optional Python script for response-driven extraction.
 
     Layout (all panes 100% width, stacked vertically):
@@ -624,7 +624,7 @@ class SequenceTab(Widget):
         editor.load_text(new_text)
 
     def _do_new_sequence(self) -> None:
-        from ...sequencer.models import SequenceSession
+        from ...sequence.models import SequenceSession
         seq = SequenceSession.create(label=f"Sequence {len(self._sequences)+1}")
         self.add_sequence(seq)
         if hasattr(self.app, "mark_dirty"):
@@ -720,7 +720,7 @@ class SequenceTab(Widget):
 
     async def _async_run(self, seq: SequenceSession) -> None:
         """Background worker: run the sequence and update the UI live."""
-        from ...sequencer.models import HistoryEntry as HE
+        from ...sequence.models import HistoryEntry as HE
 
         def on_entry(entry: HE) -> None:
             if self._running:
@@ -799,7 +799,7 @@ class SequenceTab(Widget):
                     break
 
     # ------------------------------------------------------------------
-    # Public: add a frame from the Logs tab
+    # Public: add a frame from the Traffic tab
     # ------------------------------------------------------------------
 
     def add_step_from_bytes(
@@ -813,7 +813,7 @@ class SequenceTab(Widget):
         direction: str = "client_to_server",
     ) -> None:
         """
-        Add a new step from raw bytes (called when importing from the Logs tab).
+        Add a new step from raw bytes (called when importing from the Traffic tab).
 
         If no sequence exists, a new one is created first, inheriting the
         connection parameters from the imported frame's session.
@@ -821,11 +821,11 @@ class SequenceTab(Widget):
         Args:
             direction: ``"client_to_server"`` or ``"server_to_client"``.  A
                        sequence should only contain steps of one direction; this
-                       is enforced at the Logs tab import level (only frames
+                       is enforced at the Traffic tab import level (only frames
                        matching the first selected frame's direction are sent).
         """
         if self._current_idx < 0:
-            from ...sequencer.models import SequenceSession
+            from ...sequence.models import SequenceSession
             seq = SequenceSession.create(
                 label="Imported Sequence",
                 host=host,

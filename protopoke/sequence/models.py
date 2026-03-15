@@ -1,5 +1,5 @@
 """
-Data models for the Sequencer feature.
+Data models for the Sequence feature.
 
 SequenceStep
 ------------
@@ -181,7 +181,7 @@ class HistoryEntry:
 @dataclass
 class SequenceSession:
     """
-    A named sequence of packets (one "tab" in the Sequencer).
+    A named sequence of packets (one "tab" in the Sequence feature).
 
     Attributes:
         id:                Unique ID (UUID4).

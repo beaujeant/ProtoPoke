@@ -665,7 +665,7 @@ class ForgeEngine:
             self._open_connections.pop(session_id, None)
             self._session_registry.mark_closed(session_id)
             logger.info(
-                "Repeater session %s closed by server after send", session_id[:8]
+                "Forge session %s closed by server after send", session_id[:8]
             )
             if io_error:
                 return ForgeRecord.create(
@@ -708,7 +708,7 @@ class ForgeEngine:
 
         Opens a new direct TCP connection (bypassing the proxy listener),
         sends *data*, signals EOF, reads the full response, then closes
-        the connection.  Suitable for the Repeater's one-shot send action.
+        the connection.  Suitable for Forge's one-shot send action.
 
         Args:
             data:             Bytes to send.

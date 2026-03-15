@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "protopoke"
 version = "0.1.0"
-description = "A personal TCP proxy / interception tool (Burp Suite for arbitrary protocols)"
+description = "A personal TCP proxy / tamper tool (Burp Suite for arbitrary protocols)"
 requires-python = ">=3.11"
 dependencies = [
     "cryptography>=41",  # TLS MITM: CA generation, cert signing

@@ -10,27 +10,27 @@ It wires together all the internal components and exposes a clean facade:
     Lifecycle:
         start(), stop(), serve_forever()
 
-    Interception:
+    Tamper control:
         tamper_enabled (property, settable)
-        get_next_intercepted() — blocks until a frame is intercepted
+        get_next_intercepted() — blocks until a frame is held in tamper queue
         list_intercepted() — snapshot of pending queue
         forward(), drop(), modify_and_forward() — verdict shortcuts
 
-    Replay:
+    Forge/replay:
         forge_session()
 
     Events:
         on_session_opened(), on_session_closed(), on_frame_captured()
 
 Why a separate API class:
-    - The proxy engine, session registry, intercept controller, event bus,
+    - The proxy engine, session registry, tamper controller, event bus,
       and replay engine are all independent components. ProxyAPI composes them.
     - Tests can drive the proxy via ProxyAPI without touching internals.
     - A future HTTP API server (e.g. aiohttp/FastAPI) wraps ProxyAPI methods.
     - A future terminal UI also wraps ProxyAPI — no other layer changes.
-    - The intercept controller always uses QueuedTamperController, with
+    - The tamper controller always uses QueuedTamperController, with
       config.tamper_enabled controlling its initial on/off state. This allows
-      toggling interception at runtime regardless of the startup config value.
+      toggling tampering at runtime regardless of the startup config value.
 
 Usage example:
 
@@ -104,7 +104,7 @@ class ProxyAPI:
         self.session_registry = SessionRegistry()
         self.storage          = storage or NullStorageBackend()
 
-        # Rules engines (replace rules + intercept rules)
+        # Rules engines (replace rules + tamper rules)
         self.rules_engine     = rules_engine     or RulesEngine()
         self.tamper_filter = tamper_filter or TamperFilter()
 
@@ -304,18 +304,18 @@ class ProxyAPI:
         return frames
 
     # ------------------------------------------------------------------
-    # Interception control
+    # Tamper control
     # ------------------------------------------------------------------
 
     @property
     def tamper_enabled(self) -> bool:
-        """Whether interception is currently active."""
+        """Whether tampering is currently active."""
         return self._tamper_controller.tamper_enabled
 
     @tamper_enabled.setter
     def tamper_enabled(self, value: bool) -> None:
         """
-        Enable or disable interception at runtime.
+        Enable or disable tampering at runtime.
 
         When disabled, all currently pending frames are immediately forwarded.
         When enabled, subsequent frames are held for operator review.
@@ -324,12 +324,12 @@ class ProxyAPI:
 
     async def get_next_intercepted(self) -> TamperedUnit:
         """
-        Wait for and return the next intercepted frame.
+        Wait for and return the next tampered frame.
 
-        Blocks until a frame arrives in the intercept queue.
+        Blocks until a frame arrives in the tamper queue.
 
         Raises:
-            RuntimeError: if interception is not enabled.
+            RuntimeError: if tampering is not enabled.
         """
         return await self._tamper_controller.get_pending()
 
@@ -338,23 +338,23 @@ class ProxyAPI:
         return self._tamper_controller.list_pending()
 
     def pending_count(self) -> int:
-        """Number of frames waiting for an intercept verdict."""
+        """Number of frames waiting for a tamper verdict."""
         return self._tamper_controller.pending_count()
 
     def forward(self, unit_id: str) -> bool:
-        """Forward an intercepted frame as-is."""
+        """Forward a tampered frame as-is."""
         return self._tamper_controller.forward(unit_id)
 
     def drop(self, unit_id: str) -> bool:
-        """Drop an intercepted frame (don't forward it)."""
+        """Drop a tampered frame (don't forward it)."""
         return self._tamper_controller.drop(unit_id)
 
     def modify_and_forward(self, unit_id: str, new_data: bytes) -> bool:
-        """Forward an intercepted frame with replacement bytes."""
+        """Forward a tampered frame with replacement bytes."""
         return self._tamper_controller.modify_and_forward(unit_id, new_data)
 
     def forward_all(self) -> int:
-        """Forward all currently pending intercepted frames. Returns count."""
+        """Forward all currently pending tampered frames. Returns count."""
         return self._tamper_controller.forward_all()
 
     # ------------------------------------------------------------------
@@ -417,7 +417,7 @@ class ProxyAPI:
         """
         Attach a protocol decoder (and optionally encoder) to this API instance.
 
-        The decoder is used by decode_frame() and get_next_intercepted_parsed().
+        The decoder is used by decode_frame() and get_next_intercepted_parsed() (tamper context).
         The encoder is used by modify_field_and_forward() and replay with field edits.
 
         Args:
@@ -472,7 +472,7 @@ class ProxyAPI:
         Decode a captured frame using the currently attached protocol decoder.
 
         Args:
-            frame: Any Frame object (from get_frames() or an intercepted unit).
+            frame: Any Frame object (from get_frames() or a tampered unit).
 
         Returns:
             ParsedMessage with structured fields, offset metadata, and display values.
@@ -500,16 +500,16 @@ class ProxyAPI:
 
     async def get_next_intercepted_parsed(self) -> tuple[TamperedUnit, ParsedMessage]:
         """
-        Wait for and return the next intercepted frame, with its parsed view.
+        Wait for and return the next tampered frame, with its parsed view.
 
-        Like get_next_intercepted() but also decodes the frame using the
+        Like get_next_intercepted() but also decodes the tampered frame using the
         attached protocol decoder.
 
         Returns:
             (TamperedUnit, ParsedMessage) tuple.
 
         Raises:
-            RuntimeError: if interception is not enabled.
+            RuntimeError: if tampering is not enabled.
         """
         unit = await self.get_next_intercepted()
         msg  = self._decoder.decode(unit.frame)
@@ -521,13 +521,13 @@ class ProxyAPI:
         field_edits: dict[str, Any],
     ) -> bool:
         """
-        Re-encode an intercepted frame with field-level edits, then forward it.
+        Re-encode a tampered frame with field-level edits, then forward it.
 
         Requires an encoder to be set (via set_protocol() or set_protocol_file()).
         Falls back to raw-byte forwarding if no encoder is available.
 
         Args:
-            unit_id:     ID of the intercepted unit to act on.
+            unit_id:     ID of the tampered unit to act on.
             field_edits: Dict of field_name → new value.
                          Values can be int, str, or bytes depending on the field type.
 
@@ -637,7 +637,7 @@ class ProxyAPI:
         )
 
     # ------------------------------------------------------------------
-    # Repeater: inject into existing session OR direct send
+    # Forge: inject into existing session OR direct send
     # ------------------------------------------------------------------
 
     async def open_forge_session(
@@ -647,10 +647,10 @@ class ProxyAPI:
         tls:  bool = False,
     ) -> str:
         """
-        Open a persistent TCP connection to *host*:*port* for the Repeater.
+        Open a persistent TCP connection to *host*:*port* for Forge.
 
         Registers the connection as a session in the session registry so it
-        appears in the Logs tab and the "From session" dropdown.  The
+        appears in the Traffic tab and the "From session" dropdown.  The
         connection is kept alive between sends; it is closed (and the session
         marked CLOSED) automatically when the server drops the connection.
 
@@ -674,11 +674,11 @@ class ProxyAPI:
         packet_callback:  Optional[Callable[[bytes], None]] = None,
     ) -> ForgeRecord:
         """
-        Send *data* through an existing persistent repeater session.
+        Send *data* through an existing persistent forge session.
 
         If the server closes the connection during the send the session is
         automatically marked CLOSED and a :class:`SessionClosedEvent` is
-        fired so the Logs tab updates.
+        fired so the Traffic tab updates.
 
         Args:
             session_id:      ID returned by :meth:`open_forge_session`.
@@ -700,7 +700,7 @@ class ProxyAPI:
             packet_callback=packet_callback,
         )
 
-        # Add sent and received frames to the session so they appear in the Logs tab.
+        # Add sent and received frames to the session so they appear in the Traffic tab.
         session = self.session_registry.get(session_id)
         if session and record.sent_bytes:
             sent_frame = Frame.create(
@@ -708,7 +708,7 @@ class ProxyAPI:
                 direction=Direction.CLIENT_TO_SERVER,
                 raw_bytes=record.sent_bytes,
                 sequence_number=len(session.frames),
-                framer_name="repeater",
+                framer_name="forge",
             )
             session.add_frame(sent_frame)
             await self.event_bus.publish(
@@ -722,7 +722,7 @@ class ProxyAPI:
                     direction=Direction.SERVER_TO_CLIENT,
                     raw_bytes=pkt,
                     sequence_number=len(session.frames),
-                    framer_name="repeater",
+                    framer_name="forge",
                 )
                 session.add_frame(recv_frame)
                 await self.event_bus.publish(
@@ -744,7 +744,7 @@ class ProxyAPI:
 
         The bytes arrive on the *same* TCP connection that the real server is
         using, so the client sees them as if they came from the server.  Useful
-        for injecting server-to-client traffic during a sequencer run.
+        for injecting server-to-client traffic during a sequence run.
 
         Returns:
             ``True``  if the session was active and the write succeeded.
@@ -815,7 +815,7 @@ class ProxyAPI:
 
         Opens a direct TCP connection (bypassing the proxy listener),
         sends *data*, signals EOF, reads all response bytes, then closes
-        the connection.  Suitable for the Repeater tab's one-shot send.
+        the connection.  Suitable for the Forge tab's one-shot send.
 
         Args:
             data:             Bytes to send.
@@ -831,9 +831,9 @@ class ProxyAPI:
             :class:`~protopoke.forge.models.ForgeRecord` with sent bytes,
             response bytes, success flag, and any error message.
         """
-        # Create a one-shot session so the sent/received frames appear in the Logs tab.
+        # Create a one-shot session so the sent/received frames appear in the Traffic tab.
         session = self.session_registry.create(
-            client_host="repeater",
+            client_host="forge",
             client_port=0,
             server_host=host,
             server_port=port,
@@ -857,7 +857,7 @@ class ProxyAPI:
                 direction=Direction.CLIENT_TO_SERVER,
                 raw_bytes=record.sent_bytes,
                 sequence_number=len(session.frames),
-                framer_name="repeater",
+                framer_name="forge",
             )
             session.add_frame(sent_frame)
             await self.event_bus.publish(
@@ -870,7 +870,7 @@ class ProxyAPI:
                     direction=Direction.SERVER_TO_CLIENT,
                     raw_bytes=pkt,
                     sequence_number=len(session.frames),
-                    framer_name="repeater",
+                    framer_name="forge",
                 )
                 session.add_frame(recv_frame)
                 await self.event_bus.publish(
@@ -883,7 +883,7 @@ class ProxyAPI:
         return record
 
     # ------------------------------------------------------------------
-    # Sequencer
+    # Sequence
     # ------------------------------------------------------------------
 
     async def run_sequence(
@@ -903,7 +903,7 @@ class ProxyAPI:
           session and capture ``SERVER_TO_CLIENT`` frames within the
           configured ``response_window``.
         - **Not set**: open (or reuse) a persistent TCP connection to
-          ``seq.host:seq.port`` (with optional TLS) and use the repeater
+          ``seq.host:seq.port`` (with optional TLS) and use the forge
           session mechanism.
 
         The configured ``sequence_script`` (from :attr:`config`) is loaded
@@ -926,7 +926,7 @@ class ProxyAPI:
                 script = load_script(self.config.sequence_script)
             except Exception as exc:
                 logger.error(
-                    "Failed to load sequencer script %s: %s",
+                    "Failed to load sequence script %s: %s",
                     self.config.sequence_script, exc,
                 )
 
@@ -944,19 +944,19 @@ class ProxyAPI:
             _src_id = seq.source_session_id
 
             async def send_fn(data: bytes, direction: str = "client_to_server") -> list[bytes]:
-                # Apply replace rules with sequencer scope before sending
+                # Apply replace rules with sequence scope before sending
                 _dir = (
                     Direction.CLIENT_TO_SERVER
                     if direction == "client_to_server"
                     else Direction.SERVER_TO_CLIENT
                 )
-                data = self.rules_engine.apply_bytes(data, _dir, scope="sequencer")
+                data = self.rules_engine.apply_bytes(data, _dir, scope="sequence")
                 send_time = _time.time()
                 if direction == "server_to_client":
                     ok = await self.inject_to_client(_src_id, data)
                     if not ok:
                         logger.warning(
-                            "Sequencer: inject_to_client on %s failed", _src_id[:8]
+                            "Sequence: inject_to_client on %s failed", _src_id[:8]
                         )
                         return []
                     # Collect client-to-server frames that arrive after injection
@@ -974,7 +974,7 @@ class ProxyAPI:
                     ok = await self.inject_to_server(_src_id, data)
                     if not ok:
                         logger.warning(
-                            "Sequencer: inject_to_server on %s failed", _src_id[:8]
+                            "Sequence: inject_to_server on %s failed", _src_id[:8]
                         )
                         return []
                     await _asyncio.sleep(seq.response_window)
@@ -989,7 +989,7 @@ class ProxyAPI:
                     ]
 
         else:
-            # New / persistent connection via the repeater session pool.
+            # New / persistent connection via the forge session pool.
             # server_to_client direction is not supported without an active proxy
             # session; log a warning and skip the response wait.
             _conn_id: list[Optional[str]] = [None]  # mutable cell
@@ -997,14 +997,14 @@ class ProxyAPI:
             async def send_fn(data: bytes, direction: str = "client_to_server") -> list[bytes]:  # type: ignore[misc]
                 if direction == "server_to_client":
                     logger.warning(
-                        "Sequencer: server_to_client step requires a linked proxy "
+                        "Sequence: server_to_client step requires a linked proxy "
                         "session (set Session ID in the run bar); skipping step."
                     )
                     return []
 
-                # Apply replace rules with sequencer scope before sending
+                # Apply replace rules with sequence scope before sending
                 _dir = Direction.CLIENT_TO_SERVER
-                data = self.rules_engine.apply_bytes(data, _dir, scope="sequencer")
+                data = self.rules_engine.apply_bytes(data, _dir, scope="sequence")
 
                 # Verify the persistent connection is still alive
                 if _conn_id[0]:
@@ -1019,7 +1019,7 @@ class ProxyAPI:
                             seq.host, seq.port, seq.tls
                         )
                     except ConnectionError as exc:
-                        logger.error("Sequencer: cannot connect: %s", exc)
+                        logger.error("Sequence: cannot connect: %s", exc)
                         return []
 
                 record = await self.send_on_forge_session(
@@ -1055,39 +1055,39 @@ class ProxyAPI:
         return self.rules_engine.rules
 
     # ------------------------------------------------------------------
-    # Intercept rules management
+    # Tamper rules management
     # ------------------------------------------------------------------
 
-    def add_intercept_rule(self, rule: TamperRule) -> None:
-        """Append an intercept rule to the active TamperFilter."""
+    def add_tamper_rule(self, rule: TamperRule) -> None:
+        """Append a tamper rule to the active TamperFilter."""
         self.tamper_filter.add_rule(rule)
 
-    def remove_intercept_rule(self, rule_id: str) -> bool:
-        """Remove an intercept rule by ID. Returns ``True`` if found."""
+    def remove_tamper_rule(self, rule_id: str) -> bool:
+        """Remove a tamper rule by ID. Returns ``True`` if found."""
         return self.tamper_filter.remove_rule(rule_id)
 
-    def list_intercept_rules(self) -> list[TamperRule]:
-        """Snapshot of active intercept rules (ordered)."""
+    def list_tamper_rules(self) -> list[TamperRule]:
+        """Snapshot of active tamper rules (ordered)."""
         return self.tamper_filter.rules
 
     @property
     def tamper_direction_filter(self) -> "Optional[Direction]":
-        """Direction filter on the intercept controller, or ``None``."""
+        """Direction filter on the tamper controller, or ``None``."""
         return self._tamper_controller.direction_filter
 
     @tamper_direction_filter.setter
     def tamper_direction_filter(self, value: "Optional[Direction]") -> None:
-        """Set the direction filter on the intercept controller."""
+        """Set the direction filter on the tamper controller."""
         self._tamper_controller.direction_filter = value
 
     @property
     def tamper_session_filter(self) -> "Optional[set[str]]":
-        """Session ID filter on the intercept controller, or ``None``."""
+        """Session ID filter on the tamper controller, or ``None``."""
         return self._tamper_controller.session_filter
 
     @tamper_session_filter.setter
     def tamper_session_filter(self, value: "Optional[set[str]]") -> None:
-        """Set the session ID filter on the intercept controller."""
+        """Set the session ID filter on the tamper controller."""
         self._tamper_controller.session_filter = value
 
     # ------------------------------------------------------------------

@@ -1,8 +1,8 @@
 # ProtoPoke
 
-A personal TCP interception and replay tool — think Burp Suite for arbitrary binary protocols.
+A personal TCP tamper and forge tool — think Burp Suite for arbitrary binary protocols.
 
-Proxy any TCP connection, capture traffic in both directions, pause and inspect frames, modify or drop them live, and replay captured sessions against a server. Load a YAML protocol definition and frames are automatically decoded into named fields with a Wireshark-style hex + tree view, and you can edit individual fields by name during intercept or replay.
+Proxy any TCP connection, capture traffic in both directions, pause and inspect frames, modify or drop them live, and forge/replay captured sessions against a server. Load a YAML protocol definition and frames are automatically decoded into named fields with a Wireshark-style hex + tree view, and you can edit individual fields by name during intercept or replay.
 
 This is a personal security research tool. It prioritises **readability, extensibility, and hackability** over throughput.
 
@@ -24,7 +24,7 @@ This is a personal security research tool. It prioritises **readability, extensi
 - **Protocol parser** — automatically decode frames into named, typed fields with offset and size metadata
 - **Three match strategies** — identify packet types by magic bytes, by stream sequence position, or with a catch-all
 - **Rich field types** — integers (u/int 8/16/32/64, float), raw bytes, strings (UTF-8/ASCII/UTF-16), bitfields, length-prefixed arrays, TLV sequences
-- **Field-level intercept editing** — modify a single field by name, length fields auto-recomputed on encode
+- **Field-level tamper editing** — modify a single field by name, length fields auto-recomputed on encode
 - **Field-level replay** — replay with per-message-type field edits, no manual frame ID tracking needed
 - **Wireshark-style display** — hex dump with per-field ANSI colour highlights + nested field tree panel
 - **Fuzzing** — replay-based fuzzing with a round-robin mutator pipeline; built-in raw mutators (bit-flip, byte insert/delete, known-bad payloads, radamsa) and protocol-aware mutators (field boundary values, overflow, null-byte injection, length mangling); automatic baseline capture and anomaly detection (crash, timeout, response size delta); extensible via a single-method `FrameMutator` ABC
@@ -143,7 +143,7 @@ Projects save your proxy config, tamper/replace rules, and forge requests to a J
 
 ## MCP Server
 
-ProtoPoke exposes all proxy operations as [Model Context Protocol](https://modelcontextprotocol.io/) tools. Once connected, an AI assistant can fully control the proxy — inspect sessions, intercept and modify frames live, replay traffic with field edits, manage rules, and more — all through natural conversation.
+ProtoPoke exposes all proxy operations as [Model Context Protocol](https://modelcontextprotocol.io/) tools. Once connected, an AI assistant can fully control the proxy — inspect sessions, tamper and modify frames live, forge/replay traffic with field edits, manage rules, and more — all through natural conversation.
 
 ### What the AI can do
 
@@ -194,7 +194,7 @@ protopoke --mcp --upstream-host 10.0.0.1 --upstream-port 9090
 | `--listen-port PORT` | `8080` | Proxy listen port |
 | `--upstream-host HOST` | `127.0.0.1` | Target host to forward to |
 | `--upstream-port PORT` | `9090` | Target port to forward to |
-| `--intercept` | off | Enable tamper mode on startup |
+| `--tamper` | off | Enable tamper mode on startup |
 | `--tls-listen` | off | Terminate TLS on the client side (MITM mode) |
 | `--tls-upstream` | off | Connect to upstream over TLS |
 | `--no-tls-verify` | off | Accept any upstream TLS certificate |
@@ -228,7 +228,7 @@ Add a `protopoke` entry to your Claude Desktop MCP configuration file:
 }
 ```
 
-With TLS interception and a protocol definition:
+With TLS and a protocol definition:
 
 ```json
 {
@@ -241,7 +241,7 @@ With TLS interception and a protocol definition:
         "--tls-listen",
         "--tls-upstream",
         "--protocol", "/path/to/myproto.yaml",
-        "--intercept"
+        "--tamper"
       ]
     }
   }
@@ -298,7 +298,7 @@ async def main():
                 "--upstream-host", "10.0.0.1",
                 "--upstream-port", "9090",
                 "--listen-port",   "8080",
-                "--intercept",
+                "--tamper",
             ],
         },
     ) as mcp_server:
@@ -322,7 +322,7 @@ async def main():
 asyncio.run(main())
 ```
 
-The agent automatically discovers all ProtoPoke tools (list_sessions, get_frames, intercept_toggle, add_intercept_rule, replay_session, etc.) and can call them as needed.
+The agent automatically discovers all ProtoPoke tools (list_sessions, get_frames, tamper_toggle, add_tamper_rule, forge_session, etc.) and can call them as needed.
 
 ---
 
@@ -341,7 +341,7 @@ async def main():
         listen_port=8080,
         upstream_host="10.0.0.1",
         upstream_port=9090,
-        intercept_enabled=True,
+        tamper_enabled=True,
         protocol_definition_path="myproto.yaml",
     )
     api = ProxyAPI(config)
@@ -359,9 +359,9 @@ asyncio.run(main())
 |---|---|
 | Proxy lifecycle | `proxy_status`, `proxy_start`, `proxy_stop` |
 | Sessions | `list_sessions`, `get_session`, `get_frames`, `decode_frames` |
-| Tamper | `intercept_status`, `intercept_toggle`, `list_intercepted`, `intercept_forward`, `intercept_drop`, `intercept_modify_and_forward` |
+| Tamper | `tamper_status`, `tamper_toggle`, `list_intercepted`, `tamper_forward`, `tamper_drop`, `tamper_modify_and_forward` |
 | Replace rules | `list_replace_rules`, `add_replace_rule`, `remove_replace_rule` |
-| Tamper rules | `list_intercept_rules`, `add_intercept_rule`, `remove_intercept_rule` |
+| Tamper rules | `list_tamper_rules`, `add_tamper_rule`, `remove_tamper_rule` |
 | Forge | `send_frame` |
 | Replay | `replay_session` |
 | Fuzzing | `fuzz_start`, `fuzz_status`, `fuzz_results`, `fuzz_stop`, `list_campaigns` |
@@ -381,29 +381,29 @@ asyncio.run(main())
 | | `decode_frames` | All frames decoded using the loaded protocol decoder |
 | | `decode_frame_by_id` | Decode one specific frame into named, typed fields |
 | | `search_frames` | Binary pattern search across all (or one) session(s) |
-| **Tamper** | `intercept_status` | Enabled flag, queue depth, active filters |
-| | `intercept_toggle` | Enable or disable interception |
+| **Tamper** | `tamper_status` | Enabled flag, queue depth, active filters |
+| | `tamper_toggle` | Enable or disable tampering |
 | | `list_intercepted` | All frames currently waiting for a verdict |
-| | `intercept_decode_pending` | Pending frames with their parsed protocol view |
-| | `intercept_forward` | Forward a frame as-is |
-| | `intercept_drop` | Drop a frame (do not forward) |
-| | `intercept_modify_and_forward` | Replace payload bytes and forward |
-| | `intercept_modify_field_and_forward` | Edit named protocol fields and forward (auto-recomputes lengths) |
-| | `intercept_forward_all` | Forward all pending frames at once |
-| | `intercept_set_direction_filter` | Restrict interception to one direction |
-| | `intercept_set_session_filter` | Restrict interception to specific sessions |
+| | `tamper_decode_pending` | Pending frames with their parsed protocol view |
+| | `tamper_forward` | Forward a frame as-is |
+| | `tamper_drop` | Drop a frame (do not forward) |
+| | `tamper_modify_and_forward` | Replace payload bytes and forward |
+| | `tamper_modify_field_and_forward` | Edit named protocol fields and forward (auto-recomputes lengths) |
+| | `tamper_forward_all` | Forward all pending frames at once |
+| | `tamper_set_direction_filter` | Restrict tampering to one direction |
+| | `tamper_set_session_filter` | Restrict tampering to specific sessions |
 | **Replace rules** | `list_replace_rules` | All replace rules in evaluation order |
 | | `add_replace_rule` | Add a binary find-and-replace rule |
 | | `update_replace_rule` | Toggle enabled state or rename a rule |
 | | `remove_replace_rule` | Remove a rule by ID |
 | | `reorder_replace_rule` | Move a rule to a different position |
 | | `clear_replace_rules` | Remove all replace rules |
-| **Tamper rules** | `list_intercept_rules` | All tamper rules in evaluation order |
-| | `add_intercept_rule` | Add a filter rule (intercept or forward action) |
-| | `update_intercept_rule` | Toggle, rename, or flip the action of a rule |
-| | `remove_intercept_rule` | Remove a rule by ID |
-| | `reorder_intercept_rule` | Move a rule to a different priority position |
-| | `clear_intercept_rules` | Remove all intercept rules |
+| **Tamper rules** | `list_tamper_rules` | All tamper rules in evaluation order |
+| | `add_tamper_rule` | Add a filter rule (intercept or forward action) |
+| | `update_tamper_rule` | Toggle, rename, or flip the action of a rule |
+| | `remove_tamper_rule` | Remove a rule by ID |
+| | `reorder_tamper_rule` | Move a rule to a different priority position |
+| | `clear_tamper_rules` | Remove all intercept rules |
 | **Protocol** | `set_protocol_file` | Load a YAML/JSON protocol definition file |
 | | `set_protocol_dict` | Load a protocol definition from an inline dict |
 | | `get_protocol_info` | Currently loaded decoder/encoder names and status |
@@ -937,13 +937,13 @@ A DNS over TCP example is at `examples/protocols/dns.proto.yaml`.
 
 TCP is a **byte stream** — the OS delivers bytes in arbitrary chunks that bear no relation to the application's message boundaries. A single `read()` may return half a message, exactly one message, or three messages fused together.
 
-The framer is the **first processing phase** for every byte that arrives on a proxied connection. Its job is to cut the raw stream into discrete, atomic units called **frames** — one frame = one complete application-level message. Everything downstream (intercept, protocol dissection, replay, fuzzing) operates on frames, so getting the framing right is the prerequisite for everything else.
+The framer is the **first processing phase** for every byte that arrives on a proxied connection. Its job is to cut the raw stream into discrete, atomic units called **frames** — one frame = one complete application-level message. Everything downstream (tamper, protocol dissection, forge/replay, fuzzing) operates on frames, so getting the framing right is the prerequisite for everything else.
 
 ProtoPoke runs one framer instance per direction per session:
 
 ```
-client ──bytes──▶ [client→server framer] ──frames──▶ intercept / dissect / log
-server ──bytes──▶ [server→client framer] ──frames──▶ intercept / dissect / log
+client ──bytes──▶ [client→server framer] ──frames──▶ tamper / dissect / log
+server ──bytes──▶ [server→client framer] ──frames──▶ tamper / dissect / log
 ```
 
 ---
@@ -1240,7 +1240,7 @@ async def main():
     api = ProxyAPI(config)
     await api.serve_forever()          # blocks here; Ctrl-C to exit
 
-# Proxy + intercept loop — use start() so both can run concurrently
+# Proxy + tamper loop — use start() so both can run concurrently
 async def main():
     api = ProxyAPI(config)
     await api.start()
@@ -1318,7 +1318,7 @@ async def main():
         listen_port=8080,
         upstream_host="10.0.0.1",
         upstream_port=9090,
-        intercept_enabled=True,
+        tamper_enabled=True,
     )
     api = ProxyAPI(config)
     await api.start()
@@ -1346,10 +1346,10 @@ asyncio.run(main())
 
 ```python
 # Disable — all pending frames are immediately forwarded
-api.intercept_enabled = False
+api.tamper_enabled = False
 
 # Re-enable
-api.intercept_enabled = True
+api.tamper_enabled = True
 
 # Forward everything currently queued (without disabling)
 api.forward_all()
@@ -2096,7 +2096,7 @@ For TLS interception the proxy must terminate TLS on both sides independently so
 
 - **TLS MITM** ✅ — auto-CA generation, per-session leaf certs, configurable upstream verify, manual cert override
 - **Protocol definition DSL** ✅ — YAML/JSON; magic, sequence, and always match rules; rich field types; enum labels
-- **Field-level intercept editing** ✅ — `modify_field_and_forward()` re-encodes with field name → value dict; length fields auto-recomputed
+- **Field-level tamper editing** ✅ — `modify_field_and_forward()` re-encodes with field name → value dict; length fields auto-recomputed
 - **Field-level replay** ✅ — `replay_session_with_field_edits()` applies per-message-type field edits
 - **Wireshark-style display** ✅ — `render_hexdump()` with ANSI highlights, `render_field_tree()`, `render_frame_header()`
 - **Tamper / replace rules** ✅ — ordered, filterable, first-match-wins tamper rules; byte-pattern replace rules

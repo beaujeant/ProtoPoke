@@ -13,7 +13,7 @@ Layout:
 
 "Flags" column shows: C=crash (TCP RST), T=timeout, ★=interesting.
 
-Clicking a result row opens the mutated bytes in the Repeater tab.
+Clicking a result row opens the mutated bytes in the Forge tab.
 """
 
 from __future__ import annotations
@@ -300,7 +300,7 @@ class FuzzerTab(Widget):
         dt.move_cursor(row=dt.row_count - 1)
 
     # ------------------------------------------------------------------
-    # Row selection → send to Repeater
+    # Row selection → send to Forge
     # ------------------------------------------------------------------
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -312,7 +312,7 @@ class FuzzerTab(Widget):
         # (app will need to expose this; for now notify the user)
         self.notify(
             f"Result {result_id[:8]} selected — "
-            "use Repeater to replay mutated bytes manually.",
+            "use Forge to replay mutated bytes manually.",
             severity="information",
         )
 

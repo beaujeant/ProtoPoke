@@ -1,4 +1,4 @@
-"""Tests for the Sequencer feature."""
+"""Tests for the Sequence feature."""
 
 from __future__ import annotations
 

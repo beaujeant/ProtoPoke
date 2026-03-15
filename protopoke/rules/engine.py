@@ -85,14 +85,14 @@ class RulesEngine:
                 return True
         return False
 
-    def apply(self, frame: Frame, scope: str = "intercept") -> bytes:
+    def apply(self, frame: Frame, scope: str = "tamper") -> bytes:
         """
         Apply all matching rules to *frame* and return the resulting bytes.
 
         Args:
             frame: The frame whose bytes will be transformed.
-            scope: Pipeline stage — ``"intercept"`` (default), ``"repeater"``,
-                   or ``"sequencer"``.  Rules whose corresponding
+            scope: Pipeline stage — ``"tamper"`` (default), ``"forge"``,
+                   or ``"sequence"``.  Rules whose corresponding
                    ``apply_to_*`` flag is ``False`` are skipped.
 
         Returns the original ``frame.raw_bytes`` if no enabled rule matches.
@@ -121,7 +121,7 @@ class RulesEngine:
         """
         Apply all matching rules to raw *data* (no Frame object).
 
-        Used by the Repeater and Sequencer pipelines where frames are
+        Used by the Forge and Sequence pipelines where frames are
         not yet (or not) tracked in a session.
 
         Args:
@@ -129,7 +129,7 @@ class RulesEngine:
             direction: Direction the data will be sent in, used for
                        per-direction rule filters.  Pass ``None`` to
                        match rules that have no direction filter.
-            scope:     ``"repeater"`` or ``"sequencer"``.
+            scope:     ``"forge"`` or ``"sequence"``.
 
         Returns the (possibly modified) bytes.
         """
@@ -239,7 +239,7 @@ class TamperFilter:
         for rule in self._rules:
             if rule.matches_frame(frame):
                 logger.debug(
-                    "Intercept rule %r matched frame %s (action=%s)",
+                    "Tamper rule %r matched frame %s (action=%s)",
                     rule.label, frame.id[:8], rule.action.value,
                 )
                 return rule.action
