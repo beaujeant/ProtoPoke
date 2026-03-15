@@ -298,12 +298,17 @@ class LogsTab(Widget):
                 return
 
     _COL_KEYS = ("seq", "dir", "len", "framer", "preview")
-    _SELECTED_STYLE = "bold on dark_blue"
+    _SELECTED_STYLE = "bold"
 
     def _highlight_selection(self) -> None:
-        """Apply / remove Rich Text highlight on rows that changed selection state."""
+        """Apply / remove bold styling on multi-selected rows.
+
+        When only a single row is selected the DataTable cursor already
+        provides a blue highlight, so no extra styling is applied.
+        """
         dt = self.query_one("#frames-table", DataTable)
-        new_sel = set(self._selected_frame_ids)
+        # If 0 or 1 selected, clear any previous highlights and bail out.
+        new_sel = set(self._selected_frame_ids) if len(self._selected_frame_ids) > 1 else set()
         to_style   = new_sel - self._prev_highlighted
         to_unstyle = self._prev_highlighted - new_sel
 
