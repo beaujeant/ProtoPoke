@@ -184,8 +184,9 @@ class LogsTab(Widget):
 
         # Frames table
         fdt = self.query_one("#frames-table", DataTable)
-        fdt.add_column("#",       key="seq")
-        fdt.add_column("Dir",     key="dir")
+        fdt.add_column("→#",  key="seq_c2s")
+        fdt.add_column("←#",  key="seq_s2c")
+        fdt.add_column("Dir", key="dir")
         fdt.add_column("Len",     key="len")
         fdt.add_column("Framer",  key="framer")
         fdt.add_column("Preview", key="preview")
@@ -261,12 +262,16 @@ class LogsTab(Widget):
             self._update_frames_label()
 
     def _add_frame_row(self, dt: DataTable, frame: Frame) -> None:
-        direction = "→" if frame.direction is Direction.CLIENT_TO_SERVER else "←"
+        is_c2s    = frame.direction is Direction.CLIENT_TO_SERVER
+        seq_c2s   = str(frame.sequence_number) if is_c2s else ""
+        seq_s2c   = str(frame.sequence_number) if not is_c2s else ""
+        direction = "→" if is_c2s else "←"
         preview   = frame.raw_bytes[:24].hex()
         if len(frame.raw_bytes) > 24:
             preview += "…"
         values = (
-            str(frame.sequence_number),
+            seq_c2s,
+            seq_s2c,
             direction,
             str(len(frame.raw_bytes)),
             frame.framer_name,
