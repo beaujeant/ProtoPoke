@@ -48,6 +48,11 @@ class RuleTable(Widget, Generic[R]):
     RuleTable Button {
         margin-left: 1;
     }
+    RuleTable #btn-up,
+    RuleTable #btn-down {
+        min-width: 5;
+        width: 5;
+    }
     """
 
     def __init__(
@@ -82,14 +87,14 @@ class RuleTable(Widget, Generic[R]):
         with Vertical():
             yield DataTable(id="rule-dt", cursor_type="row")
             with Horizontal(classes="rule-buttons"):
+                if self._on_move_up:
+                    yield Button("↑", id="btn-up",   flat=True)
+                if self._on_move_down:
+                    yield Button("↓", id="btn-down", flat=True)
                 yield Button("+ Add",    variant="success", id="btn-add",    flat=True)
                 yield Button("✖ Remove", variant="error",   id="btn-remove", flat=True)
                 if self._on_edit:
                     yield Button("✎ Edit", variant="primary", id="btn-edit", flat=True)
-                if self._on_move_up:
-                    yield Button("↑ Up",   id="btn-up",   flat=True)
-                if self._on_move_down:
-                    yield Button("↓ Down", id="btn-down", flat=True)
                 if self._on_toggle:
                     yield Button("⏻ Toggle", id="btn-toggle", flat=True)
                 if self._on_reset:

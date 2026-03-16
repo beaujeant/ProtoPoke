@@ -166,8 +166,8 @@ class ForgeTab(Widget):
 
         with Horizontal(classes="playbook-controls"):
             yield Button("+ New",    id="btn-new-pb",    variant="success", flat=True)
-            yield Button("- Delete", id="btn-delete-pb", variant="error",   flat=True)
-            yield Button("Edit",     id="btn-edit-pb",   flat=True)
+            yield Button("✖ Remove", id="btn-delete-pb", variant="error",   flat=True)
+            yield Button("✎ Edit",   id="btn-edit-pb",   variant="primary", flat=True)
             yield Button("Import",   id="btn-import-pb", flat=True)
             yield Button("Export",   id="btn-export-pb", flat=True)
 
@@ -180,8 +180,8 @@ class ForgeTab(Widget):
                         yield Button("↑",  id="btn-frame-up",   flat=True)
                         yield Button("↓",  id="btn-frame-down", flat=True)
                         yield Button("+ Add",    id="btn-frame-add",    variant="success", flat=True)
-                        yield Button("- Remove", id="btn-frame-remove", variant="error",   flat=True)
-                        yield Button("Edit",     id="btn-frame-edit",   flat=True)
+                        yield Button("✖ Remove", id="btn-frame-remove", variant="error",   flat=True)
+                        yield Button("✎ Edit",   id="btn-frame-edit",   variant="primary", flat=True)
                 with Vertical(id="frame-editor-pane"):
                     with Horizontal(classes="pane-header"):
                         yield Static(

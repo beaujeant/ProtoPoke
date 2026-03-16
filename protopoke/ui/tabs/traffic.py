@@ -155,7 +155,7 @@ class TrafficTab(Widget):
             with Horizontal(classes="toolbar"):
                 yield Static("  Sessions")
                 yield Button("✖ Terminate", id="btn-terminate-session", variant="warning", flat=True)
-                yield Button("✗ Delete",    id="btn-delete-session",    variant="error", flat=True)
+                yield Button("✖ Remove",    id="btn-delete-session",    variant="error", flat=True)
             yield DataTable(id="sessions-table", cursor_type="row")
 
         # Frames pane
