@@ -133,28 +133,6 @@ class ProxyConfig:
     custom_framer_path: Optional[str] = None
 
     # ------------------------------------------------------------------
-    # Sequence script
-    # ------------------------------------------------------------------
-
-    # Path to a Python file used by the Sequence engine to extract variables
-    # from server responses and optionally transform outgoing packets.
-    #
-    # The script may define two optional hooks:
-    #
-    #   def on_response(response: bytes, variables: dict,
-    #                   frame_idx: int, frame_label: str) -> None:
-    #       """Called after each server response. Mutate variables in-place."""
-    #
-    #   def on_send(data: bytes, variables: dict,
-    #               frame_idx: int, frame_label: str) -> bytes:
-    #       """Called before each send (after {{VAR}} substitution).
-    #       Return the bytes to actually transmit."""
-    #
-    # Both hooks are optional. Leave this field None to run the Sequence
-    # without any script (##VAR## substitution still works for pre-set vars).
-    sequence_script: Optional[str] = None
-
-    # ------------------------------------------------------------------
     # Serialisation
     # ------------------------------------------------------------------
 

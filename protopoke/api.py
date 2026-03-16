@@ -77,7 +77,7 @@ from .fuzzing.models import FuzzCampaign, FuzzResult
 from .fuzzing.engine import FuzzerEngine
 from .fuzzing.mutators.base import FrameMutator
 from .sequence.models import HistoryEntry, SequenceSession
-from .sequence.engine import SequenceEngine, load_script
+from .sequence.engine import SequenceEngine
 
 logger = logging.getLogger(__name__)
 
@@ -906,10 +906,6 @@ class ProxyAPI:
           ``seq.host:seq.port`` (with optional TLS) and use the forge
           session mechanism.
 
-        The configured ``sequence_script`` (from :attr:`config`) is loaded
-        once and its ``on_response`` / ``on_send`` hooks are called around
-        each step.
-
         Args:
             seq:      The sequence to run.  Updated in-place (history, variables).
             on_entry: Optional callback invoked immediately after each
@@ -918,17 +914,6 @@ class ProxyAPI:
         """
         import asyncio as _asyncio
         import time as _time
-
-        # Load script once (if configured)
-        script = None
-        if self.config.sequence_script:
-            try:
-                script = load_script(self.config.sequence_script)
-            except Exception as exc:
-                logger.error(
-                    "Failed to load sequence script %s: %s",
-                    self.config.sequence_script, exc,
-                )
 
         engine = SequenceEngine()
 
@@ -1036,7 +1021,7 @@ class ProxyAPI:
 
                 return record.response_packets
 
-        await engine.run(seq, send_fn=send_fn, script=script, on_entry=on_entry)
+        await engine.run(seq, send_fn=send_fn, on_entry=on_entry)
 
     # ------------------------------------------------------------------
     # Replace rules management
