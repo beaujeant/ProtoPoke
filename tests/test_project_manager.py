@@ -8,7 +8,7 @@ import zipfile
 import pytest
 
 from protopoke.config import ProxyConfig
-from protopoke.rules.rule import ReplaceRule, TamperRule, RuleAction
+from protopoke.rules.rule import ReplaceRule, InterceptRule, RuleAction
 from protopoke.forge.models import ForgeRequest, ForgeRecord
 from protopoke.project.manager import ProjectManager, ProjectState
 
@@ -78,16 +78,16 @@ class TestProjectManager:
         assert len(state.rules_engine.rules) == 1
         assert state.rules_engine.rules[0].label == "r1"
 
-    def test_open_loads_tamper_rules(self, tmp_path):
+    def test_open_loads_intercept_rules(self, tmp_path):
         pm = ProjectManager()
-        rule = TamperRule.create("catch", "FF", RuleAction.FORWARD)
-        pm.tamper_filter.add_rule(rule)
+        rule = InterceptRule.create("catch", "FF", RuleAction.FORWARD)
+        pm.intercept_filter.add_rule(rule)
         pm.save_as(tmp_path / "p.pp")
 
         pm2 = ProjectManager()
         state = pm2.open(tmp_path / "p.pp")
-        assert len(state.tamper_filter.rules) == 1
-        assert state.tamper_filter.rules[0].action == RuleAction.FORWARD
+        assert len(state.intercept_filter.rules) == 1
+        assert state.intercept_filter.rules[0].action == RuleAction.FORWARD
 
     def test_open_loads_forge_requests(self, tmp_path):
         pm = ProjectManager()

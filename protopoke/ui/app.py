@@ -122,7 +122,7 @@ class ProtoPoke(App):
         self.api = ProxyAPI(
             config=self._project.config,
             rules_engine=self._project.rules_engine,
-            tamper_filter=self._project.tamper_filter,
+            intercept_filter=self._project.intercept_filter,
         )
 
         self._proxy_running = False
@@ -151,8 +151,8 @@ class ProtoPoke(App):
     def on_mount(self) -> None:
         self._register_event_handlers()
         self._update_title()
-        # Start polling the tamper queue in the background
-        self.set_interval(0.2, self._poll_tamper_queue)
+        # Start polling the intercept queue in the background
+        self.set_interval(0.2, self._poll_intercept_queue)
 
     # ------------------------------------------------------------------
     # Proxy event → Textual message bridge
@@ -201,8 +201,8 @@ class ProtoPoke(App):
     # Tamper queue polling
     # ------------------------------------------------------------------
 
-    async def _poll_tamper_queue(self) -> None:
-        """Drain any newly queued tampered units and post them to the UI."""
+    async def _poll_intercept_queue(self) -> None:
+        """Drain any newly queued intercepted units and post them to the UI."""
         for unit in self.api.list_intercepted():
             tamper_tab = self.query_one("#tamper-tab", TamperTab)
             if unit.id not in tamper_tab._units:
@@ -590,7 +590,7 @@ class ProtoPoke(App):
         self.api = ProxyAPI(
             config=self._project.config,
             rules_engine=self._project.rules_engine,
-            tamper_filter=self._project.tamper_filter,
+            intercept_filter=self._project.intercept_filter,
         )
         self._register_event_handlers()
         self._proxy_running = False
@@ -600,7 +600,7 @@ class ProtoPoke(App):
         self.api = ProxyAPI(
             config=state.config,
             rules_engine=state.rules_engine,
-            tamper_filter=state.tamper_filter,
+            intercept_filter=state.intercept_filter,
         )
         self._register_event_handlers()
         self._proxy_running = False

@@ -4,8 +4,12 @@ from .rule import (
     PatternError,
     RuleAction,
     ReplaceRule,
-    TamperRule,
+    InterceptRule,
     compile_binary_pattern,
     pattern_to_display,
 )
-from .engine import RulesEngine, TamperFilter
+from .engine import RulesEngine, InterceptFilter
+
+# Backward-compatibility aliases
+TamperRule = InterceptRule
+TamperFilter = InterceptFilter

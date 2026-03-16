@@ -33,9 +33,9 @@ class ForgeTab(Widget):
       ├─────────────────────────────────────────┤
       │ [+ New]  [Edit (E)]             h=3     │  req-controls
       ├──────────────────────┬──────────────────┤
-      │ Hex editor (editable)│ Response packets  │  editor pane
+      │ Hex editor (editable)│ Response frames   │  editor pane
       │                      │ ┌──────────────┐ │
-      │                      │ │ packet list  │ │
+      │                      │ │ frame list   │ │
       │                      │ ├──────────────┤ │
       │                      │ │ hex viewer   │ │
       │                      │ └──────────────┘ │
@@ -167,13 +167,13 @@ class ForgeTab(Widget):
         with Horizontal(id="editor-pane"):
             with Vertical(id="request-editor"):
                 with Horizontal(classes="pane-header"):
-                    yield Static("  Request (editable)", markup=False)
+                    yield Static("  Frame Editor", markup=False)
                     yield Button("HEX", id="btn-req-mode", compact=True)
                 yield TextArea("", id="req-editor")
             with Vertical(id="response-view"):
                 yield Static("  Response frames  ↓ server→client", classes="pane-header")
                 yield DataTable(id="resp-packets-table", cursor_type="row")
-                yield Static("  Packet view (hex)", classes="pane-header")
+                yield Static("  Frame View (hex)", classes="pane-header")
                 yield TextArea("", id="resp-view", read_only=True)
 
         # Action bar

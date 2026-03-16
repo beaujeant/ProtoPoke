@@ -12,7 +12,7 @@ It wires together all the internal components and exposes a clean facade:
 
     Tamper control:
         tamper_enabled (property, settable)
-        get_next_intercepted() — blocks until a frame is held in tamper queue
+        get_next_intercepted() — blocks until a frame is held in intercept queue
         list_intercepted() — snapshot of pending queue
         forward(), drop(), modify_and_forward() — verdict shortcuts
 
@@ -69,8 +69,8 @@ from .events.bus import (
 from .tamper.controller import QueuedTamperController
 from .forge.engine import ForgeEngine, ForgeResult
 from .forge.models import ForgeRecord, ForgeRequest
-from .rules.engine import RulesEngine, TamperFilter
-from .rules.rule import ReplaceRule, TamperRule
+from .rules.engine import RulesEngine, InterceptFilter
+from .rules.rule import ReplaceRule, InterceptRule
 from .storage.base import StorageBackend, NullStorageBackend
 from .protocol.base import ProtocolDecoder, ProtocolEncoder, PassthroughDecoder
 from .fuzzing.models import FuzzCampaign, FuzzResult
@@ -94,8 +94,8 @@ class ProxyAPI:
         self,
         config:           ProxyConfig,
         storage:          Optional[StorageBackend] = None,
-        rules_engine:     Optional[RulesEngine]    = None,
-        tamper_filter: Optional[TamperFilter] = None,
+        rules_engine:      Optional[RulesEngine]     = None,
+        intercept_filter:  Optional[InterceptFilter] = None,
     ) -> None:
         self.config = config
 
@@ -104,16 +104,16 @@ class ProxyAPI:
         self.session_registry = SessionRegistry()
         self.storage          = storage or NullStorageBackend()
 
-        # Rules engines (replace rules + tamper rules)
-        self.rules_engine     = rules_engine     or RulesEngine()
-        self.tamper_filter = tamper_filter or TamperFilter()
+        # Rules engines (replace rules + intercept rules)
+        self.rules_engine     = rules_engine      or RulesEngine()
+        self.intercept_filter = intercept_filter  or InterceptFilter()
 
         # Always use QueuedTamperController; config.tamper_enabled sets
         # the initial on/off state so it can be toggled at any time.
         self._tamper_controller: QueuedTamperController
         self._tamper_controller = QueuedTamperController(
             tamper_enabled=config.tamper_enabled,
-            tamper_filter=self.tamper_filter,
+            intercept_filter=self.intercept_filter,
         )
 
         # Core engine (passes rules_engine to relay)
@@ -326,7 +326,7 @@ class ProxyAPI:
         """
         Wait for and return the next tampered frame.
 
-        Blocks until a frame arrives in the tamper queue.
+        Blocks until a frame arrives in the intercept queue.
 
         Raises:
             RuntimeError: if tampering is not enabled.
@@ -1055,20 +1055,20 @@ class ProxyAPI:
         return self.rules_engine.rules
 
     # ------------------------------------------------------------------
-    # Tamper rules management
+    # Intercept rules management
     # ------------------------------------------------------------------
 
-    def add_tamper_rule(self, rule: TamperRule) -> None:
-        """Append a tamper rule to the active TamperFilter."""
-        self.tamper_filter.add_rule(rule)
+    def add_intercept_rule(self, rule: InterceptRule) -> None:
+        """Append an intercept rule to the active InterceptFilter."""
+        self.intercept_filter.add_rule(rule)
 
-    def remove_tamper_rule(self, rule_id: str) -> bool:
-        """Remove a tamper rule by ID. Returns ``True`` if found."""
-        return self.tamper_filter.remove_rule(rule_id)
+    def remove_intercept_rule(self, rule_id: str) -> bool:
+        """Remove an intercept rule by ID. Returns ``True`` if found."""
+        return self.intercept_filter.remove_rule(rule_id)
 
-    def list_tamper_rules(self) -> list[TamperRule]:
-        """Snapshot of active tamper rules (ordered)."""
-        return self.tamper_filter.rules
+    def list_intercept_rules(self) -> list[InterceptRule]:
+        """Snapshot of active intercept rules (ordered)."""
+        return self.intercept_filter.rules
 
     @property
     def tamper_direction_filter(self) -> "Optional[Direction]":

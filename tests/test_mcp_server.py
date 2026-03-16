@@ -54,7 +54,7 @@ _make_tls_stubs()
 from protopoke.api import ProxyAPI  # noqa: E402
 from protopoke.config import ProxyConfig  # noqa: E402
 from protopoke.models import Direction  # noqa: E402
-from protopoke.rules.rule import ReplaceRule, TamperRule, RuleAction  # noqa: E402
+from protopoke.rules.rule import ReplaceRule, InterceptRule, RuleAction  # noqa: E402
 from protopoke.mcp import build_mcp_server  # noqa: E402
 
 
@@ -282,51 +282,51 @@ class TestReplaceRuleTools:
 
 
 # ---------------------------------------------------------------------------
-# Tamper rules tools
+# Intercept rules tools
 # ---------------------------------------------------------------------------
 
-class TestTamperRuleTools:
-    def test_list_tamper_rules_empty(self, mcp_server):
-        fn = get_tool(mcp_server, "list_tamper_rules")
+class TestInterceptRuleTools:
+    def test_list_intercept_rules_empty(self, mcp_server):
+        fn = get_tool(mcp_server, "list_intercept_rules")
         assert fn() == []
 
-    def test_add_tamper_rule(self, mcp_server):
-        fn = get_tool(mcp_server, "add_tamper_rule")
+    def test_add_intercept_rule(self, mcp_server):
+        fn = get_tool(mcp_server, "add_intercept_rule")
         result = fn("login", "01 02", "intercept")
         assert result["ok"] is True
         assert result["rule"]["label"] == "login"
         assert result["rule"]["action"] == "intercept"
 
-    def test_add_tamper_rule_forward_action(self, mcp_server):
-        fn = get_tool(mcp_server, "add_tamper_rule")
+    def test_add_intercept_rule_forward_action(self, mcp_server):
+        fn = get_tool(mcp_server, "add_intercept_rule")
         result = fn("heartbeat", "FF", "forward")
         assert result["ok"] is True
         assert result["rule"]["action"] == "forward"
 
-    def test_add_tamper_rule_invalid_action(self, mcp_server):
-        fn = get_tool(mcp_server, "add_tamper_rule")
+    def test_add_intercept_rule_invalid_action(self, mcp_server):
+        fn = get_tool(mcp_server, "add_intercept_rule")
         result = fn("bad", "01", "unknown_action")
         assert result["ok"] is False
 
-    def test_add_tamper_rule_with_session_ids(self, mcp_server):
-        fn = get_tool(mcp_server, "add_tamper_rule")
+    def test_add_intercept_rule_with_session_ids(self, mcp_server):
+        fn = get_tool(mcp_server, "add_intercept_rule")
         result = fn("scoped", "01", "intercept", session_ids=["s1", "s2"])
         assert result["ok"] is True
         assert set(result["rule"]["session_ids"]) == {"s1", "s2"}
 
-    def test_remove_tamper_rule(self, mcp_server, api):
-        rule = TamperRule.create("r1", "01", RuleAction.INTERCEPT)
-        api.add_tamper_rule(rule)
+    def test_remove_intercept_rule(self, mcp_server, api):
+        rule = InterceptRule.create("r1", "01", RuleAction.INTERCEPT)
+        api.add_intercept_rule(rule)
 
-        fn_remove = get_tool(mcp_server, "remove_tamper_rule")
+        fn_remove = get_tool(mcp_server, "remove_intercept_rule")
         result = fn_remove(rule.id)
         assert result["ok"] is True
 
-        fn_list = get_tool(mcp_server, "list_tamper_rules")
+        fn_list = get_tool(mcp_server, "list_intercept_rules")
         assert fn_list() == []
 
-    def test_remove_nonexistent_tamper_rule(self, mcp_server):
-        fn = get_tool(mcp_server, "remove_tamper_rule")
+    def test_remove_nonexistent_intercept_rule(self, mcp_server):
+        fn = get_tool(mcp_server, "remove_intercept_rule")
         result = fn("nope")
         assert result["ok"] is False
 

@@ -10,8 +10,8 @@ Tools are grouped by concern:
     Tamper control          : tamper_status, tamper_toggle,
                               list_intercepted, tamper_forward, tamper_drop,
                               tamper_modify_and_forward
-    Replace rules           : list_replace_rules, add_replace_rule, remove_replace_rule
-    Tamper rules            : list_tamper_rules, add_tamper_rule, remove_tamper_rule
+    Global replace rules    : list_replace_rules, add_replace_rule, remove_replace_rule
+    Intercept rules         : list_intercept_rules, add_intercept_rule, remove_intercept_rule
     Forge / send            : send_frame
     Replay                  : forge_session
     Fuzzing                 : fuzz_start, fuzz_status, fuzz_results, fuzz_stop, list_campaigns
@@ -22,12 +22,12 @@ Tools are grouped by concern:
                               tamper_forward_all,
                               tamper_set_direction_filter,
                               tamper_set_session_filter
-    Replace rules           : list_replace_rules, add_replace_rule,
+    Global replace rules    : list_replace_rules, add_replace_rule,
                               update_replace_rule, remove_replace_rule,
                               reorder_replace_rule, clear_replace_rules
-    Tamper rules            : list_tamper_rules, add_tamper_rule,
-                              update_tamper_rule, remove_tamper_rule,
-                              reorder_tamper_rule, clear_tamper_rules
+    Intercept rules         : list_intercept_rules, add_intercept_rule,
+                              update_intercept_rule, remove_intercept_rule,
+                              reorder_intercept_rule, clear_intercept_rules
     Protocol management     : set_protocol_file, set_protocol_dict,
                               get_protocol_info
     Forge / send            : send_frame, list_forge_requests,
@@ -70,7 +70,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         ) from exc
 
     from protopoke.models import Direction
-    from protopoke.rules.rule import ReplaceRule, TamperRule, RuleAction
+    from protopoke.rules.rule import ReplaceRule, InterceptRule, RuleAction
     from protopoke.forge.models import ForgeRequest, ForgeRecord
 
     mcp = FastMCP(name)
@@ -445,7 +445,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         Enable or disable tamper at runtime.
 
         When disabled, all pending frames are immediately forwarded.
-        When enabled, subsequent frames matching tamper rules are held.
+        When enabled, subsequent frames matching intercept rules are held.
 
         Args:
             enabled: True to enable, False to disable.
@@ -718,22 +718,22 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         return {"ok": True, "message": "All replace rules cleared."}
 
     # ------------------------------------------------------------------ #
-    # Tamper rules                                                          #
+    # Intercept rules                                                       #
     # ------------------------------------------------------------------ #
 
     @mcp.tool()
-    def list_tamper_rules() -> list[dict]:
+    def list_intercept_rules() -> list[dict]:
         """
-        List all active tamper filter rules in order.
+        List all active intercept filter rules in order.
 
         Rules use first-match semantics: the first matching rule's action wins.
         When no rules are configured, all frames are intercepted.
         When rules are configured but none match, frames are auto-forwarded.
         """
-        return [r.to_dict() for r in api.list_tamper_rules()]
+        return [r.to_dict() for r in api.list_intercept_rules()]
 
     @mcp.tool()
-    def add_tamper_rule(
+    def add_intercept_rule(
         label:      str,
         pattern:    str,
         action:     str,
@@ -742,9 +742,9 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         enabled:    bool                = True,
     ) -> dict:
         """
-        Add a tamper filter rule.
+        Add an intercept filter rule.
 
-        Tamper rules use first-match semantics and decide whether a frame
+        Intercept rules use first-match semantics and decide whether a frame
         is held for inspection or automatically forwarded.
 
         Args:
@@ -773,7 +773,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         sids = set(session_ids) if session_ids else None
 
         try:
-            rule = TamperRule.create(
+            rule = InterceptRule.create(
                 label, pattern, action_enum,
                 direction=dir_enum,
                 session_ids=sids,
@@ -782,24 +782,24 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-        api.add_tamper_rule(rule)
+        api.add_intercept_rule(rule)
         return {"ok": True, "rule": rule.to_dict()}
 
     @mcp.tool()
-    def update_tamper_rule(
+    def update_intercept_rule(
         rule_id: str,
         label:   Optional[str]  = None,
         action:  Optional[str]  = None,
         enabled: Optional[bool] = None,
     ) -> dict:
         """
-        Update a tamper rule's label, action, or enabled state.
+        Update an intercept rule's label, action, or enabled state.
 
         Use this to flip a rule between intercept/forward, toggle it on/off,
         or rename it, without removing and re-adding it.
 
         Args:
-            rule_id: Rule UUID from list_tamper_rules.
+            rule_id: Rule UUID from list_intercept_rules.
             label:   New name (or null to keep current).
             action:  "intercept" or "forward" (or null to keep current).
             enabled: True/False (or null to keep current).
@@ -807,7 +807,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         Returns:
             Updated rule dict, or {"ok": False} if not found.
         """
-        rule = api.tamper_filter.get_rule(rule_id)
+        rule = api.intercept_filter.get_rule(rule_id)
         if rule is None:
             return {"ok": False, "error": f"Rule '{rule_id}' not found."}
         if label is not None:
@@ -822,44 +822,44 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         return {"ok": True, "rule": rule.to_dict()}
 
     @mcp.tool()
-    def remove_tamper_rule(rule_id: str) -> dict:
+    def remove_intercept_rule(rule_id: str) -> dict:
         """
-        Remove a tamper filter rule by its ID.
+        Remove an intercept filter rule by its ID.
 
         Args:
-            rule_id: Rule UUID from list_tamper_rules.
+            rule_id: Rule UUID from list_intercept_rules.
         """
-        ok = api.remove_tamper_rule(rule_id)
+        ok = api.remove_intercept_rule(rule_id)
         return {"ok": ok, "rule_id": rule_id}
 
     @mcp.tool()
-    def reorder_tamper_rule(rule_id: str, new_index: int) -> dict:
+    def reorder_intercept_rule(rule_id: str, new_index: int) -> dict:
         """
-        Move a tamper rule to a different position in the evaluation order.
+        Move an intercept rule to a different position in the evaluation order.
 
         Rules are evaluated top-to-bottom; the first match wins.
         Position 0 is evaluated first (highest priority).
 
         Args:
-            rule_id:   Rule UUID from list_tamper_rules.
+            rule_id:   Rule UUID from list_intercept_rules.
             new_index: Zero-based target position (0 = top/highest priority).
 
         Returns:
             {"ok": True} on success, or {"ok": False} if rule not found.
         """
-        ok = api.tamper_filter.move_rule(rule_id, new_index)
+        ok = api.intercept_filter.move_rule(rule_id, new_index)
         return {"ok": ok, "rule_id": rule_id, "new_index": new_index}
 
     @mcp.tool()
-    def clear_tamper_rules() -> dict:
+    def clear_intercept_rules() -> dict:
         """
-        Remove all tamper filter rules.
+        Remove all intercept filter rules.
 
-        After clearing, the default behaviour resumes: all frames are tampered
+        After clearing, the default behaviour resumes: all frames are intercepted
         (when tamper_enabled is True).
         """
-        api.tamper_filter.clear()
-        return {"ok": True, "message": "All tamper rules cleared."}
+        api.intercept_filter.clear()
+        return {"ok": True, "message": "All intercept rules cleared."}
 
     # ------------------------------------------------------------------ #
     # Forge / direct send                                                   #
