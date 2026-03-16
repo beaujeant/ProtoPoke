@@ -16,14 +16,11 @@ from ..config import ProxyConfig
 from ..models import Direction
 from ..events.bus import FrameCapturedEvent, SessionClosedEvent, SessionOpenedEvent
 from ..project.manager import ProjectManager, ProjectState
-from ..forge.models import ForgeRequest
-from .modals.request_modal import RequestModal, RequestResult
 from .modals.project import NewProjectModal, OpenProjectModal, SaveAsModal
 from .tabs.config import ConfigTab
 from .tabs.tamper import TamperTab
 from .tabs.traffic import TrafficTab
 from .tabs.forge import ForgeTab
-from .tabs.sequence import SequenceTab
 from .tabs.fuzzer import FuzzerTab
 
 logger = logging.getLogger(__name__)
@@ -71,8 +68,7 @@ class ProtoPoke(App):
         F2 → Traffic tab
         F3 → Tamper tab
         F4 → Forge tab
-        F5 → Sequence tab
-        F6 → Fuzzer tab
+        F5 → Fuzzer tab
         ctrl+n → New project
         ctrl+o → Open project
         ctrl+s → Save project
@@ -88,8 +84,7 @@ class ProtoPoke(App):
         Binding("f2",           "switch_tab('traffic')",   "Traffic",   show=True),
         Binding("f3",           "switch_tab('tamper')",    "Tamper",    show=True),
         Binding("f4",           "switch_tab('forge')",     "Forge",     show=True),
-        Binding("f5",           "switch_tab('sequence')",  "Sequence",  show=True),
-        Binding("f6",           "switch_tab('fuzzer')",    "Fuzzer",    show=True),
+        Binding("f5",           "switch_tab('fuzzer')",    "Fuzzer",    show=True),
         Binding("ctrl+r",       "send_to_forge",           "→Forge",    show=False, priority=True),
         Binding("ctrl+n",       "new_project",             "New",       show=False),
         Binding("ctrl+o",       "open_project",            "Open",      show=False),
@@ -144,9 +139,7 @@ class ProtoPoke(App):
                 yield TamperTab(id="tamper-tab")
             with TabPane("Forge [F4]", id="forge"):
                 yield ForgeTab(id="forge-tab")
-            with TabPane("Sequence [F5]", id="sequence"):
-                yield SequenceTab(id="sequence-tab")
-            with TabPane("Fuzzer [F6]", id="fuzzer"):
+            with TabPane("Fuzzer [F5]", id="fuzzer"):
                 yield FuzzerTab(id="fuzzer-tab")
         yield Footer()
 
@@ -181,14 +174,12 @@ class ProtoPoke(App):
         if session:
             self.query_one("#traffic-tab", TrafficTab).add_session(session)
             self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
-            self.query_one("#forge-tab", ForgeTab).refresh_session_dropdown()
 
     def on__session_closed(self, msg: _SessionClosed) -> None:
         session = self.api.get_session(msg.session_id)
         if session:
             self.query_one("#traffic-tab", TrafficTab).update_session(session)
             self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
-            self.query_one("#forge-tab", ForgeTab).refresh_session_dropdown()
 
     def on__frame_captured(self, msg: _FrameCaptured) -> None:
         session = self.api.get_session(msg.session_id)
@@ -337,10 +328,8 @@ class ProtoPoke(App):
         config_tab.load_config(self._project.config)
         config_tab.notify_proxy_running(False)
         self.query_one("#traffic-tab", TrafficTab).clear_all()
-        self.query_one("#forge-tab", ForgeTab).load_requests([])
-        self.query_one("#sequence-tab", SequenceTab).load_sequences([])
+        self.query_one("#forge-tab", ForgeTab).load_playbooks([])
         self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions([])
-        self.query_one("#forge-tab", ForgeTab).refresh_session_dropdown()
         self._update_title()
         self.notify(f"New project: {name}")
 
@@ -356,21 +345,15 @@ class ProtoPoke(App):
             config_tab = self.query_one("#config-tab", ConfigTab)
             config_tab.load_config(state.config)
             config_tab.notify_proxy_running(False)
-            self.query_one("#forge-tab", ForgeTab).load_requests(state.forge_requests)
-            self.query_one("#sequence-tab", SequenceTab).load_sequences(state.sequence_sessions)
+            self.query_one("#forge-tab", ForgeTab).load_playbooks(state.playbooks)
             # Restore logs: load sessions+frames into registry, then populate UI
             traffic_tab = self.query_one("#traffic-tab", TrafficTab)
             traffic_tab.clear_all()
             if state.captured_sessions:
                 restored = self.api.load_sessions_from_dicts(state.captured_sessions)
                 for session in restored:
-                    # add_session populates the session row; show_frames is
-                    # called automatically for the first session (auto-select).
-                    # For all others the frames appear when the user selects them
-                    # (on_data_table_row_highlighted looks up via api.get_session).
                     traffic_tab.add_session(session)
                 self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
-                self.query_one("#forge-tab", ForgeTab).refresh_session_dropdown()
             self._update_title()
             self.notify(f"Opened project: {state.name}")
         except Exception as exc:
@@ -381,7 +364,7 @@ class ProtoPoke(App):
             self.action_save_project_as()
             return
         try:
-            self._sync_forge_requests()
+            self._sync_playbooks()
             self._project.save()
             self._update_title()
             self.notify("Project saved.")
@@ -396,21 +379,18 @@ class ProtoPoke(App):
         if not path:
             return
         try:
-            self._sync_forge_requests()
+            self._sync_playbooks()
             self._project.save_as(path)
             self._update_title()
             self.notify(f"Saved to {path}")
         except Exception as exc:
             self.notify(f"Save failed: {exc}", severity="error")
 
-    def _sync_forge_requests(self) -> None:
-        """Copy the current UI state (forge, sequence, traffic) into the project."""
+    def _sync_playbooks(self) -> None:
+        """Copy the current UI state (forge playbooks, traffic) into the project."""
         forge_tab = self.query_one("#forge-tab", ForgeTab)
-        self._project.forge_requests = list(forge_tab._requests)
-        sequence_tab = self.query_one("#sequence-tab", SequenceTab)
-        sequence_tab._save_step_editor()
-        self._project.sequence_sessions = list(sequence_tab._sequences)
-        # Sync logs: capture all sessions and their frames
+        forge_tab._save_frame_editor()
+        self._project.playbooks = list(forge_tab._playbooks)
         self._project.captured_sessions = [
             self.api.session_to_dict(session)
             for session in self.api.list_sessions()
@@ -420,41 +400,6 @@ class ProtoPoke(App):
         """Mark the project as having unsaved changes."""
         self._project.mark_dirty()
         self._update_title()
-
-    # ------------------------------------------------------------------
-    # Helpers for tabs to call
-    # ------------------------------------------------------------------
-
-    def open_new_request_modal(self) -> None:
-        sessions = [
-            (s.id, f"{s.info.client_host}:{s.info.client_port}", s.info.server_host, s.info.server_port)
-            for s in self.api.list_sessions()
-        ]
-        self.push_screen(RequestModal(sessions), self._on_new_request)
-
-    def _on_new_request(self, result: RequestResult | None) -> None:
-        if result is None:
-            return
-        req = ForgeRequest.create(
-            host=result.host,
-            port=result.port,
-            tls=result.tls,
-            source_session_id=result.session_id,
-            direction=result.direction,
-        )
-        req.response_window = result.window
-        if result.session_id:
-            # Pre-fill with frames from that session
-            session = self.api.get_session(result.session_id)
-            if session and session.frames:
-                req.current_bytes = session.frames[0].raw_bytes
-        self.query_one("#forge-tab", ForgeTab).add_request(req)
-        self._project.forge_requests.append(req)
-        def _do_sw_rep() -> None:
-            self.action_switch_tab("forge")
-        def _sched_sw_rep() -> None:
-            self.call_after_refresh(_do_sw_rep)
-        self.call_after_refresh(_sched_sw_rep)
 
     def terminate_session(self, session_id: str) -> None:
         """Terminate an active session (closes client + server connections)."""
@@ -475,34 +420,54 @@ class ProtoPoke(App):
             self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(
                 self.api.list_sessions()
             )
-            self.query_one("#forge-tab", ForgeTab).refresh_session_dropdown()
         else:
             self.notify("Session not found.", severity="warning")
 
-    def send_frames_to_sequence(
-        self, session_id: str, frame_ids: list[str]
-    ) -> None:
-        """
-        Called by TrafficTab — add one or more captured frames as new steps in
-        the Sequence tab.
+    def send_frame_to_forge(self, session_id: str, frame_id: str) -> None:
+        """Called by TrafficTab (Ctrl+R) — create a single-frame playbook in Forge."""
+        session = self.api.get_session(session_id)
+        if not session:
+            return
+        frame = next((f for f in session.frames if f.id == frame_id), None)
+        if not frame:
+            return
+        direction = (
+            "client_to_server"
+            if frame.direction is Direction.CLIENT_TO_SERVER
+            else "server_to_client"
+        )
+        forge_tab = self.query_one("#forge-tab", ForgeTab)
+        forge_tab.add_playbook_from_bytes(
+            raw_bytes=frame.raw_bytes,
+            label=f"Playbook {len(forge_tab._playbooks)+1}",
+            host=session.info.server_host,
+            port=session.info.server_port,
+            tls=self.api.config.tls_upstream,
+            source_session_id=session_id,
+            direction=direction,
+        )
+        self._project.mark_dirty()
+        def _do_switch_forge() -> None:
+            self.action_switch_tab("forge")
+        def _schedule_switch_forge() -> None:
+            self.call_after_refresh(_do_switch_forge)
+        self.call_after_refresh(_schedule_switch_forge)
+        self.notify(f"Frame sent to Forge: {frame_id[:8]}")
 
-        Only frames whose direction matches the *first* frame in *frame_ids*
-        are included, so a sequence always goes in a single direction.
-        """
+    def send_frames_to_forge(self, session_id: str, frame_ids: list[str]) -> None:
+        """Called by TrafficTab — create a multi-frame playbook in Forge."""
         if not frame_ids:
             return
         session = self.api.get_session(session_id)
         if not session:
             return
 
-        # Resolve frames and determine the direction from the first one
         frames_by_id = {f.id: f for f in session.frames}
         first_frame = frames_by_id.get(frame_ids[0])
         if first_frame is None:
             return
         anchor_direction = first_frame.direction
 
-        # Filter to frames matching that direction, in the order given
         selected_frames = [
             frames_by_id[fid]
             for fid in frame_ids
@@ -517,64 +482,30 @@ class ProtoPoke(App):
             else "server_to_client"
         )
 
-        seq_tab = self.query_one("#sequence-tab", SequenceTab)
-        for frame in selected_frames:
-            seq_tab.add_step_from_bytes(
-                raw_bytes=frame.raw_bytes,
-                label=f"seq={frame.sequence_number}",
-                host=session.info.server_host,
-                port=session.info.server_port,
-                tls=self.api.config.tls_upstream,
-                source_session_id=session_id,
-                direction=direction_str,
-            )
-
-        self._project.mark_dirty()
-        # Double call_after_refresh: lets all widget mounts (new sequence buttons,
-        # DataTable updates) settle before the tab switch is applied.
-        def _do_switch_sequence() -> None:
-            self.action_switch_tab("sequence")
-        def _schedule_switch_sequence() -> None:
-            self.call_after_refresh(_do_switch_sequence)
-        self.call_after_refresh(_schedule_switch_sequence)
-        skipped = len(frame_ids) - len(selected_frames)
-        msg = f"{len(selected_frames)} frame(s) added to Sequence"
-        if skipped:
-            msg += f" ({skipped} skipped — wrong direction)"
-        self.notify(msg)
-
-    def send_frame_to_forge(self, session_id: str, frame_id: str) -> None:
-        """Called by TrafficTab — create a forge request from a captured frame."""
-        session = self.api.get_session(session_id)
-        if not session:
-            return
-        frame = next((f for f in session.frames if f.id == frame_id), None)
-        if not frame:
-            return
-        direction = (
-            "to_server"
-            if frame.direction is Direction.CLIENT_TO_SERVER
-            else "to_client"
-        )
-        req = ForgeRequest.create(
+        forge_tab = self.query_one("#forge-tab", ForgeTab)
+        frames_data = [
+            (f.raw_bytes, f"frame-{f.sequence_number}", direction_str)
+            for f in selected_frames
+        ]
+        forge_tab.add_frames_to_playbook(
+            frames_data=frames_data,
             host=session.info.server_host,
             port=session.info.server_port,
             tls=self.api.config.tls_upstream,
-            current_bytes=frame.raw_bytes,
             source_session_id=session_id,
-            direction=direction,
+            playbook_label=f"Playbook {len(forge_tab._playbooks)+1}",
         )
-        self.query_one("#forge-tab", ForgeTab).add_request(req)
-        self._project.forge_requests.append(req)
-        # Double call_after_refresh: the first refresh lets the mount settle,
-        # the second actually performs the tab switch so it lands after all
-        # reactive DOM updates triggered by the mount have been processed.
+        self._project.mark_dirty()
         def _do_switch_forge() -> None:
             self.action_switch_tab("forge")
         def _schedule_switch_forge() -> None:
             self.call_after_refresh(_do_switch_forge)
         self.call_after_refresh(_schedule_switch_forge)
-        self.notify(f"Frame sent to Forge: {frame_id[:8]}")
+        skipped = len(frame_ids) - len(selected_frames)
+        msg = f"{len(selected_frames)} frame(s) added to Forge"
+        if skipped:
+            msg += f" ({skipped} skipped — wrong direction)"
+        self.notify(msg)
 
     # ------------------------------------------------------------------
     # Internal helpers
