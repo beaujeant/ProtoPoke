@@ -8,7 +8,7 @@ This is a minimal demonstration of the interception API. A real UI would
 wrap the same ProxyAPI calls in a graphical interface.
 
 Usage:
-    python examples/intercept_demo.py
+    python examples/tamper_demo.py
 
     # In another terminal:
     nc 127.0.0.1 8080
@@ -29,7 +29,7 @@ import sys
 
 from protopoke.api import ProxyAPI
 from protopoke.config import ProxyConfig
-from protopoke.models import InterceptedUnit
+from protopoke.models import TamperedUnit
 
 logging.basicConfig(
     level=logging.WARNING,  # Quieter for interactive use
@@ -38,7 +38,7 @@ logging.basicConfig(
 )
 
 
-def print_unit(unit: InterceptedUnit) -> None:
+def print_unit(unit: TamperedUnit) -> None:
     frame = unit.frame
     arrow = "→" if frame.direction.value == "client_to_server" else "←"
     print(f"\n{'─'*60}")
@@ -116,7 +116,7 @@ async def main() -> None:
         listen_port=8080,
         upstream_host="127.0.0.1",
         upstream_port=9090,
-        intercept_enabled=True,
+        tamper_enabled=True,
         framer_name="raw",  # Raw framer: each read chunk = one frame
     )
 

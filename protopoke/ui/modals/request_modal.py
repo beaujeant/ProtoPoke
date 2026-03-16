@@ -1,4 +1,4 @@
-"""RequestModal — unified create/edit modal for a repeater request."""
+"""RequestModal — unified create/edit modal for a forge request."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ class RequestResult:
 
 class RequestModal(ModalScreen[RequestResult | None]):
     """
-    Modal to create or edit a Repeater request.
+    Modal to create or edit a Forge request.
 
     Pass ``edit=True`` together with pre-filled keyword arguments to open in
     edit mode; omit them (leave defaults) for create mode.
@@ -126,7 +126,7 @@ class RequestModal(ModalScreen[RequestResult | None]):
             if any(sid == self._session_id for sid, *_ in self._sessions):
                 initial_session = self._session_id
 
-        title         = "Edit Request" if self._edit else "New Repeater Request"
+        title         = "Edit Request" if self._edit else "New Forge Request"
         confirm_label = "Save"         if self._edit else "Create"
 
         # In create mode show an empty port field (placeholder visible);

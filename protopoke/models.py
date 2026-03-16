@@ -229,11 +229,11 @@ class SessionInfo:
 
 
 @dataclass
-class InterceptedUnit:
+class TamperedUnit:
     """
     A Frame that is being held by the intercept controller for inspection.
 
-    When interception is enabled, frames are wrapped in an InterceptedUnit
+    When interception is enabled, frames are wrapped in an TamperedUnit
     and placed in the intercept queue. The relay waits (asyncio await) for
     a verdict. An external caller (API, UI) calls set_verdict() to resolve it.
 
@@ -252,7 +252,7 @@ class InterceptedUnit:
     modified_data: Optional[bytes] = None
 
     @classmethod
-    def from_frame(cls, frame: Frame) -> "InterceptedUnit":
+    def from_frame(cls, frame: Frame) -> "TamperedUnit":
         return cls(id=new_id(), frame=frame)
 
     def effective_bytes(self) -> bytes:
@@ -283,7 +283,7 @@ class InterceptedUnit:
 
     def __repr__(self) -> str:
         return (
-            f"InterceptedUnit(id={self.id[:8]}... "
+            f"TamperedUnit(id={self.id[:8]}... "
             f"action={self.action.value} "
             f"frame={self.frame.id[:8]}...)"
         )

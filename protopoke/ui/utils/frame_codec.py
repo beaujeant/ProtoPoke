@@ -4,7 +4,7 @@ Conversion utilities between the two frame-editing representations.
 HEX mode
 --------
 Space-separated hex pairs, with optional ``{{VAR}}`` placeholder tokens
-as whole whitespace-delimited tokens (sequencer steps only).
+as whole whitespace-delimited tokens (sequence steps only).
 
     01 02 {{SESS_ID}} 48 65 6c 6c 6f
 
@@ -12,7 +12,7 @@ STR mode
 --------
 Python-like string: printable ASCII shown as characters, everything else
 as ``\\xNN``.  ``\\n`` / ``\\r`` / ``\\t`` / ``\\\\`` are supported.
-Sequencer placeholders are embedded inline.
+Sequence placeholders are embedded inline.
 
     \\x01\\x02{{SESS_ID}}Hello
 
@@ -64,12 +64,12 @@ def _byte_to_str_char(b: int, next_b: int | None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Sequencer template conversions  (hex-template  ↔  STR-template)
+# Sequence template conversions  (hex-template  ↔  STR-template)
 # ---------------------------------------------------------------------------
 
 def hex_template_to_str(hex_template: str) -> str:
     """
-    Convert a HEX-mode sequencer template to STR mode.
+    Convert a HEX-mode sequence template to STR mode.
 
     Placeholder tokens such as ``{{SESS_ID}}`` are passed through unchanged.
     Hex-pair tokens are decoded and re-encoded as a python-like string.
@@ -112,7 +112,7 @@ def hex_template_to_str(hex_template: str) -> str:
 
 def str_to_hex_template(s: str) -> str:
     """
-    Parse a STR-mode sequencer template and return the HEX-mode representation.
+    Parse a STR-mode sequence template and return the HEX-mode representation.
 
     Supported escapes: ``\\xNN``, ``\\n``, ``\\r``, ``\\t``, ``\\\\``, ``\\0``.
 
@@ -199,7 +199,7 @@ def str_to_hex_template(s: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Plain bytes conversions  (bytes  ↔  STR)  — used by intercept / repeater
+# Plain bytes conversions  (bytes  ↔  STR)  — used by tamper / forge
 # ---------------------------------------------------------------------------
 
 def bytes_to_str(data: bytes) -> str:
@@ -223,7 +223,7 @@ def str_to_bytes(s: str) -> bytes:
     if "{{" in hex_tmpl:
         raise ValueError(
             "Placeholder {{...}} found in a non-template editor.  "
-            "Variable substitution is only supported in Sequencer steps."
+            "Variable substitution is only supported in Sequence steps."
         )
     hex_clean = hex_tmpl.replace(" ", "")
     return bytes.fromhex(hex_clean) if hex_clean else b""

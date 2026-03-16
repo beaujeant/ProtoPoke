@@ -6,7 +6,7 @@ Design:
     from the template session, applies mutations, replays the mutated frame
     to the target, and records a FuzzResult for each iteration.
 
-    It reuses ReplayEngine under the hood, so it benefits from all existing
+    It reuses ForgeEngine under the hood, so it benefits from all existing
     replay infrastructure (session registry, framer, connection management).
 
     For each iteration:
@@ -40,7 +40,7 @@ from typing import Callable, Optional, TYPE_CHECKING
 
 from ..models import Direction, Frame
 from ..core.session import Session, SessionRegistry
-from ..replay.engine import ReplayEngine, parse_frame_selector
+from ..forge.engine import ForgeEngine, parse_frame_selector
 from .models import CampaignStatus, FuzzCampaign, FuzzResult
 from .mutators.base import FrameMutator
 
@@ -56,18 +56,18 @@ class FuzzerEngine:
     Runs fuzzing campaigns against a target server.
 
     Args:
-        replay_engine:    ReplayEngine to use for sending frames and capturing responses.
+        forge_engine:    ForgeEngine to use for sending frames and capturing responses.
         session_registry: The shared session registry (same instance as the proxy).
         decoder:          Optional protocol decoder for protocol-aware mutators.
     """
 
     def __init__(
         self,
-        replay_engine:    ReplayEngine,
+        forge_engine:    ForgeEngine,
         session_registry: SessionRegistry,
         decoder:          Optional["ProtocolDecoder"] = None,
     ) -> None:
-        self._replay_engine    = replay_engine
+        self._forge_engine    = forge_engine
         self._session_registry = session_registry
         self._decoder          = decoder
 
@@ -258,7 +258,7 @@ class FuzzerEngine:
         """Replay the session once unmodified; return total response bytes."""
         try:
             result = await asyncio.wait_for(
-                self._replay_engine.replay_session(
+                self._forge_engine.forge_session(
                     session_id=session_id,
                     server_host=target_host,
                     server_port=target_port,
@@ -293,7 +293,7 @@ class FuzzerEngine:
 
         try:
             replay_result = await asyncio.wait_for(
-                self._replay_engine.replay_session(
+                self._forge_engine.forge_session(
                     session_id=campaign.session_id,
                     server_host=target_host,
                     server_port=target_port,

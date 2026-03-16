@@ -1,4 +1,4 @@
-"""InterceptTab — Burp-style frame interception queue + rules."""
+"""TamperTab — Burp-style frame tamper queue + rules."""
 
 from __future__ import annotations
 
@@ -8,114 +8,114 @@ from textual.widgets import DataTable, TextArea, Button, Label, Static, Switch
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
 
-from ...models import InterceptedUnit, Direction
-from ...rules.rule import InterceptRule, ReplaceRule, RuleAction
+from ...models import TamperedUnit, Direction
+from ...rules.rule import TamperRule, ReplaceRule, RuleAction
 from ..widgets.rule_table import RuleTable
-from ..modals.add_rule import AddInterceptRuleModal, AddReplaceRuleModal
+from ..modals.add_rule import AddTamperRuleModal, AddReplaceRuleModal
 from ..utils.frame_codec import bytes_to_str, str_to_bytes, hex_pairs_to_str, str_to_hex_pairs
 
 
-class InterceptTab(Widget):
+class TamperTab(Widget):
     """
-    Tab 3 — Interception queue, hex editor, and auto-forward / replace rules.
+    Tab 3 — Tamper queue, hex editor, and auto-forward / replace rules.
 
     Layout:
       ┌──────────────────────────────────────────────────┐
       │ Top bar: Enable toggle, direction filter, count  │
       ├──────────────────────────────────────────────────┤
-      │ Queue (DataTable of pending intercepted units)   │  ~30%
+      │ Queue (DataTable of pending tampered units)   │  ~30%
       ├──────────────────────────────────────────────────┤
       │ [Forward] [Drop] [Modify+Forward] [Forward All]  │
       ├──────────────────────────────────────────────────┤
       │ Hex editor (editable TextArea)                   │  ~20%
       ├──────────────────────────────────────────────────┤
-      │ Intercept Rules header + RuleTable               │  ~25%
+      │ Tamper Rules header + RuleTable               │  ~25%
       ├──────────────────────────────────────────────────┤
       │ Replace Rules header + RuleTable                 │  ~25%
       └──────────────────────────────────────────────────┘
     """
 
     DEFAULT_CSS = """
-    InterceptTab {
+    TamperTab {
         layout: vertical;
     }
-    InterceptTab .top-bar {
+    TamperTab .top-bar {
         height: 2;
         background: $surface-darken-1;
         align: left middle;
         padding: 0 1;
     }
-    InterceptTab .top-bar Label {
+    TamperTab .top-bar Label {
         margin-right: 1;
     }
-    InterceptTab .top-bar Switch {
+    TamperTab .top-bar Switch {
         margin-right: 2;
     }
-    InterceptTab .top-bar Button {
+    TamperTab .top-bar Button {
         margin-right: 1;
     }
-    InterceptTab #queue-pane {
+    TamperTab #queue-pane {
         height: 30%;
     }
-    InterceptTab .pane-header {
+    TamperTab .pane-header {
         background: $primary-darken-2;
         color: $text;
         padding: 0 1;
         height: 1;
         text-style: bold;
     }
-    InterceptTab DataTable {
+    TamperTab DataTable {
         height: 1fr;
     }
-    InterceptTab #intercept-toggle {
+    TamperTab #tamper-toggle {
         padding: 0;
         border: none;
     }
-    InterceptTab #intercept-toggle > .switch--slider {
+    TamperTab #tamper-toggle > .switch--slider {
         color: dodgerblue;
         background: darkslateblue;
     }
-    InterceptTab .action-bar {
+    TamperTab .action-bar {
         height: 3;
         align: left middle;
         padding: 0;
         margin: 0;
         background: $surface-darken-1;
     }
-    InterceptTab .action-bar Button {
+    TamperTab .action-bar Button {
         margin-left: 1;
     }
-    InterceptTab #hex-editor-pane {
+    TamperTab #hex-editor-pane {
         height: 20%;
         border-bottom: solid $primary-darken-2;
     }
-    InterceptTab #hex-editor-pane .pane-header {
+    TamperTab #hex-editor-pane .pane-header {
         height: 1;
         align: left middle;
     }
-    InterceptTab #hex-editor-pane .pane-header Static {
+    TamperTab #hex-editor-pane .pane-header Static {
         width: 1fr;
     }
-    InterceptTab #hex-editor-pane .pane-header Button {
+    TamperTab #hex-editor-pane .pane-header Button {
         width: 5;
     }
-    InterceptTab TextArea {
+    TamperTab TextArea {
         height: 1fr;
     }
-    InterceptTab #intercept-rules-pane {
+    TamperTab #tamper-rules-pane {
         height: 1fr;
     }
-    InterceptTab #replace-rules-pane {
+    TamperTab #replace-rules-pane {
         height: 1fr;
     }
-    InterceptTab RuleTable {
+    TamperTab RuleTable {
         height: 1fr;
     }
     """
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self._units: dict[str, InterceptedUnit] = {}
+        self._units: dict[str, TamperedUnit] = {}
         self._selected_unit_id: str | None = None
         # "hex" or "str" — controls how the hex editor displays / parses content
         self._editor_mode: str = "hex"
@@ -123,8 +123,8 @@ class InterceptTab(Widget):
     def compose(self) -> ComposeResult:
         # Top control bar
         with Horizontal(classes="top-bar"):
-            yield Label("Intercept:")
-            yield Switch(id="intercept-toggle", value=False)
+            yield Label("Tamper:")
+            yield Switch(id="tamper-toggle", value=False)
             yield Label("Direction:")
             yield Button("Both",  id="dir-both", variant="default", compact=True)
             yield Button("C → S", id="dir-c2s",  variant="default", compact=True)
@@ -133,7 +133,7 @@ class InterceptTab(Widget):
 
         # Queue
         with Vertical(id="queue-pane"):
-            yield Static("  Intercept Queue", classes="pane-header")
+            yield Static("  Tamper Queue", classes="pane-header")
             yield DataTable(id="queue-table", cursor_type="row")
 
         # Action bar
@@ -150,13 +150,13 @@ class InterceptTab(Widget):
                     "  Edit — modify before forwarding",
                     markup=False,
                 )
-                yield Button("HEX", id="btn-intercept-mode", compact=True)
+                yield Button("HEX", id="btn-tamper-mode", compact=True)
             yield TextArea(id="hex-editor", language=None)
 
-        # Intercept rules
-        with Vertical(id="intercept-rules-pane"):
+        # Tamper rules
+        with Vertical(id="tamper-rules-pane"):
             yield Static(
-                "  Intercept Rules  [first match wins · no rules → intercept all]",
+                "  Tamper Rules  [first match wins · no rules → tamper all]",
                 classes="pane-header",
                 markup=False,
             )
@@ -168,19 +168,19 @@ class InterceptTab(Widget):
                     ("pattern", "Pattern"),
                     ("dir",     "Direction"),
                 ],
-                row_factory=self._intercept_rule_row,
-                on_add=self._add_intercept_rule,
-                on_remove=self._remove_intercept_rule,
-                on_move_up=self._move_intercept_rule_up,
-                on_move_down=self._move_intercept_rule_down,
-                on_edit=self._edit_intercept_rule,
-                id="intercept-rules",
+                row_factory=self._tamper_rule_row,
+                on_add=self._add_tamper_rule,
+                on_remove=self._remove_tamper_rule,
+                on_move_up=self._move_tamper_rule_up,
+                on_move_down=self._move_tamper_rule_down,
+                on_edit=self._edit_tamper_rule,
+                id="tamper-rules",
             )
 
         # Replace rules
         with Vertical(id="replace-rules-pane"):
             yield Static(
-                "  Replace Rules  [applied in order — scopes: I=Intercept R=Repeater S=Sequencer]",
+                "  Replace Rules  [applied in order — scopes: T=Tamper F=Forge S=Sequence]",
                 classes="pane-header",
                 markup=False,
             )
@@ -216,7 +216,7 @@ class InterceptTab(Widget):
     # Queue management (called by the app)
     # ------------------------------------------------------------------
 
-    def add_unit(self, unit: InterceptedUnit) -> None:
+    def add_unit(self, unit: TamperedUnit) -> None:
         self._units[unit.id] = unit
         dt = self.query_one("#queue-table", DataTable)
         direction = "→" if unit.frame.direction is Direction.CLIENT_TO_SERVER else "←"
@@ -252,54 +252,54 @@ class InterceptTab(Widget):
         )
 
     # ------------------------------------------------------------------
-    # Intercept rule helpers
+    # Tamper rule helpers
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _intercept_rule_row(rule: InterceptRule) -> tuple:
+    def _tamper_rule_row(rule: TamperRule) -> tuple:
         enabled   = "✓" if rule.enabled else "✗"
         action    = rule.action.value
         direction = rule.direction.value if rule.direction else "both"
         pattern   = rule.pattern_str or "(any)"
         return (enabled, rule.label, action, pattern, direction)
 
-    def refresh_intercept_rules(self, rules: list[InterceptRule]) -> None:
-        self.query_one("#intercept-rules", RuleTable).refresh_rules(rules)
+    def refresh_tamper_rules(self, rules: list[TamperRule]) -> None:
+        self.query_one("#tamper-rules", RuleTable).refresh_rules(rules)
 
-    async def _add_intercept_rule(self) -> None:
-        rule: InterceptRule | None = await self.app.push_screen_wait(AddInterceptRuleModal())
+    async def _add_tamper_rule(self) -> None:
+        rule: TamperRule | None = await self.app.push_screen_wait(AddTamperRuleModal())
         if rule is None:
             return
-        self.app.api.add_intercept_rule(rule)
-        self.refresh_intercept_rules(self.app.api.list_intercept_rules())
+        self.app.api.add_tamper_rule(rule)
+        self.refresh_tamper_rules(self.app.api.list_tamper_rules())
 
-    async def _edit_intercept_rule(self, rule: InterceptRule) -> None:
+    async def _edit_tamper_rule(self, rule: TamperRule) -> None:
         """Open the edit modal pre-populated with *rule* and update it in-place."""
-        updated: InterceptRule | None = await self.app.push_screen_wait(
-            AddInterceptRuleModal(existing=rule)
+        updated: TamperRule | None = await self.app.push_screen_wait(
+            AddTamperRuleModal(existing=rule)
         )
         if updated is None:
             return
         # The modal mutates the rule object in-place when existing= is supplied.
-        self.refresh_intercept_rules(self.app.api.list_intercept_rules())
+        self.refresh_tamper_rules(self.app.api.list_tamper_rules())
 
-    def _remove_intercept_rule(self, rule_id: str) -> None:
-        self.app.api.remove_intercept_rule(rule_id)
-        self.refresh_intercept_rules(self.app.api.list_intercept_rules())
+    def _remove_tamper_rule(self, rule_id: str) -> None:
+        self.app.api.remove_tamper_rule(rule_id)
+        self.refresh_tamper_rules(self.app.api.list_tamper_rules())
 
-    def _move_intercept_rule_up(self, rule_id: str) -> None:
-        rules = self.app.api.intercept_filter.rules
+    def _move_tamper_rule_up(self, rule_id: str) -> None:
+        rules = self.app.api.tamper_filter.rules
         idx = next((i for i, r in enumerate(rules) if r.id == rule_id), -1)
         if idx > 0:
-            self.app.api.intercept_filter.move_rule(rule_id, idx - 1)
-            self.refresh_intercept_rules(self.app.api.list_intercept_rules())
+            self.app.api.tamper_filter.move_rule(rule_id, idx - 1)
+            self.refresh_tamper_rules(self.app.api.list_tamper_rules())
 
-    def _move_intercept_rule_down(self, rule_id: str) -> None:
-        rules = self.app.api.intercept_filter.rules
+    def _move_tamper_rule_down(self, rule_id: str) -> None:
+        rules = self.app.api.tamper_filter.rules
         idx = next((i for i, r in enumerate(rules) if r.id == rule_id), -1)
         if 0 <= idx < len(rules) - 1:
-            self.app.api.intercept_filter.move_rule(rule_id, idx + 1)
-            self.refresh_intercept_rules(self.app.api.list_intercept_rules())
+            self.app.api.tamper_filter.move_rule(rule_id, idx + 1)
+            self.refresh_tamper_rules(self.app.api.list_tamper_rules())
 
     # ------------------------------------------------------------------
     # Replace rule helpers
@@ -328,11 +328,11 @@ class InterceptTab(Widget):
             import os
             detail = os.path.basename(rule.script_path) if rule.script_path else "(no path)"
 
-        # Scope column: I=intercept R=repeater S=sequencer
+        # Scope column: T=tamper F=forge S=sequence
         scope = ""
-        scope += "I" if rule.apply_to_intercept else "·"
-        scope += "R" if rule.apply_to_repeater  else "·"
-        scope += "S" if rule.apply_to_sequencer  else "·"
+        scope += "T" if rule.apply_to_tamper else "·"
+        scope += "F" if rule.apply_to_forge  else "·"
+        scope += "S" if rule.apply_to_sequence  else "·"
 
         return (enabled, type_label, rule.label, detail, scope, direction)
 
@@ -398,10 +398,10 @@ class InterceptTab(Widget):
     # ------------------------------------------------------------------
 
     def on_switch_changed(self, event: Switch.Changed) -> None:
-        if event.switch.id == "intercept-toggle":
-            self.app.api.intercept_enabled = event.value
+        if event.switch.id == "tamper-toggle":
+            self.app.api.tamper_enabled = event.value
             state = "enabled" if event.value else "disabled"
-            self.notify(f"Interception {state}.")
+            self.notify(f"Tamper {state}.")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table.id != "queue-table":
@@ -441,7 +441,7 @@ class InterceptTab(Widget):
                 self.notify(f"Cannot switch to STR: {exc}", severity="error")
                 return
             self._editor_mode = "str"
-            self.query_one("#btn-intercept-mode", Button).label = "STR"
+            self.query_one("#btn-tamper-mode", Button).label = "STR"
         else:
             try:
                 new_text = str_to_hex_pairs(current_text)
@@ -449,24 +449,24 @@ class InterceptTab(Widget):
                 self.notify(f"Cannot switch to HEX: {exc}", severity="error")
                 return
             self._editor_mode = "hex"
-            self.query_one("#btn-intercept-mode", Button).label = "HEX"
+            self.query_one("#btn-tamper-mode", Button).label = "HEX"
 
         editor.load_text(new_text)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         bid = event.button.id
 
-        if bid == "btn-intercept-mode":
+        if bid == "btn-tamper-mode":
             event.stop()
             self._toggle_editor_mode()
             return
 
         if bid == "dir-both":
-            self.app.api.intercept_direction_filter = None
+            self.app.api.tamper_direction_filter = None
         elif bid == "dir-c2s":
-            self.app.api.intercept_direction_filter = Direction.CLIENT_TO_SERVER
+            self.app.api.tamper_direction_filter = Direction.CLIENT_TO_SERVER
         elif bid == "dir-s2c":
-            self.app.api.intercept_direction_filter = Direction.SERVER_TO_CLIENT
+            self.app.api.tamper_direction_filter = Direction.SERVER_TO_CLIENT
         elif bid == "btn-forward":
             self._do_forward()
         elif bid == "btn-drop":

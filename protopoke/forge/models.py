@@ -1,16 +1,16 @@
 """
-Data models for the Repeater feature.
+Data models for the Forge feature.
 
 These are separate from the core models (protopoke.models) because they are
 UI-level constructs, not transport-level ones.
 
-SendRecord
+ForgeRecord
 ----------
-An immutable record of one send+receive cycle in the Repeater.
+An immutable record of one send+receive cycle in Forge.
 
-RepeaterRequest
+ForgeRequest
 ---------------
-A named "tab" in the Repeater, holding the current editable bytes, the
+A named "tab" in Forge, holding the current editable bytes, the
 target destination, and the history of all sends made from this tab.
 """
 
@@ -23,9 +23,9 @@ from typing import Optional
 
 
 @dataclass
-class SendRecord:
+class ForgeRecord:
     """
-    A single send+response pair recorded in the Repeater history.
+    A single send+response pair recorded in the Forge history.
 
     Attributes:
         id:               Unique ID (UUID4).
@@ -66,7 +66,7 @@ class SendRecord:
         error:            Optional[str]  = None,
         response_packets: list[bytes] = None,
         session_id:       Optional[str]  = None,
-    ) -> "SendRecord":
+    ) -> "ForgeRecord":
         return cls(
             id=str(uuid.uuid4()),
             timestamp=time.time(),
@@ -97,7 +97,7 @@ class SendRecord:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "SendRecord":
+    def from_dict(cls, d: dict) -> "ForgeRecord":
         return cls(
             id=d["id"],
             timestamp=d["timestamp"],
@@ -114,9 +114,9 @@ class SendRecord:
 
 
 @dataclass
-class RepeaterRequest:
+class ForgeRequest:
     """
-    One named "tab" in the Repeater.
+    One named "tab" in Forge.
 
     Holds the current editable bytes (``current_bytes``), the target
     destination (``host``, ``port``, ``tls``), and the full send history.
@@ -128,7 +128,7 @@ class RepeaterRequest:
         port:          Target port.
         tls:           Whether to use TLS.
         current_bytes: Bytes currently in the editor (editable).
-        history:       All ``SendRecord`` instances for this tab, newest last.
+        history:       All ``ForgeRecord`` instances for this tab, newest last.
         source_session_id: Session ID this request was sent from (optional).
     """
 
@@ -138,7 +138,7 @@ class RepeaterRequest:
     port:                int
     tls:                 bool              = False
     current_bytes:       bytes             = b""
-    history:             list[SendRecord]  = field(default_factory=list)
+    history:             list[ForgeRecord]  = field(default_factory=list)
     source_session_id:   Optional[str]     = None
     # Seconds to wait for server packets after a send (configurable per-tab).
     response_window:     float             = 1.0
@@ -147,7 +147,7 @@ class RepeaterRequest:
     direction:           str               = "to_server"
     # ID of the persistent TCP session created for custom host:port sends.
     # Not persisted to disk — connections don't survive restarts.
-    repeater_session_id: Optional[str]     = field(default=None, compare=False)
+    forge_session_id: Optional[str]     = field(default=None, compare=False)
 
     @classmethod
     def create(
@@ -159,7 +159,7 @@ class RepeaterRequest:
         current_bytes:     bytes = b"",
         source_session_id: Optional[str] = None,
         direction:         str  = "to_server",
-    ) -> "RepeaterRequest":
+    ) -> "ForgeRequest":
         return cls(
             id=str(uuid.uuid4()),
             label=label,
@@ -171,7 +171,7 @@ class RepeaterRequest:
             direction=direction,
         )
 
-    def add_record(self, record: SendRecord) -> None:
+    def add_record(self, record: ForgeRecord) -> None:
         """Append a send record to the history."""
         self.history.append(record)
 
@@ -190,7 +190,7 @@ class RepeaterRequest:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "RepeaterRequest":
+    def from_dict(cls, d: dict) -> "ForgeRequest":
         return cls(
             id=d["id"],
             label=d["label"],
@@ -198,7 +198,7 @@ class RepeaterRequest:
             port=d["port"],
             tls=d.get("tls", False),
             current_bytes=bytes.fromhex(d.get("current_bytes", "")),
-            history=[SendRecord.from_dict(r) for r in d.get("history", [])],
+            history=[ForgeRecord.from_dict(r) for r in d.get("history", [])],
             source_session_id=d.get("source_session_id"),
             response_window=d.get("response_window", 1.0),
             direction=d.get("direction", "to_server"),

@@ -150,7 +150,7 @@ class FuzzCampaign:
     Attributes:
         id:             Unique ID.
         session_id:     Template session to replay with mutations applied.
-        frame_selector: Which frames to fuzz (same syntax as ReplayEngine).
+        frame_selector: Which frames to fuzz (same syntax as ForgeEngine).
                         None = all client-to-server frames.
         mutator_names:  Display names of the configured mutators (for serialisation).
         iterations:     Total number of mutations to attempt.

@@ -1,4 +1,4 @@
-"""Tests for ReplayEngine.send_frame() (Repeater single-frame send)."""
+"""Tests for ForgeEngine.send_frame() (Forge single-frame send)."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ import socket
 import pytest
 
 from protopoke.core.session import SessionRegistry
-from protopoke.replay.engine import ReplayEngine
-from protopoke.replay.models import SendRecord
+from protopoke.forge.engine import ForgeEngine
+from protopoke.forge.models import ForgeRecord
 
 
 def free_port() -> int:
@@ -42,7 +42,7 @@ async def _echo_server_task(host: str, port: int):
 
 @pytest.fixture
 def engine():
-    return ReplayEngine(session_registry=SessionRegistry())
+    return ForgeEngine(session_registry=SessionRegistry())
 
 
 @pytest.mark.asyncio
@@ -81,7 +81,7 @@ class TestSendFrame:
         server = await _echo_server_task("127.0.0.1", port)
         async with server:
             rec = await engine.send_frame(b"hello", "127.0.0.1", port)
-        assert isinstance(rec, SendRecord)
+        assert isinstance(rec, ForgeRecord)
         assert rec.id  # non-empty UUID
 
     async def test_empty_bytes(self, engine):

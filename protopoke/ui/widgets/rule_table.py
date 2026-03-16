@@ -1,4 +1,4 @@
-"""RuleTable widget — an editable ordered list of rules (replace or intercept)."""
+"""RuleTable widget — an editable ordered list of rules (replace or tamper)."""
 
 from __future__ import annotations
 

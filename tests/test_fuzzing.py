@@ -371,10 +371,10 @@ class TestLengthMangleMutator:
 class TestFuzzerEngineUnit:
     @pytest.mark.asyncio
     async def test_unknown_session_returns_done(self):
-        from protopoke.replay.engine import ReplayEngine
+        from protopoke.forge.engine import ForgeEngine
         reg    = SessionRegistry()
         engine = FuzzerEngine(
-            replay_engine=ReplayEngine(session_registry=reg),
+            forge_engine=ForgeEngine(session_registry=reg),
             session_registry=reg,
         )
         campaign = FuzzCampaign.create("nonexistent", [BitFlipMutator()], iterations=5)
@@ -384,10 +384,10 @@ class TestFuzzerEngineUnit:
 
     @pytest.mark.asyncio
     async def test_empty_mutators_returns_done(self):
-        from protopoke.replay.engine import ReplayEngine
+        from protopoke.forge.engine import ForgeEngine
         reg    = SessionRegistry()
         engine = FuzzerEngine(
-            replay_engine=ReplayEngine(session_registry=reg),
+            forge_engine=ForgeEngine(session_registry=reg),
             session_registry=reg,
         )
         campaign = FuzzCampaign.create("sess", [], iterations=5)

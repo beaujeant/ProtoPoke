@@ -54,7 +54,7 @@ _make_tls_stubs()
 from protopoke.api import ProxyAPI  # noqa: E402
 from protopoke.config import ProxyConfig  # noqa: E402
 from protopoke.models import Direction  # noqa: E402
-from protopoke.rules.rule import ReplaceRule, InterceptRule, RuleAction  # noqa: E402
+from protopoke.rules.rule import ReplaceRule, TamperRule, RuleAction  # noqa: E402
 from protopoke.mcp import build_mcp_server  # noqa: E402
 
 
@@ -68,7 +68,7 @@ def api():
         listen_port=19999,
         upstream_host="127.0.0.1",
         upstream_port=19998,
-        intercept_enabled=True,
+        tamper_enabled=True,
     )
     return ProxyAPI(cfg)
 
@@ -98,16 +98,16 @@ class TestProxyStatus:
     def test_contains_expected_keys(self, mcp_server):
         fn = get_tool(mcp_server, "proxy_status")
         result = fn()
-        assert "intercept_enabled" in result
-        assert "pending_intercept_count" in result
+        assert "tamper_enabled" in result
+        assert "pending_tamper_count" in result
         assert "total_sessions" in result
         assert "listen" in result
 
-    def test_intercept_enabled_reflects_config(self, mcp_server, api):
+    def test_tamper_enabled_reflects_config(self, mcp_server, api):
         fn = get_tool(mcp_server, "proxy_status")
-        api.intercept_enabled = True
+        api.tamper_enabled = True
         result = fn()
-        assert result["intercept_enabled"] is True
+        assert result["tamper_enabled"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -169,62 +169,62 @@ class TestGetFrames:
 
 
 # ---------------------------------------------------------------------------
-# intercept tools
+# tamper tools
 # ---------------------------------------------------------------------------
 
-class TestInterceptTools:
-    def test_intercept_status(self, mcp_server, api):
-        fn = get_tool(mcp_server, "intercept_status")
+class TestTamperTools:
+    def test_tamper_status(self, mcp_server, api):
+        fn = get_tool(mcp_server, "tamper_status")
         result = fn()
-        assert "intercept_enabled" in result
+        assert "tamper_enabled" in result
         assert "pending_count" in result
 
-    def test_intercept_toggle(self, mcp_server, api):
-        fn = get_tool(mcp_server, "intercept_toggle")
+    def test_tamper_toggle(self, mcp_server, api):
+        fn = get_tool(mcp_server, "tamper_toggle")
         result = fn(False)
-        assert result["intercept_enabled"] is False
+        assert result["tamper_enabled"] is False
         result2 = fn(True)
-        assert result2["intercept_enabled"] is True
+        assert result2["tamper_enabled"] is True
 
-    def test_list_intercepted_empty(self, mcp_server):
+    def test_list_tampered_empty(self, mcp_server):
         fn = get_tool(mcp_server, "list_intercepted")
         assert fn() == []
 
-    def test_intercept_forward_unknown_id(self, mcp_server):
-        fn = get_tool(mcp_server, "intercept_forward")
+    def test_tamper_forward_unknown_id(self, mcp_server):
+        fn = get_tool(mcp_server, "tamper_forward")
         result = fn("unknown-id")
         assert result["ok"] is False
 
-    def test_intercept_drop_unknown_id(self, mcp_server):
-        fn = get_tool(mcp_server, "intercept_drop")
+    def test_tamper_drop_unknown_id(self, mcp_server):
+        fn = get_tool(mcp_server, "tamper_drop")
         result = fn("unknown-id")
         assert result["ok"] is False
 
-    def test_intercept_modify_invalid_hex(self, mcp_server):
-        fn = get_tool(mcp_server, "intercept_modify_and_forward")
+    def test_tamper_modify_invalid_hex(self, mcp_server):
+        fn = get_tool(mcp_server, "tamper_modify_and_forward")
         result = fn("some-id", "ZZNOTVALIDHEX")
         assert result["ok"] is False
         assert "error" in result
 
-    def test_intercept_forward_all_when_empty(self, mcp_server):
-        fn = get_tool(mcp_server, "intercept_forward_all")
+    def test_tamper_forward_all_when_empty(self, mcp_server):
+        fn = get_tool(mcp_server, "tamper_forward_all")
         result = fn()
         assert result["forwarded"] == 0
 
     def test_set_direction_filter(self, mcp_server, api):
-        fn = get_tool(mcp_server, "intercept_set_direction_filter")
+        fn = get_tool(mcp_server, "tamper_set_direction_filter")
         result = fn("client_to_server")
         assert result["direction_filter"] == "client_to_server"
         result2 = fn(None)
         assert result2["direction_filter"] is None
 
     def test_set_direction_filter_invalid(self, mcp_server):
-        fn = get_tool(mcp_server, "intercept_set_direction_filter")
+        fn = get_tool(mcp_server, "tamper_set_direction_filter")
         result = fn("invalid_direction")
         assert "error" in result
 
     def test_set_session_filter(self, mcp_server):
-        fn = get_tool(mcp_server, "intercept_set_session_filter")
+        fn = get_tool(mcp_server, "tamper_set_session_filter")
         result = fn(["sess-1", "sess-2"])
         assert set(result["session_filter"]) == {"sess-1", "sess-2"}
         result2 = fn(None)
@@ -282,51 +282,51 @@ class TestReplaceRuleTools:
 
 
 # ---------------------------------------------------------------------------
-# Intercept rules tools
+# Tamper rules tools
 # ---------------------------------------------------------------------------
 
-class TestInterceptRuleTools:
-    def test_list_intercept_rules_empty(self, mcp_server):
-        fn = get_tool(mcp_server, "list_intercept_rules")
+class TestTamperRuleTools:
+    def test_list_tamper_rules_empty(self, mcp_server):
+        fn = get_tool(mcp_server, "list_tamper_rules")
         assert fn() == []
 
-    def test_add_intercept_rule(self, mcp_server):
-        fn = get_tool(mcp_server, "add_intercept_rule")
+    def test_add_tamper_rule(self, mcp_server):
+        fn = get_tool(mcp_server, "add_tamper_rule")
         result = fn("login", "01 02", "intercept")
         assert result["ok"] is True
         assert result["rule"]["label"] == "login"
         assert result["rule"]["action"] == "intercept"
 
-    def test_add_intercept_rule_forward_action(self, mcp_server):
-        fn = get_tool(mcp_server, "add_intercept_rule")
+    def test_add_tamper_rule_forward_action(self, mcp_server):
+        fn = get_tool(mcp_server, "add_tamper_rule")
         result = fn("heartbeat", "FF", "forward")
         assert result["ok"] is True
         assert result["rule"]["action"] == "forward"
 
-    def test_add_intercept_rule_invalid_action(self, mcp_server):
-        fn = get_tool(mcp_server, "add_intercept_rule")
+    def test_add_tamper_rule_invalid_action(self, mcp_server):
+        fn = get_tool(mcp_server, "add_tamper_rule")
         result = fn("bad", "01", "unknown_action")
         assert result["ok"] is False
 
-    def test_add_intercept_rule_with_session_ids(self, mcp_server):
-        fn = get_tool(mcp_server, "add_intercept_rule")
+    def test_add_tamper_rule_with_session_ids(self, mcp_server):
+        fn = get_tool(mcp_server, "add_tamper_rule")
         result = fn("scoped", "01", "intercept", session_ids=["s1", "s2"])
         assert result["ok"] is True
         assert set(result["rule"]["session_ids"]) == {"s1", "s2"}
 
-    def test_remove_intercept_rule(self, mcp_server, api):
-        rule = InterceptRule.create("r1", "01", RuleAction.INTERCEPT)
-        api.add_intercept_rule(rule)
+    def test_remove_tamper_rule(self, mcp_server, api):
+        rule = TamperRule.create("r1", "01", RuleAction.INTERCEPT)
+        api.add_tamper_rule(rule)
 
-        fn_remove = get_tool(mcp_server, "remove_intercept_rule")
+        fn_remove = get_tool(mcp_server, "remove_tamper_rule")
         result = fn_remove(rule.id)
         assert result["ok"] is True
 
-        fn_list = get_tool(mcp_server, "list_intercept_rules")
+        fn_list = get_tool(mcp_server, "list_tamper_rules")
         assert fn_list() == []
 
-    def test_remove_nonexistent_intercept_rule(self, mcp_server):
-        fn = get_tool(mcp_server, "remove_intercept_rule")
+    def test_remove_nonexistent_tamper_rule(self, mcp_server):
+        fn = get_tool(mcp_server, "remove_tamper_rule")
         result = fn("nope")
         assert result["ok"] is False
 
@@ -382,19 +382,19 @@ class TestSendFrameTool:
 
 
 # ---------------------------------------------------------------------------
-# replay_session (async tool)
+# forge_session (async tool)
 # ---------------------------------------------------------------------------
 
 class TestReplaySessionTool:
     @pytest.mark.asyncio
     async def test_unknown_session_returns_error(self, mcp_server):
-        fn = get_tool(mcp_server, "replay_session")
+        fn = get_tool(mcp_server, "forge_session")
         result = await fn("nonexistent-session-id")
         # Should fail gracefully with an error in the result
         assert "error" in result or result.get("success") is False
 
     @pytest.mark.asyncio
     async def test_invalid_direction_returns_error(self, mcp_server):
-        fn = get_tool(mcp_server, "replay_session")
+        fn = get_tool(mcp_server, "forge_session")
         result = await fn("any-session", direction="bad_dir")
         assert "error" in result

@@ -1,4 +1,4 @@
-"""Tests for the Sequencer feature."""
+"""Tests for the Sequence feature."""
 
 from __future__ import annotations
 
@@ -10,9 +10,9 @@ from typing import List
 
 import pytest
 
-from protopoke.sequencer.models import HistoryEntry, SequencerSession, SequenceStep
-from protopoke.sequencer.variables import resolve_hex
-from protopoke.sequencer.engine import SequencerEngine, load_script
+from protopoke.sequence.models import HistoryEntry, SequenceSession, SequenceStep
+from protopoke.sequence.variables import resolve_hex
+from protopoke.sequence.engine import SequenceEngine, load_script
 
 
 # ---------------------------------------------------------------------------
@@ -79,12 +79,12 @@ class TestHistoryEntry:
 
 
 # ---------------------------------------------------------------------------
-# SequencerSession
+# SequenceSession
 # ---------------------------------------------------------------------------
 
-class TestSequencerSession:
+class TestSequenceSession:
     def test_create(self):
-        seq = SequencerSession.create("My Seq", host="localhost", port=9090, tls=False)
+        seq = SequenceSession.create("My Seq", host="localhost", port=9090, tls=False)
         assert seq.label == "My Seq"
         assert seq.host == "localhost"
         assert seq.port == 9090
@@ -94,17 +94,17 @@ class TestSequencerSession:
         assert seq.history == []
 
     def test_roundtrip_empty(self):
-        seq = SequencerSession.create("Empty")
-        restored = SequencerSession.from_dict(seq.to_dict())
+        seq = SequenceSession.create("Empty")
+        restored = SequenceSession.from_dict(seq.to_dict())
         assert restored.id == seq.id
         assert restored.label == seq.label
 
     def test_roundtrip_with_steps_and_vars(self):
-        seq = SequencerSession.create("Full", host="h", port=1, tls=True)
+        seq = SequenceSession.create("Full", host="h", port=1, tls=True)
         seq.steps.append(SequenceStep.create("s1", "01 02 ##X##"))
         seq.variables["X"] = "deadbeef"
         seq.history.append(HistoryEntry.create_sent(b"\x01", "s1"))
-        restored = SequencerSession.from_dict(seq.to_dict())
+        restored = SequenceSession.from_dict(seq.to_dict())
         assert len(restored.steps) == 1
         assert restored.steps[0].label == "s1"
         assert restored.variables["X"] == "deadbeef"
@@ -177,13 +177,13 @@ class TestResolveHex:
 
 
 # ---------------------------------------------------------------------------
-# SequencerEngine
+# SequenceEngine
 # ---------------------------------------------------------------------------
 
-class TestSequencerEngine:
+class TestSequenceEngine:
     @pytest.mark.asyncio
     async def test_run_simple(self):
-        seq = SequencerSession.create("test", host="h", port=1)
+        seq = SequenceSession.create("test", host="h", port=1)
         seq.steps.append(SequenceStep.create("s1", "01 02 03"))
         seq.steps.append(SequenceStep.create("s2", "04 05"))
 
@@ -194,7 +194,7 @@ class TestSequencerEngine:
             sent.append(data)
             return received_resp if len(sent) == 1 else []
 
-        engine = SequencerEngine()
+        engine = SequenceEngine()
         entries: list[HistoryEntry] = []
         await engine.run(seq, send_fn=send_fn, on_entry=entries.append)
 
@@ -217,7 +217,7 @@ class TestSequencerEngine:
 
     @pytest.mark.asyncio
     async def test_run_with_variable_substitution(self):
-        seq = SequencerSession.create("test")
+        seq = SequenceSession.create("test")
         seq.variables["ID"] = "aabb"
         seq.steps.append(SequenceStep.create("s1", "01 ##ID## 02"))
 
@@ -227,14 +227,14 @@ class TestSequencerEngine:
             sent.append(data)
             return []
 
-        engine = SequencerEngine()
+        engine = SequenceEngine()
         await engine.run(seq, send_fn=send_fn)
         assert sent[0] == b"\x01\xaa\xbb\x02"
 
     @pytest.mark.asyncio
     async def test_run_with_on_response_hook(self):
         """on_response captures a variable; next step uses it."""
-        seq = SequencerSession.create("test")
+        seq = SequenceSession.create("test")
         seq.steps.append(SequenceStep.create("handshake", "01"))
         seq.steps.append(SequenceStep.create("auth", "02 ##TOKEN##"))
 
@@ -258,7 +258,7 @@ class TestSequencerEngine:
             sent.append(data)
             return await orig_send(data)
 
-        engine = SequencerEngine()
+        engine = SequenceEngine()
         await engine.run(seq, send_fn=tracking_send_fn, script=script_mod)
 
         assert sent[0] == b"\x01"
@@ -270,7 +270,7 @@ class TestSequencerEngine:
     @pytest.mark.asyncio
     async def test_run_with_on_send_hook(self):
         """on_send can modify the bytes before sending."""
-        seq = SequencerSession.create("test")
+        seq = SequenceSession.create("test")
         seq.steps.append(SequenceStep.create("s1", "01 02"))
 
         script_src = textwrap.dedent("""\
@@ -285,7 +285,7 @@ class TestSequencerEngine:
             sent.append(data)
             return []
 
-        engine = SequencerEngine()
+        engine = SequenceEngine()
         await engine.run(seq, send_fn=send_fn, script=script_mod)
         # 01 02 XOR ff = fe fd
         assert sent[0] == b"\xfe\xfd"
@@ -293,7 +293,7 @@ class TestSequencerEngine:
     @pytest.mark.asyncio
     async def test_run_skips_step_on_resolve_error(self):
         """A step with an undefined variable is skipped, others still run."""
-        seq = SequencerSession.create("test")
+        seq = SequenceSession.create("test")
         seq.steps.append(SequenceStep.create("bad",  "01 ##MISSING##"))
         seq.steps.append(SequenceStep.create("good", "02 03"))
 
@@ -303,14 +303,14 @@ class TestSequencerEngine:
             sent.append(data)
             return []
 
-        engine = SequencerEngine()
+        engine = SequenceEngine()
         await engine.run(seq, send_fn=send_fn)
         assert len(sent) == 1
         assert sent[0] == b"\x02\x03"
 
     @pytest.mark.asyncio
     async def test_variables_persist_after_run(self):
-        seq = SequencerSession.create("test")
+        seq = SequenceSession.create("test")
         seq.steps.append(SequenceStep.create("s1", "01"))
 
         script_src = textwrap.dedent("""\
@@ -322,7 +322,7 @@ class TestSequencerEngine:
         async def send_fn(data):
             return [b"\xff"]
 
-        engine = SequencerEngine()
+        engine = SequenceEngine()
         await engine.run(seq, send_fn=send_fn, script=script_mod)
         assert seq.variables.get("CAPTURED") == "cafebabe"
 

@@ -16,15 +16,15 @@ from ..config import ProxyConfig
 from ..models import Direction
 from ..events.bus import FrameCapturedEvent, SessionClosedEvent, SessionOpenedEvent
 from ..project.manager import ProjectManager, ProjectState
-from ..replay.models import RepeaterRequest
+from ..forge.models import ForgeRequest
 from .modals.request_modal import RequestModal, RequestResult
 from .modals.project import NewProjectModal, OpenProjectModal, SaveAsModal
 from .tabs.config import ConfigTab
 from .tabs.fuzzer import FuzzerTab
-from .tabs.intercept import InterceptTab
-from .tabs.logs import LogsTab
-from .tabs.repeater import RepeaterTab
-from .tabs.sequencer import SequencerTab
+from .tabs.tamper import TamperTab
+from .tabs.traffic import TrafficTab
+from .tabs.forge import ForgeTab
+from .tabs.sequence import SequenceTab
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ class _FrameCaptured(Message):
         self.frame_id   = frame_id
 
 
-class _InterceptedArrived(Message):
+class _TamperedArrived(Message):
     def __init__(self, unit_id: str) -> None:
         super().__init__()
         self.unit_id = unit_id
@@ -68,9 +68,9 @@ class ProtoPoke(App):
 
     Keyboard shortcuts:
         F1 → Config tab
-        F2 → Logs tab
-        F3 → Intercept tab
-        F4 → Repeater tab
+        F2 → Traffic tab
+        F3 → Tamper tab
+        F4 → Forge tab
         ctrl+n → New project
         ctrl+o → Open project
         ctrl+s → Save project
@@ -83,12 +83,12 @@ class ProtoPoke(App):
 
     BINDINGS = [
         Binding("f1",           "switch_tab('config')",    "Config",    show=True),
-        Binding("f2",           "switch_tab('logs')",      "Logs",      show=True),
-        Binding("f3",           "switch_tab('intercept')", "Intercept", show=True),
-        Binding("f4",           "switch_tab('repeater')",  "Repeater",  show=True),
+        Binding("f2",           "switch_tab('traffic')",   "Traffic",   show=True),
+        Binding("f3",           "switch_tab('tamper')",    "Tamper",    show=True),
+        Binding("f4",           "switch_tab('forge')",     "Forge",     show=True),
         Binding("f5",           "switch_tab('fuzzer')",    "Fuzzer",    show=True),
-        Binding("f6",           "switch_tab('sequencer')", "Sequencer", show=True),
-        Binding("ctrl+r",       "send_to_repeater",        "→Repeater", show=False, priority=True),
+        Binding("f6",           "switch_tab('sequence')",  "Sequence",  show=True),
+        Binding("ctrl+r",       "send_to_forge",           "→Forge",    show=False, priority=True),
         Binding("ctrl+n",       "new_project",             "New",       show=False),
         Binding("ctrl+o",       "open_project",            "Open",      show=False),
         Binding("ctrl+s",       "save_project",            "Save",      show=False),
@@ -122,7 +122,7 @@ class ProtoPoke(App):
         self.api = ProxyAPI(
             config=self._project.config,
             rules_engine=self._project.rules_engine,
-            intercept_filter=self._project.intercept_filter,
+            tamper_filter=self._project.tamper_filter,
         )
 
         self._proxy_running = False
@@ -136,23 +136,23 @@ class ProtoPoke(App):
         with TabbedContent(id="tabs"):
             with TabPane("Config [F1]", id="config"):
                 yield ConfigTab(self._project.config, id="config-tab")
-            with TabPane("Logs [F2]", id="logs"):
-                yield LogsTab(id="logs-tab")
-            with TabPane("Intercept [F3]", id="intercept"):
-                yield InterceptTab(id="intercept-tab")
-            with TabPane("Repeater [F4]", id="repeater"):
-                yield RepeaterTab(id="repeater-tab")
+            with TabPane("Traffic [F2]", id="traffic"):
+                yield TrafficTab(id="traffic-tab")
+            with TabPane("Tamper [F3]", id="tamper"):
+                yield TamperTab(id="tamper-tab")
+            with TabPane("Forge [F4]", id="forge"):
+                yield ForgeTab(id="forge-tab")
             with TabPane("Fuzzer [F5]", id="fuzzer"):
                 yield FuzzerTab(id="fuzzer-tab")
-            with TabPane("Sequencer [F6]", id="sequencer"):
-                yield SequencerTab(id="sequencer-tab")
+            with TabPane("Sequence [F6]", id="sequence"):
+                yield SequenceTab(id="sequence-tab")
         yield Footer()
 
     def on_mount(self) -> None:
         self._register_event_handlers()
         self._update_title()
-        # Start polling the intercept queue in the background
-        self.set_interval(0.2, self._poll_intercept_queue)
+        # Start polling the tamper queue in the background
+        self.set_interval(0.2, self._poll_tamper_queue)
 
     # ------------------------------------------------------------------
     # Proxy event → Textual message bridge
@@ -177,36 +177,36 @@ class ProtoPoke(App):
     def on__session_opened(self, msg: _SessionOpened) -> None:
         session = self.api.get_session(msg.session_id)
         if session:
-            self.query_one("#logs-tab", LogsTab).add_session(session)
+            self.query_one("#traffic-tab", TrafficTab).add_session(session)
             self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
-            self.query_one("#repeater-tab", RepeaterTab).refresh_session_dropdown()
+            self.query_one("#forge-tab", ForgeTab).refresh_session_dropdown()
 
     def on__session_closed(self, msg: _SessionClosed) -> None:
         session = self.api.get_session(msg.session_id)
         if session:
-            self.query_one("#logs-tab", LogsTab).update_session(session)
+            self.query_one("#traffic-tab", TrafficTab).update_session(session)
             self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
-            self.query_one("#repeater-tab", RepeaterTab).refresh_session_dropdown()
+            self.query_one("#forge-tab", ForgeTab).refresh_session_dropdown()
 
     def on__frame_captured(self, msg: _FrameCaptured) -> None:
         session = self.api.get_session(msg.session_id)
         if session:
-            self.query_one("#logs-tab", LogsTab).update_session(session)
+            self.query_one("#traffic-tab", TrafficTab).update_session(session)
             for frame in session.frames:
                 if frame.id == msg.frame_id:
-                    self.query_one("#logs-tab", LogsTab).add_frame_to_current(frame)
+                    self.query_one("#traffic-tab", TrafficTab).add_frame_to_current(frame)
                     break
 
     # ------------------------------------------------------------------
-    # Intercept queue polling
+    # Tamper queue polling
     # ------------------------------------------------------------------
 
-    async def _poll_intercept_queue(self) -> None:
-        """Drain any newly queued intercepted units and post them to the UI."""
+    async def _poll_tamper_queue(self) -> None:
+        """Drain any newly queued tampered units and post them to the UI."""
         for unit in self.api.list_intercepted():
-            intercept_tab = self.query_one("#intercept-tab", InterceptTab)
-            if unit.id not in intercept_tab._units:
-                intercept_tab.add_unit(unit)
+            tamper_tab = self.query_one("#tamper-tab", TamperTab)
+            if unit.id not in tamper_tab._units:
+                tamper_tab.add_unit(unit)
 
     # ------------------------------------------------------------------
     # Config tab events
@@ -231,17 +231,17 @@ class ProtoPoke(App):
     async def _start_proxy(self) -> None:
         try:
             # Rebuild the ProxyAPI so changes to config (especially
-            # intercept_enabled, framer_name) are picked up fresh.
+            # tamper_enabled, framer_name) are picked up fresh.
             self._rebuild_api()
             await self.api.start()
             self._proxy_running = True
             self._update_title()
             self.query_one("#config-tab", ConfigTab).notify_proxy_running(True)
-            # Sync the intercept toggle in the Intercept tab to reflect config
+            # Sync the tamper toggle in the Tamper tab to reflect config
             try:
-                self.query_one("#intercept-tab", InterceptTab).query_one(
-                    "#intercept-toggle", Switch
-                ).value = self.api.config.intercept_enabled
+                self.query_one("#tamper-tab", TamperTab).query_one(
+                    "#tamper-toggle", Switch
+                ).value = self.api.config.tamper_enabled
             except Exception:
                 pass
             self.notify(
@@ -274,7 +274,7 @@ class ProtoPoke(App):
         Changes that apply to new connections / next run (no extra action needed,
         they are read from api.config at the relevant time):
         - Framing (new connections use updated framer_name / framer_kwargs)
-        - Sequencer script (loaded fresh at the start of each run)
+        - Sequence script (loaded fresh at the start of each run)
         - Max sessions (checked per new connection)
         """
         import logging as _logging
@@ -308,15 +308,15 @@ class ProtoPoke(App):
         tabs = self.query_one("#tabs", TabbedContent)
         tabs.active = tab_id
 
-    def action_send_to_repeater(self) -> None:
-        """Ctrl+Shift+R — send the selected Logs frame to the Repeater."""
-        logs_tab = self.query_one("#logs-tab", LogsTab)
-        if logs_tab._current_frame_id and logs_tab._current_session_id:
-            self.send_frame_to_repeater(
-                logs_tab._current_session_id, logs_tab._current_frame_id
+    def action_send_to_forge(self) -> None:
+        """Ctrl+R — send the selected Traffic frame to Forge."""
+        traffic_tab = self.query_one("#traffic-tab", TrafficTab)
+        if traffic_tab._current_frame_id and traffic_tab._current_session_id:
+            self.send_frame_to_forge(
+                traffic_tab._current_session_id, traffic_tab._current_frame_id
             )
         else:
-            self.notify("Select a frame in the Logs tab first.", severity="warning")
+            self.notify("Select a frame in the Traffic tab first.", severity="warning")
 
     # ------------------------------------------------------------------
     # Project management actions
@@ -334,11 +334,11 @@ class ProtoPoke(App):
         config_tab = self.query_one("#config-tab", ConfigTab)
         config_tab.load_config(self._project.config)
         config_tab.notify_proxy_running(False)
-        self.query_one("#logs-tab", LogsTab).clear_all()
-        self.query_one("#repeater-tab", RepeaterTab).load_requests([])
-        self.query_one("#sequencer-tab", SequencerTab).load_sequences([])
+        self.query_one("#traffic-tab", TrafficTab).clear_all()
+        self.query_one("#forge-tab", ForgeTab).load_requests([])
+        self.query_one("#sequence-tab", SequenceTab).load_sequences([])
         self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions([])
-        self.query_one("#repeater-tab", RepeaterTab).refresh_session_dropdown()
+        self.query_one("#forge-tab", ForgeTab).refresh_session_dropdown()
         self._update_title()
         self.notify(f"New project: {name}")
 
@@ -354,11 +354,11 @@ class ProtoPoke(App):
             config_tab = self.query_one("#config-tab", ConfigTab)
             config_tab.load_config(state.config)
             config_tab.notify_proxy_running(False)
-            self.query_one("#repeater-tab", RepeaterTab).load_requests(state.repeater_requests)
-            self.query_one("#sequencer-tab", SequencerTab).load_sequences(state.sequencer_sessions)
+            self.query_one("#forge-tab", ForgeTab).load_requests(state.forge_requests)
+            self.query_one("#sequence-tab", SequenceTab).load_sequences(state.sequence_sessions)
             # Restore logs: load sessions+frames into registry, then populate UI
-            logs_tab = self.query_one("#logs-tab", LogsTab)
-            logs_tab.clear_all()
+            traffic_tab = self.query_one("#traffic-tab", TrafficTab)
+            traffic_tab.clear_all()
             if state.captured_sessions:
                 restored = self.api.load_sessions_from_dicts(state.captured_sessions)
                 for session in restored:
@@ -366,9 +366,9 @@ class ProtoPoke(App):
                     # called automatically for the first session (auto-select).
                     # For all others the frames appear when the user selects them
                     # (on_data_table_row_highlighted looks up via api.get_session).
-                    logs_tab.add_session(session)
+                    traffic_tab.add_session(session)
                 self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
-                self.query_one("#repeater-tab", RepeaterTab).refresh_session_dropdown()
+                self.query_one("#forge-tab", ForgeTab).refresh_session_dropdown()
             self._update_title()
             self.notify(f"Opened project: {state.name}")
         except Exception as exc:
@@ -379,7 +379,7 @@ class ProtoPoke(App):
             self.action_save_project_as()
             return
         try:
-            self._sync_repeater_requests()
+            self._sync_forge_requests()
             self._project.save()
             self._update_title()
             self.notify("Project saved.")
@@ -394,20 +394,20 @@ class ProtoPoke(App):
         if not path:
             return
         try:
-            self._sync_repeater_requests()
+            self._sync_forge_requests()
             self._project.save_as(path)
             self._update_title()
             self.notify(f"Saved to {path}")
         except Exception as exc:
             self.notify(f"Save failed: {exc}", severity="error")
 
-    def _sync_repeater_requests(self) -> None:
-        """Copy the current UI state (repeater, sequencer, logs) into the project."""
-        repeater_tab = self.query_one("#repeater-tab", RepeaterTab)
-        self._project.repeater_requests = list(repeater_tab._requests)
-        sequencer_tab = self.query_one("#sequencer-tab", SequencerTab)
-        sequencer_tab._save_step_editor()
-        self._project.sequencer_sessions = list(sequencer_tab._sequences)
+    def _sync_forge_requests(self) -> None:
+        """Copy the current UI state (forge, sequence, traffic) into the project."""
+        forge_tab = self.query_one("#forge-tab", ForgeTab)
+        self._project.forge_requests = list(forge_tab._requests)
+        sequence_tab = self.query_one("#sequence-tab", SequenceTab)
+        sequence_tab._save_step_editor()
+        self._project.sequence_sessions = list(sequence_tab._sequences)
         # Sync logs: capture all sessions and their frames
         self._project.captured_sessions = [
             self.api.session_to_dict(session)
@@ -433,7 +433,7 @@ class ProtoPoke(App):
     def _on_new_request(self, result: RequestResult | None) -> None:
         if result is None:
             return
-        req = RepeaterRequest.create(
+        req = ForgeRequest.create(
             host=result.host,
             port=result.port,
             tls=result.tls,
@@ -446,10 +446,10 @@ class ProtoPoke(App):
             session = self.api.get_session(result.session_id)
             if session and session.frames:
                 req.current_bytes = session.frames[0].raw_bytes
-        self.query_one("#repeater-tab", RepeaterTab).add_request(req)
-        self._project.repeater_requests.append(req)
+        self.query_one("#forge-tab", ForgeTab).add_request(req)
+        self._project.forge_requests.append(req)
         def _do_sw_rep() -> None:
-            self.action_switch_tab("repeater")
+            self.action_switch_tab("forge")
         def _sched_sw_rep() -> None:
             self.call_after_refresh(_do_sw_rep)
         self.call_after_refresh(_sched_sw_rep)
@@ -466,23 +466,23 @@ class ProtoPoke(App):
             self.notify("Session is already closed.", severity="warning")
 
     def delete_session(self, session_id: str) -> None:
-        """Delete a session from the registry and remove it from the Logs tab."""
+        """Delete a session from the registry and remove it from the Traffic tab."""
         deleted = self.api.delete_session(session_id)
         if deleted:
-            self.query_one("#logs-tab", LogsTab).remove_session(session_id)
+            self.query_one("#traffic-tab", TrafficTab).remove_session(session_id)
             self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(
                 self.api.list_sessions()
             )
-            self.query_one("#repeater-tab", RepeaterTab).refresh_session_dropdown()
+            self.query_one("#forge-tab", ForgeTab).refresh_session_dropdown()
         else:
             self.notify("Session not found.", severity="warning")
 
-    def send_frames_to_sequencer(
+    def send_frames_to_sequence(
         self, session_id: str, frame_ids: list[str]
     ) -> None:
         """
-        Called by LogsTab — add one or more captured frames as new steps in
-        the Sequencer.
+        Called by TrafficTab — add one or more captured frames as new steps in
+        the Sequence tab.
 
         Only frames whose direction matches the *first* frame in *frame_ids*
         are included, so a sequence always goes in a single direction.
@@ -515,7 +515,7 @@ class ProtoPoke(App):
             else "server_to_client"
         )
 
-        seq_tab = self.query_one("#sequencer-tab", SequencerTab)
+        seq_tab = self.query_one("#sequence-tab", SequenceTab)
         for frame in selected_frames:
             seq_tab.add_step_from_bytes(
                 raw_bytes=frame.raw_bytes,
@@ -530,19 +530,19 @@ class ProtoPoke(App):
         self._project.mark_dirty()
         # Double call_after_refresh: lets all widget mounts (new sequence buttons,
         # DataTable updates) settle before the tab switch is applied.
-        def _do_switch_sequencer() -> None:
-            self.action_switch_tab("sequencer")
-        def _schedule_switch_sequencer() -> None:
-            self.call_after_refresh(_do_switch_sequencer)
-        self.call_after_refresh(_schedule_switch_sequencer)
+        def _do_switch_sequence() -> None:
+            self.action_switch_tab("sequence")
+        def _schedule_switch_sequence() -> None:
+            self.call_after_refresh(_do_switch_sequence)
+        self.call_after_refresh(_schedule_switch_sequence)
         skipped = len(frame_ids) - len(selected_frames)
-        msg = f"{len(selected_frames)} frame(s) added to Sequencer"
+        msg = f"{len(selected_frames)} frame(s) added to Sequence"
         if skipped:
             msg += f" ({skipped} skipped — wrong direction)"
         self.notify(msg)
 
-    def send_frame_to_repeater(self, session_id: str, frame_id: str) -> None:
-        """Called by LogsTab — create a repeater request from a captured frame."""
+    def send_frame_to_forge(self, session_id: str, frame_id: str) -> None:
+        """Called by TrafficTab — create a forge request from a captured frame."""
         session = self.api.get_session(session_id)
         if not session:
             return
@@ -554,7 +554,7 @@ class ProtoPoke(App):
             if frame.direction is Direction.CLIENT_TO_SERVER
             else "to_client"
         )
-        req = RepeaterRequest.create(
+        req = ForgeRequest.create(
             host=session.info.server_host,
             port=session.info.server_port,
             tls=self.api.config.tls_upstream,
@@ -562,17 +562,17 @@ class ProtoPoke(App):
             source_session_id=session_id,
             direction=direction,
         )
-        self.query_one("#repeater-tab", RepeaterTab).add_request(req)
-        self._project.repeater_requests.append(req)
+        self.query_one("#forge-tab", ForgeTab).add_request(req)
+        self._project.forge_requests.append(req)
         # Double call_after_refresh: the first refresh lets the mount settle,
         # the second actually performs the tab switch so it lands after all
         # reactive DOM updates triggered by the mount have been processed.
-        def _do_switch_repeater() -> None:
-            self.action_switch_tab("repeater")
-        def _schedule_switch_repeater() -> None:
-            self.call_after_refresh(_do_switch_repeater)
-        self.call_after_refresh(_schedule_switch_repeater)
-        self.notify(f"Frame sent to Repeater: {frame_id[:8]}")
+        def _do_switch_forge() -> None:
+            self.action_switch_tab("forge")
+        def _schedule_switch_forge() -> None:
+            self.call_after_refresh(_do_switch_forge)
+        self.call_after_refresh(_schedule_switch_forge)
+        self.notify(f"Frame sent to Forge: {frame_id[:8]}")
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -590,7 +590,7 @@ class ProtoPoke(App):
         self.api = ProxyAPI(
             config=self._project.config,
             rules_engine=self._project.rules_engine,
-            intercept_filter=self._project.intercept_filter,
+            tamper_filter=self._project.tamper_filter,
         )
         self._register_event_handlers()
         self._proxy_running = False
@@ -600,7 +600,7 @@ class ProtoPoke(App):
         self.api = ProxyAPI(
             config=state.config,
             rules_engine=state.rules_engine,
-            intercept_filter=state.intercept_filter,
+            tamper_filter=state.tamper_filter,
         )
         self._register_event_handlers()
         self._proxy_running = False

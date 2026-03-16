@@ -8,8 +8,8 @@ import zipfile
 import pytest
 
 from protopoke.config import ProxyConfig
-from protopoke.rules.rule import ReplaceRule, InterceptRule, RuleAction
-from protopoke.replay.models import RepeaterRequest, SendRecord
+from protopoke.rules.rule import ReplaceRule, TamperRule, RuleAction
+from protopoke.forge.models import ForgeRequest, ForgeRecord
 from protopoke.project.manager import ProjectManager, ProjectState
 
 
@@ -78,32 +78,32 @@ class TestProjectManager:
         assert len(state.rules_engine.rules) == 1
         assert state.rules_engine.rules[0].label == "r1"
 
-    def test_open_loads_intercept_rules(self, tmp_path):
+    def test_open_loads_tamper_rules(self, tmp_path):
         pm = ProjectManager()
-        rule = InterceptRule.create("catch", "FF", RuleAction.FORWARD)
-        pm.intercept_filter.add_rule(rule)
+        rule = TamperRule.create("catch", "FF", RuleAction.FORWARD)
+        pm.tamper_filter.add_rule(rule)
         pm.save_as(tmp_path / "p.pp")
 
         pm2 = ProjectManager()
         state = pm2.open(tmp_path / "p.pp")
-        assert len(state.intercept_filter.rules) == 1
-        assert state.intercept_filter.rules[0].action == RuleAction.FORWARD
+        assert len(state.tamper_filter.rules) == 1
+        assert state.tamper_filter.rules[0].action == RuleAction.FORWARD
 
-    def test_open_loads_repeater(self, tmp_path):
+    def test_open_loads_forge_requests(self, tmp_path):
         pm = ProjectManager()
-        req = RepeaterRequest.create("10.0.0.1", 443, label="Tab 1", current_bytes=b"\x01\x02")
-        rec = SendRecord.create(b"\x01\x02", b"\x03\x04", "10.0.0.1", 443)
+        req = ForgeRequest.create("10.0.0.1", 443, label="Tab 1", current_bytes=b"\x01\x02")
+        rec = ForgeRecord.create(b"\x01\x02", b"\x03\x04", "10.0.0.1", 443)
         req.add_record(rec)
-        pm.repeater_requests.append(req)
+        pm.forge_requests.append(req)
         pm.save_as(tmp_path / "p.pp")
 
         pm2 = ProjectManager()
         state = pm2.open(tmp_path / "p.pp")
-        assert len(state.repeater_requests) == 1
-        assert state.repeater_requests[0].label == "Tab 1"
-        assert state.repeater_requests[0].current_bytes == b"\x01\x02"
-        assert len(state.repeater_requests[0].history) == 1
-        assert state.repeater_requests[0].history[0].sent_bytes == b"\x01\x02"
+        assert len(state.forge_requests) == 1
+        assert state.forge_requests[0].label == "Tab 1"
+        assert state.forge_requests[0].current_bytes == b"\x01\x02"
+        assert len(state.forge_requests[0].history) == 1
+        assert state.forge_requests[0].history[0].sent_bytes == b"\x01\x02"
 
     def test_open_missing_path_raises(self):
         pm = ProjectManager()

@@ -99,7 +99,7 @@ class ProtocolEncoder(ABC):
     Encodes a ParsedMessage back to raw bytes.
 
     The inverse of ProtocolDecoder. Needed for:
-        - Intercept+modify: decode, mutate fields, re-encode, forward
+        - Tamper+modify: decode, mutate fields, re-encode, forward
         - Replay with modifications
         - Fuzzing: mutate fields, encode, send
 

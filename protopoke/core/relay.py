@@ -2,7 +2,7 @@
 Bidirectional relay.
 
 The relay is the moving part of the proxy. It reads bytes from one side,
-pushes them through the framer and intercept controller, and writes the
+pushes them through the framer and tamper controller, and writes the
 result (possibly modified) to the other side.
 
 Architecture:
@@ -17,7 +17,7 @@ Architecture:
                     unit = await controller.process(frame)   ← may block
                     if forward: writer.write(unit.effective_bytes())
 
-        The `await controller.process(frame)` is where interception pauses.
+        The `await controller.process(frame)` is where tampering pauses.
         Only THIS relay task is suspended — the event loop stays alive and
         serves other sessions, new connections, and the API.
 
@@ -59,7 +59,7 @@ from typing import Optional, TYPE_CHECKING
 
 from ..models import Direction, Frame, InterceptAction
 from ..framing.base import Framer
-from ..intercept.controller import InterceptController
+from ..tamper.controller import TamperController
 from ..events.bus import (
     EventBus,
     FrameCapturedEvent,
@@ -75,7 +75,7 @@ logger = logging.getLogger(__name__)
 
 class DirectionalRelay:
     """
-    One-way relay: source reader → framer → intercept controller → dest writer.
+    One-way relay: source reader → framer → tamper controller → dest writer.
 
     Runs as a single asyncio Task (via BidirectionalRelay.run()).
     Does NOT own or close the dest_writer — that's BidirectionalRelay's job.
@@ -88,7 +88,7 @@ class DirectionalRelay:
         source_reader:        asyncio.StreamReader,
         dest_writer:          asyncio.StreamWriter,
         framer:               Framer,
-        intercept_controller: InterceptController,
+        tamper_controller: TamperController,
         event_bus:            EventBus,
         read_buffer_size:     int = 4096,
         rules_engine:         "Optional[RulesEngine]" = None,
@@ -98,7 +98,7 @@ class DirectionalRelay:
         self._source_reader        = source_reader
         self._dest_writer          = dest_writer
         self._framer               = framer
-        self._intercept_controller = intercept_controller
+        self._tamper_controller = tamper_controller
         self._event_bus            = event_bus
         self._read_buffer_size     = read_buffer_size
         self._rules_engine         = rules_engine
@@ -157,13 +157,13 @@ class DirectionalRelay:
 
     async def _process_frame(self, frame: Frame) -> None:
         """
-        Run one frame through replace rules, interception, then write.
+        Run one frame through replace rules, tampering, then write.
 
         Pipeline:
           1. Add *frame* (original capture) to session and emit FrameCapturedEvent.
           2. Apply replace rules to get effective bytes (may equal original).
           3. If bytes changed, create a synthetic frame carrying the modified bytes.
-          4. Pass the effective frame to the intercept controller.
+          4. Pass the effective frame to the tamper controller.
           5. Write to destination unless the verdict is DROP.
         """
         # Always store the raw-capture frame so the session log shows what
@@ -179,7 +179,7 @@ class DirectionalRelay:
         if self._rules_engine is not None:
             modified_bytes = self._rules_engine.apply(frame)
             if modified_bytes != frame.raw_bytes:
-                # Create a new Frame for interception/forwarding so the
+                # Create a new Frame for tampering/forwarding so the
                 # original capture is preserved in the session unchanged.
                 effective_frame = Frame.create(
                     session_id=frame.session_id,
@@ -189,7 +189,7 @@ class DirectionalRelay:
                     framer_name=frame.framer_name,
                 )
 
-        unit = await self._intercept_controller.process(effective_frame)
+        unit = await self._tamper_controller.process(effective_frame)
 
         await self._event_bus.publish(
             InterceptCompletedEvent(unit=unit, session=self._session.info)
@@ -204,8 +204,8 @@ class DirectionalRelay:
 
         data_to_send = unit.effective_bytes()
 
-        # If the operator modified the frame in the intercept tab, log the
-        # modified bytes as a separate frame so the Logs tab shows what was
+        # If the operator modified the frame in the Tamper tab, log the
+        # modified bytes as a separate frame so the Traffic tab shows what was
         # actually sent alongside the original capture.
         if unit.action is InterceptAction.MODIFIED:
             modified_frame = Frame.create(
@@ -213,7 +213,7 @@ class DirectionalRelay:
                 direction=frame.direction,
                 raw_bytes=data_to_send,
                 sequence_number=len(self._session.frames),
-                framer_name="intercept",
+                framer_name="tamper",
             )
             self._session.add_frame(modified_frame)
             await self._event_bus.publish(
@@ -265,7 +265,7 @@ class BidirectionalRelay:
         server_writer:        asyncio.StreamWriter,
         client_framer:        Framer,
         server_framer:        Framer,
-        intercept_controller: InterceptController,
+        tamper_controller: TamperController,
         event_bus:            EventBus,
         read_buffer_size:     int = 4096,
         rules_engine:         "Optional[RulesEngine]" = None,
@@ -280,7 +280,7 @@ class BidirectionalRelay:
             source_reader=client_reader,
             dest_writer=server_writer,
             framer=client_framer,
-            intercept_controller=intercept_controller,
+            tamper_controller=tamper_controller,
             event_bus=event_bus,
             read_buffer_size=read_buffer_size,
             rules_engine=rules_engine,
@@ -292,7 +292,7 @@ class BidirectionalRelay:
             source_reader=server_reader,
             dest_writer=client_writer,
             framer=server_framer,
-            intercept_controller=intercept_controller,
+            tamper_controller=tamper_controller,
             event_bus=event_bus,
             read_buffer_size=read_buffer_size,
             rules_engine=rules_engine,

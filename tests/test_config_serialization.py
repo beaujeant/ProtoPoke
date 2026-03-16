@@ -70,4 +70,4 @@ class TestProxyConfigSerialization:
         restored = ProxyConfig.from_dict(cfg.to_dict())
         assert restored.listen_host == "127.0.0.1"
         assert restored.framer_name == "raw"
-        assert restored.intercept_enabled is False
+        assert restored.tamper_enabled is False

@@ -11,7 +11,7 @@ This module is intentionally thin. All the interesting behavior lives in:
     - relay.py  (data flow and interception)
     - session.py (session lifecycle)
     - framing/  (byte-stream → frames)
-    - intercept/ (intercept queue and verdicts)
+    - tamper/ (tamper queue and verdicts)
 
 The engine just wires those pieces together for each new connection.
 
@@ -39,7 +39,7 @@ from ..config import ProxyConfig
 from ..models import Direction
 from ..events.bus import EventBus, SessionOpenedEvent, SessionClosedEvent
 from ..framing import create_framer, load_framer_from_file
-from ..intercept.controller import InterceptController, PassthroughController
+from ..tamper.controller import TamperController, PassthroughController
 from ..tls.handler import TLSHandler
 from .session import SessionRegistry, Session
 from .relay import BidirectionalRelay
@@ -71,7 +71,7 @@ class ProxyEngine:
     def __init__(
         self,
         config:               ProxyConfig,
-        intercept_controller: Optional[InterceptController] = None,
+        tamper_controller: Optional[TamperController] = None,
         event_bus:            Optional[EventBus]            = None,
         session_registry:     Optional[SessionRegistry]     = None,
         rules_engine:         "Optional[RulesEngine]"       = None,
@@ -80,7 +80,7 @@ class ProxyEngine:
         # Use explicit is-None checks rather than truthiness (`or`) because
         # an empty SessionRegistry has __len__==0 which is falsy — using `or`
         # would silently create a second registry and break session tracking.
-        self.intercept_controller = intercept_controller if intercept_controller is not None else PassthroughController()
+        self.tamper_controller = tamper_controller if tamper_controller is not None else PassthroughController()
         self.event_bus            = event_bus            if event_bus            is not None else EventBus()
         self.session_registry     = session_registry     if session_registry     is not None else SessionRegistry()
         self.rules_engine         = rules_engine
@@ -167,7 +167,7 @@ class ProxyEngine:
             await asyncio.gather(*tasks, return_exceptions=True)
             logger.info("All %d session tasks cancelled", len(tasks))
 
-        await self.intercept_controller.shutdown()
+        await self.tamper_controller.shutdown()
 
     # ------------------------------------------------------------------
     # Connection handler (called by asyncio for each new client)
@@ -295,7 +295,7 @@ class ProxyEngine:
             server_writer=server_writer,
             client_framer=client_framer,
             server_framer=server_framer,
-            intercept_controller=self.intercept_controller,
+            tamper_controller=self.tamper_controller,
             event_bus=self.event_bus,
             read_buffer_size=self.config.read_buffer_size,
             rules_engine=self.rules_engine,
@@ -336,7 +336,7 @@ class ProxyEngine:
             logger.info("Session %s done", session.id)
 
     # ------------------------------------------------------------------
-    # Repeater injection
+    # Forge injection
     # ------------------------------------------------------------------
 
     async def terminate_session(self, session_id: str) -> bool:
