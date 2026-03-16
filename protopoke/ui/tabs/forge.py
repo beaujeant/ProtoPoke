@@ -7,11 +7,12 @@ import time as _time
 
 from textual.app import ComposeResult
 from textual.widget import Widget
-from textual.widgets import Button, DataTable, Input, Label, Static, Switch, TextArea
+from textual.widgets import Button, DataTable, Static, TextArea
 from textual.containers import Horizontal, Vertical
 
 from ...forge.models import Playbook, PlaybookFrame, PlaybookRun, TrafficEntry
 from ..modals.playbook_modal import PlaybookModal, PlaybookResult
+from ..modals.frame_edit import FrameEditModal
 from ..utils.frame_codec import hex_template_to_str, str_to_hex_template
 
 
@@ -71,12 +72,12 @@ class ForgeTab(Widget):
         layout: horizontal;
     }
     ForgeTab #left-col {
-        width: 40%;
+        width: 1fr;
         layout: vertical;
         border-right: solid $primary-darken-2;
     }
     ForgeTab #frames-list-pane {
-        height: 40%;
+        height: 1fr;
     }
     ForgeTab #frames-list-pane DataTable {
         height: 1fr;
@@ -94,22 +95,15 @@ class ForgeTab(Widget):
         height: 1fr;
         layout: vertical;
     }
-    ForgeTab #editor-label-bar {
-        height: 3;
+    ForgeTab #frame-editor-pane .pane-header {
+        height: 1;
         align: left middle;
-        padding: 0 1;
-        background: $surface-darken-2;
     }
-    ForgeTab #editor-label-bar Label {
-        margin-right: 1;
-        width: 7;
-    }
-    ForgeTab #editor-label-bar Input {
+    ForgeTab #frame-editor-pane .pane-header Static {
         width: 1fr;
     }
-    ForgeTab #editor-label-bar Button {
-        margin-left: 1;
-        width: 6;
+    ForgeTab #frame-editor-pane .pane-header Button {
+        width: 5;
     }
     ForgeTab #frame-editor {
         height: 1fr;
@@ -118,11 +112,17 @@ class ForgeTab(Widget):
         width: 1fr;
         layout: vertical;
     }
+    ForgeTab #traffic-pane {
+        height: 1fr;
+    }
     ForgeTab #traffic-table {
         height: 1fr;
     }
+    ForgeTab #frame-view-pane {
+        height: 1fr;
+    }
     ForgeTab #frame-view {
-        height: 40%;
+        height: 1fr;
     }
     ForgeTab .run-bar {
         height: 3;
@@ -160,39 +160,39 @@ class ForgeTab(Widget):
             yield DataTable(id="playbook-table", cursor_type="row")
 
         with Horizontal(classes="playbook-controls"):
-            yield Button("+ New",   id="btn-new-pb",    variant="success", flat=True)
-            yield Button("Edit",    id="btn-edit-pb",   flat=True)
-            yield Button("Import",  id="btn-import-pb", flat=True)
-            yield Button("Export",  id="btn-export-pb", flat=True)
+            yield Button("+ New",    id="btn-new-pb",    variant="success", flat=True)
+            yield Button("- Delete", id="btn-delete-pb", variant="error",   flat=True)
+            yield Button("Edit",     id="btn-edit-pb",   flat=True)
+            yield Button("Import",   id="btn-import-pb", flat=True)
+            yield Button("Export",   id="btn-export-pb", flat=True)
 
         with Horizontal(id="middle-pane"):
             with Vertical(id="left-col"):
                 with Vertical(id="frames-list-pane"):
                     yield Static("  Frames", classes="pane-header")
                     yield DataTable(id="frames-table", cursor_type="row")
-                with Horizontal(classes="frame-controls"):
-                    yield Button("↑ Up",     id="btn-frame-up",     flat=True)
-                    yield Button("↓ Down",   id="btn-frame-down",   flat=True)
-                    yield Button("+ Add",    id="btn-frame-add",    variant="success", flat=True)
-                    yield Button("- Remove", id="btn-frame-remove", variant="error",   flat=True)
+                    with Horizontal(classes="frame-controls"):
+                        yield Button("↑ Up",     id="btn-frame-up",     flat=True)
+                        yield Button("↓ Down",   id="btn-frame-down",   flat=True)
+                        yield Button("+ Add",    id="btn-frame-add",    variant="success", flat=True)
+                        yield Button("- Remove", id="btn-frame-remove", variant="error",   flat=True)
+                        yield Button("Edit",     id="btn-frame-edit",   flat=True)
                 with Vertical(id="frame-editor-pane"):
-                    yield Static(
-                        "  Frame Editor  ({{VAR}} · {{VAR:uint32be_add(1)}} · {{VAR:xor(ff)}})",
-                        classes="pane-header",
-                        markup=False,
-                    )
-                    with Horizontal(id="editor-label-bar"):
-                        yield Label("Label:")
-                        yield Input("", id="frame-label-input", placeholder="frame name")
-                        yield Button("→C→S", id="btn-dir-toggle", compact=True)
-                        yield Button("HEX",  id="btn-frame-mode", compact=True)
+                    with Horizontal(classes="pane-header"):
+                        yield Static(
+                            "  Frame Editor  ({{VAR}} · {{VAR:uint32be_add(1)}} · {{VAR:xor(ff)}})",
+                            markup=False,
+                        )
+                        yield Button("HEX", id="btn-frame-mode", compact=True)
                     yield TextArea("", id="frame-editor", theme="monokai")
 
             with Vertical(id="right-col"):
-                yield Static("  Playbook Traffic", classes="pane-header")
-                yield DataTable(id="traffic-table", cursor_type="row")
-                yield Static("  Frame View (hex)", classes="pane-header")
-                yield TextArea("", id="frame-view", read_only=True)
+                with Vertical(id="traffic-pane"):
+                    yield Static("  Playbook Traffic", classes="pane-header")
+                    yield DataTable(id="traffic-table", cursor_type="row")
+                with Vertical(id="frame-view-pane"):
+                    yield Static("  Frame View (hex)", classes="pane-header")
+                    yield TextArea("", id="frame-view", read_only=True)
 
         with Horizontal(classes="run-bar"):
             yield Button("▶ Run Playbook", id="btn-run",          variant="success", flat=True)
@@ -370,31 +370,24 @@ class ForgeTab(Widget):
     # ------------------------------------------------------------------
 
     def _clear_frame_editor(self) -> None:
-        self.query_one("#frame-label-input", Input).value = ""
         self.query_one("#frame-editor", TextArea).load_text("")
-        self.query_one("#btn-dir-toggle", Button).label = "→C→S"
 
     def _load_frame_into_editor(self, frame: PlaybookFrame) -> None:
-        self.query_one("#frame-label-input", Input).value = frame.label
         if self._frame_editor_mode == "str":
             content = hex_template_to_str(frame.raw_hex)
         else:
             content = frame.raw_hex
         self.query_one("#frame-editor", TextArea).load_text(content)
-        self.query_one("#btn-dir-toggle", Button).label = (
-            "→C→S" if frame.direction == "client_to_server" else "←S→C"
-        )
 
     def _save_frame_editor(self) -> None:
-        """Flush label + hex content back to the currently selected frame."""
+        """Flush hex content back to the currently selected frame."""
         if self._current_idx < 0 or self._selected_frame_idx < 0:
             return
         pb = self._playbooks[self._current_idx]
         if self._selected_frame_idx >= len(pb.frames):
             return
-        frame = pb.frames[self._selected_frame_idx]
-        frame.label = self.query_one("#frame-label-input", Input).value
-        raw_text    = self.query_one("#frame-editor", TextArea).text
+        frame    = pb.frames[self._selected_frame_idx]
+        raw_text = self.query_one("#frame-editor", TextArea).text
         if self._frame_editor_mode == "str":
             try:
                 frame.raw_hex = str_to_hex_template(raw_text)
@@ -570,20 +563,61 @@ class ForgeTab(Widget):
         except Exception:
             pass
 
-    def _toggle_direction(self) -> None:
+    def _open_frame_edit_modal(self) -> None:
         if self._current_idx < 0 or self._selected_frame_idx < 0:
+            self.notify("Select a frame to edit.", severity="warning")
             return
         pb = self._playbooks[self._current_idx]
         if self._selected_frame_idx >= len(pb.frames):
             return
         frame = pb.frames[self._selected_frame_idx]
-        frame.direction = (
-            "server_to_client" if frame.direction == "client_to_server" else "client_to_server"
-        )
-        self.query_one("#btn-dir-toggle", Button).label = (
-            "→C→S" if frame.direction == "client_to_server" else "←S→C"
-        )
+        modal = FrameEditModal(label=frame.label, direction=frame.direction)
+        self.app.push_screen(modal, self._on_frame_edit_result)
+
+    def _on_frame_edit_result(self, result: tuple[str, str] | None) -> None:
+        if result is None or self._current_idx < 0 or self._selected_frame_idx < 0:
+            return
+        pb = self._playbooks[self._current_idx]
+        if self._selected_frame_idx >= len(pb.frames):
+            return
+        label, direction = result
+        frame = pb.frames[self._selected_frame_idx]
+        frame.label     = label
+        frame.direction = direction
         self._update_frame_list_row(self._selected_frame_idx)
+        if hasattr(self.app, "mark_dirty"):
+            self.app.mark_dirty()
+
+    # ------------------------------------------------------------------
+    # Playbook delete
+    # ------------------------------------------------------------------
+
+    def _delete_playbook(self) -> None:
+        if self._current_idx < 0:
+            self.notify("No playbook selected.", severity="warning")
+            return
+        pb = self._playbooks[self._current_idx]
+        self._playbooks.pop(self._current_idx)
+        try:
+            self.query_one("#playbook-table", DataTable).remove_row(pb.id)
+        except Exception:
+            pass
+        # Reset state
+        new_idx = min(self._current_idx, len(self._playbooks) - 1)
+        self._current_idx        = -1
+        self._selected_frame_idx = -1
+        self._history_view_mode  = False
+        self._clear_frame_editor()
+        self._clear_traffic()
+        self._clear_frame_view()
+        self.query_one("#frames-table",  DataTable).clear()
+        self.query_one("#history-table", DataTable).clear()
+        if new_idx >= 0:
+            self._switch_playbook(new_idx)
+            try:
+                self.query_one("#playbook-table", DataTable).move_cursor(row=new_idx)
+            except Exception:
+                pass
         if hasattr(self.app, "mark_dirty"):
             self.app.mark_dirty()
 
@@ -784,6 +818,10 @@ class ForgeTab(Widget):
             event.stop()
             self._open_playbook_modal(edit=False)
 
+        elif bid == "btn-delete-pb":
+            event.stop()
+            self._delete_playbook()
+
         elif bid == "btn-edit-pb":
             event.stop()
             self._open_playbook_modal(edit=True)
@@ -812,9 +850,9 @@ class ForgeTab(Widget):
             event.stop()
             self._remove_frame()
 
-        elif bid == "btn-dir-toggle":
+        elif bid == "btn-frame-edit":
             event.stop()
-            self._toggle_direction()
+            self._open_frame_edit_modal()
 
         elif bid == "btn-frame-mode":
             event.stop()
