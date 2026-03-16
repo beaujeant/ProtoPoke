@@ -93,6 +93,7 @@ class ForgeTab(Widget):
     }
     ForgeTab #btn-frame-up,
     ForgeTab #btn-frame-down {
+        min-width: 5;
         width: 5;
     }
     ForgeTab #frame-editor-pane {
