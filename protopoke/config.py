@@ -142,12 +142,12 @@ class ProxyConfig:
     # The script may define two optional hooks:
     #
     #   def on_response(response: bytes, variables: dict,
-    #                   step_idx: int, step_label: str) -> None:
+    #                   frame_idx: int, frame_label: str) -> None:
     #       """Called after each server response. Mutate variables in-place."""
     #
     #   def on_send(data: bytes, variables: dict,
-    #               step_idx: int, step_label: str) -> bytes:
-    #       """Called before each send (after ##VAR## substitution).
+    #               frame_idx: int, frame_label: str) -> bytes:
+    #       """Called before each send (after {{VAR}} substitution).
     #       Return the bytes to actually transmit."""
     #
     # Both hooks are optional. Leave this field None to run the Sequence

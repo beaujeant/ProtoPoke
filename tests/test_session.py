@@ -50,6 +50,32 @@ class TestSession:
         assert sess.info.state is SessionState.CLOSED
         assert sess.info.closed_at is not None
 
+    def test_client_disconnected_state(self):
+        reg = make_registry()
+        sess = reg.create("127.0.0.1", 1, "10.0.0.1", 80)
+        reg.mark_active(sess.id)
+        reg.mark_client_disconnected(sess.id)
+        assert sess.info.state is SessionState.CLIENT_DISCONNECTED
+        assert sess.info.closed_at is not None
+        assert not sess.is_active()
+
+    def test_server_disconnected_state(self):
+        reg = make_registry()
+        sess = reg.create("127.0.0.1", 1, "10.0.0.1", 80)
+        reg.mark_active(sess.id)
+        reg.mark_server_disconnected(sess.id)
+        assert sess.info.state is SessionState.SERVER_DISCONNECTED
+        assert sess.info.closed_at is not None
+        assert not sess.is_active()
+
+    def test_client_disconnected_unknown_id_does_not_raise(self):
+        reg = make_registry()
+        reg.mark_client_disconnected("nonexistent")
+
+    def test_server_disconnected_unknown_id_does_not_raise(self):
+        reg = make_registry()
+        reg.mark_server_disconnected("nonexistent")
+
 
 class TestSessionRegistry:
     def test_create_returns_session(self):

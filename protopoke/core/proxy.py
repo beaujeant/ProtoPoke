@@ -321,6 +321,11 @@ class ProxyEngine:
         Run a session's relay and handle final cleanup.
 
         This is the Task body for each proxied connection.
+        After the relay finishes, the session is transitioned to the most
+        specific closed state available:
+          - CLIENT_DISCONNECTED if the client closed the connection first.
+          - SERVER_DISCONNECTED if the server closed the connection first.
+          - CLOSED for all other cases (cancelled, both sides simultaneously, etc.)
         """
         try:
             await relay.run()
@@ -331,7 +336,13 @@ class ProxyEngine:
         finally:
             self._session_server_writers.pop(session.id, None)
             self._session_client_writers.pop(session.id, None)
-            self.session_registry.mark_closed(session.id)
+            # Use the most specific closed state based on who disconnected first.
+            if relay.first_disconnect_direction is Direction.CLIENT_TO_SERVER:
+                self.session_registry.mark_client_disconnected(session.id)
+            elif relay.first_disconnect_direction is Direction.SERVER_TO_CLIENT:
+                self.session_registry.mark_server_disconnected(session.id)
+            else:
+                self.session_registry.mark_closed(session.id)
             await self.event_bus.publish(SessionClosedEvent(session=session.info))
             logger.info("Session %s done", session.id)
 

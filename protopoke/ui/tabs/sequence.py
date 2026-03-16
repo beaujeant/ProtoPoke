@@ -10,31 +10,31 @@ from textual.widget import Widget
 from textual.widgets import Button, DataTable, Input, Label, Static, Switch, TextArea
 from textual.containers import Horizontal, Vertical
 
-from ...sequence.models import HistoryEntry, SequenceSession, SequenceStep
+from ...sequence.models import HistoryEntry, SequenceSession, SequenceFrame
 from ..utils.frame_codec import hex_template_to_str, str_to_hex_template
 
 
 class SequenceTab(Widget):
     """
-    Tab 6 — Sequence: send ordered frame chains with {{VAR}} variable
+    Tab 5 — Sequence: send ordered frame chains with {{VAR}} variable
     substitution and an optional Python script for response-driven extraction.
 
     Layout (all panes 100% width, stacked vertically):
 
       ┌─────────────────────────────────────────────────────────┐
       │ Sequences pane (DataTable list)           h=20%         │
-      │  Name        Steps                                      │
+      │  Name        Frames                                     │
       │  Sequence 1  3                                          │
       │  Sequence 2  5                                          │
       ├─────────────────────────────────────────────────────────┤
       │ [+ New]  [Import]  [Export]               h=3           │
       ├─────────────────────────────────────────────────────────┤
       │ FRAME LIST  (~20%)                                      │
-      │  #   Label      Len   Preview                           │
+      │  #   Dir  Label      Len   Preview                      │
       ├─────────────────────────────────────────────────────────┤
       │ [↑ Up] [↓ Down] [+ Add] [- Remove]         h=3         │
       ├─────────────────────────────────────────────────────────┤
-      │ STEP EDITOR  (~20%)                                     │
+      │ FRAME EDITOR  (~20%)                                    │
       │  Label: [___________________]          [HEX] / [STR]   │
       │  ┌─────────────────────────────────────────────────┐   │
       │  │ hex content with {{VAR}} placeholders           │   │
@@ -80,42 +80,42 @@ class SequenceTab(Widget):
         height: 1;
         text-style: bold;
     }
-    SequenceTab #step-list-pane {
+    SequenceTab #frame-list-pane {
         height: 20%;
     }
-    SequenceTab #step-list-pane DataTable {
+    SequenceTab #frame-list-pane DataTable {
         height: 1fr;
     }
-    SequenceTab .step-controls {
+    SequenceTab .frame-controls {
         height: 3;
         align: left middle;
         padding: 0 1;
         background: $surface-darken-1;
     }
-    SequenceTab .step-controls Button {
+    SequenceTab .frame-controls Button {
         margin-right: 1;
     }
-    SequenceTab #step-editor-pane {
+    SequenceTab #frame-editor-pane {
         height: 22%;
     }
-    SequenceTab #step-label-bar {
+    SequenceTab #frame-label-bar {
         height: 3;
         align: left middle;
         padding: 0 1;
         background: $surface-darken-2;
     }
-    SequenceTab #step-label-bar Label {
+    SequenceTab #frame-label-bar Label {
         margin-right: 1;
         width: 7;
     }
-    SequenceTab #step-label-bar Input {
+    SequenceTab #frame-label-bar Input {
         width: 1fr;
     }
-    SequenceTab #btn-step-mode {
+    SequenceTab #btn-frame-mode {
         width: 5;
         margin-left: 1;
     }
-    SequenceTab #step-hex-editor {
+    SequenceTab #frame-hex-editor {
         height: 1fr;
     }
     SequenceTab #history-pane {
@@ -161,10 +161,10 @@ class SequenceTab(Widget):
         super().__init__(*args, **kwargs)
         self._sequences: list[SequenceSession] = []
         self._current_idx: int = -1
-        self._selected_step_idx: int = -1
+        self._selected_frame_idx: int = -1
         self._running: bool = False
-        # "hex" or "str" — controls how the step editor displays / parses content
-        self._step_editor_mode: str = "hex"
+        # "hex" or "str" — controls how the frame editor displays / parses content
+        self._frame_editor_mode: str = "hex"
 
     # ------------------------------------------------------------------
     # Compose
@@ -183,29 +183,29 @@ class SequenceTab(Widget):
             yield Button("Export",   id="btn-export-seq", flat=True)
 
         # Frame list
-        with Vertical(id="step-list-pane"):
+        with Vertical(id="frame-list-pane"):
             yield Static("  Frame List", classes="pane-header")
-            yield DataTable(id="step-table", cursor_type="row")
+            yield DataTable(id="frame-table", cursor_type="row")
 
-        # Step controls
-        with Horizontal(classes="step-controls"):
-            yield Button("↑ Up",     id="btn-step-up",     flat=True)
-            yield Button("↓ Down",   id="btn-step-down",   flat=True)
-            yield Button("+ Add",    id="btn-step-add",    variant="success", flat=True)
-            yield Button("- Remove", id="btn-step-remove", variant="error",   flat=True)
+        # Frame controls
+        with Horizontal(classes="frame-controls"):
+            yield Button("↑ Up",     id="btn-frame-up",     flat=True)
+            yield Button("↓ Down",   id="btn-frame-down",   flat=True)
+            yield Button("+ Add",    id="btn-frame-add",    variant="success", flat=True)
+            yield Button("- Remove", id="btn-frame-remove", variant="error",   flat=True)
 
-        # Step editor
-        with Vertical(id="step-editor-pane"):
+        # Frame editor
+        with Vertical(id="frame-editor-pane"):
             yield Static(
-                "  Step Editor  ({{VAR}} · {{VAR:uint32be_add(1)}} · {{VAR:xor(ff)}} · {{VAR:script(expr)}})",
+                "  Frame Editor  ({{VAR}} · {{VAR:uint32be_add(1)}} · {{VAR:xor(ff)}} · {{VAR:script(expr)}})",
                 classes="pane-header",
                 markup=False,
             )
-            with Horizontal(id="step-label-bar"):
+            with Horizontal(id="frame-label-bar"):
                 yield Label("Label:")
-                yield Input("", id="step-label-input", placeholder="step name")
-                yield Button("HEX", id="btn-step-mode", compact=True)
-            yield TextArea("", id="step-hex-editor", theme="monokai")
+                yield Input("", id="frame-label-input", placeholder="frame name")
+                yield Button("HEX", id="btn-frame-mode", compact=True)
+            yield TextArea("", id="frame-hex-editor", theme="monokai")
 
         # History
         with Vertical(id="history-pane"):
@@ -234,10 +234,10 @@ class SequenceTab(Widget):
     def on_mount(self) -> None:
         # Sequence list table
         st = self.query_one("#seq-table", DataTable)
-        st.add_column("Name",  key="name")
-        st.add_column("Steps", key="steps")
+        st.add_column("Name",   key="name")
+        st.add_column("Frames", key="frames")
 
-        dt = self.query_one("#step-table", DataTable)
+        dt = self.query_one("#frame-table", DataTable)
         dt.add_column("#",       key="num")
         dt.add_column("Dir",     key="dir")
         dt.add_column("Label",   key="label")
@@ -260,14 +260,14 @@ class SequenceTab(Widget):
         st = self.query_one("#seq-table", DataTable)
         st.clear()
         for seq in self._sequences:
-            st.add_row(seq.label, str(len(seq.steps)), key=seq.id)
+            st.add_row(seq.label, str(len(seq.frames)), key=seq.id)
 
     def add_sequence(self, seq: SequenceSession) -> None:
         """Add a new sequence and switch to it."""
         self._sequences.append(seq)
         idx = len(self._sequences) - 1
         st = self.query_one("#seq-table", DataTable)
-        st.add_row(seq.label, str(len(seq.steps)), key=seq.id)
+        st.add_row(seq.label, str(len(seq.frames)), key=seq.id)
         # Auto-select the newly added sequence
         self._switch_to(idx)
         try:
@@ -278,11 +278,11 @@ class SequenceTab(Widget):
     def _switch_to(self, idx: int) -> None:
         if idx < 0 or idx >= len(self._sequences):
             return
-        # Save any edits to the currently selected step before switching
-        self._save_step_editor()
+        # Save any edits to the currently selected frame before switching
+        self._save_frame_editor()
 
         self._current_idx = idx
-        self._selected_step_idx = -1
+        self._selected_frame_idx = -1
         seq = self._sequences[idx]
 
         # Update run bar
@@ -292,20 +292,20 @@ class SequenceTab(Widget):
         self.query_one("#seq-session-id", Input).value = seq.source_session_id or ""
         self.query_one("#seq-window",     Input).value = str(seq.response_window)
 
-        self._refresh_step_list()
+        self._refresh_frame_list()
         self._refresh_history()
-        self._clear_step_editor()
+        self._clear_frame_editor()
 
     def load_sequences(self, sequences: list[SequenceSession]) -> None:
         """Reload all sequences (e.g. after project open)."""
         self._sequences = []
         self._current_idx = -1
-        self._selected_step_idx = -1
+        self._selected_frame_idx = -1
         st = self.query_one("#seq-table", DataTable)
         st.clear()
         for seq in sequences:
             self._sequences.append(seq)
-            st.add_row(seq.label, str(len(seq.steps)), key=seq.id)
+            st.add_row(seq.label, str(len(seq.frames)), key=seq.id)
         # Auto-select the first sequence if any
         if self._sequences:
             self._switch_to(0)
@@ -315,67 +315,67 @@ class SequenceTab(Widget):
                 pass
 
     # ------------------------------------------------------------------
-    # Step list
+    # Frame list
     # ------------------------------------------------------------------
 
     @staticmethod
     def _direction_symbol(direction: str) -> str:
-        """Return a short arrow symbol for a step direction."""
+        """Return a short arrow symbol for a frame direction."""
         return "→" if direction == "client_to_server" else "←"
 
-    def _refresh_step_list(self) -> None:
-        dt = self.query_one("#step-table", DataTable)
+    def _refresh_frame_list(self) -> None:
+        dt = self.query_one("#frame-table", DataTable)
         dt.clear()
         if self._current_idx < 0:
             return
         seq = self._sequences[self._current_idx]
-        for i, step in enumerate(seq.steps):
+        for i, frame in enumerate(seq.frames):
             dt.add_row(
                 str(i + 1),
-                self._direction_symbol(step.direction),
-                step.label or f"Step {i+1}",
-                str(step.byte_length()),
-                step.preview(),
-                key=step.id,
+                self._direction_symbol(frame.direction),
+                frame.label or f"Frame {i+1}",
+                str(frame.byte_length()),
+                frame.preview(),
+                key=frame.id,
             )
 
-    def _load_step_into_editor(self, step: SequenceStep) -> None:
-        self.query_one("#step-label-input", Input).value = step.label
-        if self._step_editor_mode == "str":
-            content = hex_template_to_str(step.raw_hex)
+    def _load_frame_into_editor(self, frame: SequenceFrame) -> None:
+        self.query_one("#frame-label-input", Input).value = frame.label
+        if self._frame_editor_mode == "str":
+            content = hex_template_to_str(frame.raw_hex)
         else:
-            content = step.raw_hex
-        self.query_one("#step-hex-editor", TextArea).load_text(content)
+            content = frame.raw_hex
+        self.query_one("#frame-hex-editor", TextArea).load_text(content)
 
-    def _clear_step_editor(self) -> None:
-        self.query_one("#step-label-input", Input).value = ""
-        self.query_one("#step-hex-editor",  TextArea).load_text("")
+    def _clear_frame_editor(self) -> None:
+        self.query_one("#frame-label-input", Input).value = ""
+        self.query_one("#frame-hex-editor",  TextArea).load_text("")
 
-    def _save_step_editor(self) -> None:
-        """Flush the editor contents back to the currently selected step."""
-        if self._current_idx < 0 or self._selected_step_idx < 0:
+    def _save_frame_editor(self) -> None:
+        """Flush the editor contents back to the currently selected frame."""
+        if self._current_idx < 0 or self._selected_frame_idx < 0:
             return
         seq = self._sequences[self._current_idx]
-        if self._selected_step_idx >= len(seq.steps):
+        if self._selected_frame_idx >= len(seq.frames):
             return
-        step = seq.steps[self._selected_step_idx]
-        step.label = self.query_one("#step-label-input", Input).value
-        raw_text   = self.query_one("#step-hex-editor",  TextArea).text
-        if self._step_editor_mode == "str":
+        frame = seq.frames[self._selected_frame_idx]
+        frame.label = self.query_one("#frame-label-input", Input).value
+        raw_text    = self.query_one("#frame-hex-editor",  TextArea).text
+        if self._frame_editor_mode == "str":
             try:
-                step.raw_hex = str_to_hex_template(raw_text)
+                frame.raw_hex = str_to_hex_template(raw_text)
             except ValueError as exc:
                 self.notify(f"STR parse error: {exc}", severity="error")
                 return
         else:
-            step.raw_hex = raw_text
+            frame.raw_hex = raw_text
         # Update the row in the table
         try:
-            dt = self.query_one("#step-table", DataTable)
-            dt.update_cell(step.id, "dir",     self._direction_symbol(step.direction),            update_width=False)
-            dt.update_cell(step.id, "label",   step.label or f"Step {self._selected_step_idx+1}", update_width=False)
-            dt.update_cell(step.id, "len",     str(step.byte_length()),                           update_width=False)
-            dt.update_cell(step.id, "preview", step.preview(),                                    update_width=False)
+            dt = self.query_one("#frame-table", DataTable)
+            dt.update_cell(frame.id, "dir",     self._direction_symbol(frame.direction),               update_width=False)
+            dt.update_cell(frame.id, "label",   frame.label or f"Frame {self._selected_frame_idx+1}", update_width=False)
+            dt.update_cell(frame.id, "len",     str(frame.byte_length()),                              update_width=False)
+            dt.update_cell(frame.id, "preview", frame.preview(),                                       update_width=False)
         except Exception:
             pass
 
@@ -448,18 +448,18 @@ class SequenceTab(Widget):
         if self._current_idx < 0:
             self.notify("No sequence selected to export.", severity="warning")
             return
-        self._save_step_editor()
+        self._save_frame_editor()
         seq = self._sequences[self._current_idx]
 
         export_data = {
             "label": seq.label,
-            "steps": [
+            "frames": [
                 {
-                    "label":     step.label,
-                    "raw_hex":   step.raw_hex,
-                    "direction": step.direction,
+                    "label":     frame.label,
+                    "raw_hex":   frame.raw_hex,
+                    "direction": frame.direction,
                 }
-                for step in seq.steps
+                for frame in seq.frames
             ],
         }
 
@@ -479,7 +479,7 @@ class SequenceTab(Widget):
                         id="save-path",
                     )
                     yield Static(
-                        "The sequence steps and direction will be saved (not session info).",
+                        "The sequence frames and direction will be saved (not session info).",
                         classes="hint",
                     )
                     with Horizontal(classes="buttons"):
@@ -518,26 +518,27 @@ class SequenceTab(Widget):
                 return
 
             label = data.get("label", "Imported Sequence")
-            steps_data = data.get("steps", [])
-            if not isinstance(steps_data, list):
-                self.notify("Import failed: 'steps' must be a list.", severity="error")
+            # Accept both new "frames" key and old "steps" key
+            frames_data = data.get("frames", data.get("steps", []))
+            if not isinstance(frames_data, list):
+                self.notify("Import failed: 'frames' must be a list.", severity="error")
                 return
 
             seq = SequenceSession.create(label=label)
-            for sd in steps_data:
-                step = SequenceStep.create(
-                    label=sd.get("label", ""),
-                    raw_hex=sd.get("raw_hex", ""),
-                    direction=sd.get("direction", "client_to_server"),
+            for fd in frames_data:
+                frame = SequenceFrame.create(
+                    label=fd.get("label", ""),
+                    raw_hex=fd.get("raw_hex", ""),
+                    direction=fd.get("direction", "client_to_server"),
                 )
-                seq.steps.append(step)
+                seq.frames.append(frame)
 
             # Note: session fields (host, port, tls, source_session_id) are NOT
             # imported — the user needs to configure them for the new context.
             self.add_sequence(seq)
             if hasattr(self.app, "mark_dirty"):
                 self.app.mark_dirty()
-            self.notify(f"Imported '{label}' with {len(seq.steps)} step(s).")
+            self.notify(f"Imported '{label}' with {len(seq.frames)} frame(s).")
 
         self.app.push_screen(FilePickerModal(None), _on_pick)
 
@@ -560,25 +561,25 @@ class SequenceTab(Widget):
             event.stop()
             self._export_sequence()
 
-        elif bid == "btn-step-mode":
+        elif bid == "btn-frame-mode":
             event.stop()
-            self._toggle_step_editor_mode()
+            self._toggle_frame_editor_mode()
 
-        elif bid == "btn-step-up":
+        elif bid == "btn-frame-up":
             event.stop()
-            self._move_step(-1)
+            self._move_frame(-1)
 
-        elif bid == "btn-step-down":
+        elif bid == "btn-frame-down":
             event.stop()
-            self._move_step(1)
+            self._move_frame(1)
 
-        elif bid == "btn-step-add":
+        elif bid == "btn-frame-add":
             event.stop()
-            self._add_blank_step()
+            self._add_blank_frame()
 
-        elif bid == "btn-step-remove":
+        elif bid == "btn-frame-remove":
             event.stop()
-            self._remove_step()
+            self._remove_frame()
 
         elif bid == "btn-run":
             event.stop()
@@ -594,20 +595,20 @@ class SequenceTab(Widget):
                 self._sequences[self._current_idx].history.clear()
                 self.query_one("#history-table", DataTable).clear()
 
-    def _toggle_step_editor_mode(self) -> None:
-        """Switch the step editor between HEX and STR (python-like) display."""
-        editor = self.query_one("#step-hex-editor", TextArea)
+    def _toggle_frame_editor_mode(self) -> None:
+        """Switch the frame editor between HEX and STR (python-like) display."""
+        editor = self.query_one("#frame-hex-editor", TextArea)
         current_text = editor.text
 
-        if self._step_editor_mode == "hex":
+        if self._frame_editor_mode == "hex":
             # Convert current HEX content → STR and switch mode
             try:
                 new_text = hex_template_to_str(current_text)
             except ValueError as exc:
                 self.notify(f"Cannot switch to STR: {exc}", severity="error")
                 return
-            self._step_editor_mode = "str"
-            self.query_one("#btn-step-mode", Button).label = "STR"
+            self._frame_editor_mode = "str"
+            self.query_one("#btn-frame-mode", Button).label = "STR"
         else:
             # Convert current STR content → HEX and switch mode
             try:
@@ -615,8 +616,8 @@ class SequenceTab(Widget):
             except ValueError as exc:
                 self.notify(f"Cannot switch to HEX: {exc}", severity="error")
                 return
-            self._step_editor_mode = "hex"
-            self.query_one("#btn-step-mode", Button).label = "HEX"
+            self._frame_editor_mode = "hex"
+            self.query_one("#btn-frame-mode", Button).label = "HEX"
 
         editor.load_text(new_text)
 
@@ -627,78 +628,78 @@ class SequenceTab(Widget):
         if hasattr(self.app, "mark_dirty"):
             self.app.mark_dirty()
 
-    def _move_step(self, delta: int) -> None:
-        """Move the selected step up (delta=-1) or down (delta=+1)."""
-        if self._current_idx < 0 or self._selected_step_idx < 0:
+    def _move_frame(self, delta: int) -> None:
+        """Move the selected frame up (delta=-1) or down (delta=+1)."""
+        if self._current_idx < 0 or self._selected_frame_idx < 0:
             return
-        self._save_step_editor()
+        self._save_frame_editor()
         seq = self._sequences[self._current_idx]
-        i = self._selected_step_idx
+        i = self._selected_frame_idx
         j = i + delta
-        if j < 0 or j >= len(seq.steps):
+        if j < 0 or j >= len(seq.frames):
             return
-        seq.steps[i], seq.steps[j] = seq.steps[j], seq.steps[i]
-        self._selected_step_idx = j
-        self._refresh_step_list()
+        seq.frames[i], seq.frames[j] = seq.frames[j], seq.frames[i]
+        self._selected_frame_idx = j
+        self._refresh_frame_list()
         # Re-select the moved row
-        dt = self.query_one("#step-table", DataTable)
+        dt = self.query_one("#frame-table", DataTable)
         try:
             dt.move_cursor(row=j)
         except Exception:
             pass
 
-    def _add_blank_step(self) -> None:
+    def _add_blank_frame(self) -> None:
         if self._current_idx < 0:
             self.notify("Create a sequence first.", severity="warning")
             return
-        self._save_step_editor()
+        self._save_frame_editor()
         seq = self._sequences[self._current_idx]
-        step = SequenceStep.create(label=f"Step {len(seq.steps)+1}")
-        insert_at = self._selected_step_idx + 1 if self._selected_step_idx >= 0 else len(seq.steps)
-        seq.steps.insert(insert_at, step)
-        self._selected_step_idx = insert_at
-        self._refresh_step_list()
-        self._load_step_into_editor(step)
+        frame = SequenceFrame.create(label=f"Frame {len(seq.frames)+1}")
+        insert_at = self._selected_frame_idx + 1 if self._selected_frame_idx >= 0 else len(seq.frames)
+        seq.frames.insert(insert_at, frame)
+        self._selected_frame_idx = insert_at
+        self._refresh_frame_list()
+        self._load_frame_into_editor(frame)
         # Move cursor to new row
         try:
-            self.query_one("#step-table", DataTable).move_cursor(row=insert_at)
+            self.query_one("#frame-table", DataTable).move_cursor(row=insert_at)
         except Exception:
             pass
-        # Update sequence list step count
+        # Update sequence list frame count
         self._update_seq_list_row()
         if hasattr(self.app, "mark_dirty"):
             self.app.mark_dirty()
 
-    def _remove_step(self) -> None:
-        if self._current_idx < 0 or self._selected_step_idx < 0:
-            self.notify("Select a step to remove.", severity="warning")
+    def _remove_frame(self) -> None:
+        if self._current_idx < 0 or self._selected_frame_idx < 0:
+            self.notify("Select a frame to remove.", severity="warning")
             return
         seq = self._sequences[self._current_idx]
-        seq.steps.pop(self._selected_step_idx)
-        new_idx = min(self._selected_step_idx, len(seq.steps) - 1)
-        self._selected_step_idx = new_idx
-        self._refresh_step_list()
+        seq.frames.pop(self._selected_frame_idx)
+        new_idx = min(self._selected_frame_idx, len(seq.frames) - 1)
+        self._selected_frame_idx = new_idx
+        self._refresh_frame_list()
         if new_idx >= 0:
-            self._load_step_into_editor(seq.steps[new_idx])
+            self._load_frame_into_editor(seq.frames[new_idx])
             try:
-                self.query_one("#step-table", DataTable).move_cursor(row=new_idx)
+                self.query_one("#frame-table", DataTable).move_cursor(row=new_idx)
             except Exception:
                 pass
         else:
-            self._clear_step_editor()
-        # Update sequence list step count
+            self._clear_frame_editor()
+        # Update sequence list frame count
         self._update_seq_list_row()
         if hasattr(self.app, "mark_dirty"):
             self.app.mark_dirty()
 
     def _update_seq_list_row(self) -> None:
-        """Refresh the step count in the sequence list for the current sequence."""
+        """Refresh the frame count in the sequence list for the current sequence."""
         if self._current_idx < 0 or self._current_idx >= len(self._sequences):
             return
         seq = self._sequences[self._current_idx]
         try:
             st = self.query_one("#seq-table", DataTable)
-            st.update_cell(seq.id, "steps", str(len(seq.steps)), update_width=False)
+            st.update_cell(seq.id, "frames", str(len(seq.frames)), update_width=False)
         except Exception:
             pass
 
@@ -706,11 +707,11 @@ class SequenceTab(Widget):
         if self._current_idx < 0:
             self.notify("Create a sequence first.", severity="warning")
             return
-        self._save_step_editor()
+        self._save_frame_editor()
         self._sync_run_bar_to_seq()
         seq = self._sequences[self._current_idx]
-        if not seq.steps:
-            self.notify("No steps in the sequence.", severity="warning")
+        if not seq.frames:
+            self.notify("No frames in the sequence.", severity="warning")
             return
         self._running = True
         self.run_worker(self._async_run(seq), exclusive=True)
@@ -759,17 +760,17 @@ class SequenceTab(Widget):
                     self._switch_to(i)
                     break
 
-        elif event.data_table.id == "step-table":
+        elif event.data_table.id == "frame-table":
             if self._current_idx < 0:
                 return
             # Save before switching
-            self._save_step_editor()
+            self._save_frame_editor()
             seq = self._sequences[self._current_idx]
-            step_id = str(event.row_key.value)
-            for i, step in enumerate(seq.steps):
-                if step.id == step_id:
-                    self._selected_step_idx = i
-                    self._load_step_into_editor(step)
+            frame_id = str(event.row_key.value)
+            for i, frame in enumerate(seq.frames):
+                if frame.id == frame_id:
+                    self._selected_frame_idx = i
+                    self._load_frame_into_editor(frame)
                     break
 
         elif event.data_table.id == "history-table":
@@ -784,14 +785,14 @@ class SequenceTab(Widget):
                         entry.raw_bytes.hex()[i : i + 2]
                         for i in range(0, len(entry.raw_bytes.hex()), 2)
                     )
-                    if self._step_editor_mode == "str":
+                    if self._frame_editor_mode == "str":
                         from ..utils.frame_codec import hex_template_to_str as _h2s
                         display = _h2s(hex_pairs)
                     else:
                         display = hex_pairs
-                    self.query_one("#step-hex-editor", TextArea).load_text(display)
-                    self.query_one("#step-label-input", Input).value = (
-                        f"[{entry.direction}] {entry.step_label}"
+                    self.query_one("#frame-hex-editor", TextArea).load_text(display)
+                    self.query_one("#frame-label-input", Input).value = (
+                        f"[{entry.direction}] {entry.frame_label}"
                     )
                     break
 
@@ -810,14 +811,14 @@ class SequenceTab(Widget):
         direction: str = "client_to_server",
     ) -> None:
         """
-        Add a new step from raw bytes (called when importing from the Traffic tab).
+        Add a new frame from raw bytes (called when importing from the Traffic tab).
 
         If no sequence exists, a new one is created first, inheriting the
         connection parameters from the imported frame's session.
 
         Args:
             direction: ``"client_to_server"`` or ``"server_to_client"``.  A
-                       sequence should only contain steps of one direction; this
+                       sequence should only contain frames of one direction; this
                        is enforced at the Traffic tab import level (only frames
                        matching the first selected frame's direction are sent).
         """
@@ -832,19 +833,19 @@ class SequenceTab(Widget):
             )
             self.add_sequence(seq)
 
-        self._save_step_editor()
+        self._save_frame_editor()
         seq = self._sequences[self._current_idx]
         hex_str = " ".join(
             raw_bytes.hex()[i : i + 2] for i in range(0, len(raw_bytes.hex()), 2)
         )
-        step = SequenceStep.create(label=label, raw_hex=hex_str, direction=direction)
-        seq.steps.append(step)
-        self._selected_step_idx = len(seq.steps) - 1
-        self._refresh_step_list()
-        self._load_step_into_editor(step)
+        frame = SequenceFrame.create(label=label, raw_hex=hex_str, direction=direction)
+        seq.frames.append(frame)
+        self._selected_frame_idx = len(seq.frames) - 1
+        self._refresh_frame_list()
+        self._load_frame_into_editor(frame)
         try:
-            self.query_one("#step-table", DataTable).move_cursor(
-                row=len(seq.steps) - 1
+            self.query_one("#frame-table", DataTable).move_cursor(
+                row=len(seq.frames) - 1
             )
         except Exception:
             pass
