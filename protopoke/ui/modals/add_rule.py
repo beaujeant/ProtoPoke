@@ -1,4 +1,4 @@
-"""Add-rule modals: AddReplaceRuleModal and AddTamperRuleModal."""
+"""Add-rule modals: AddReplaceRuleModal and AddInterceptRuleModal."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from textual.containers import Horizontal, Vertical
 
 from ...rules.rule import (
     ReplaceRule,
-    TamperRule,
+    InterceptRule,
     RuleAction,
     compile_binary_pattern,
     compile_regex_pattern,
@@ -25,7 +25,7 @@ _DIRECTION_OPTIONS = [
 ]
 
 _ACTION_OPTIONS = [
-    ("Tamper (hold for review)", "tamper"),
+    ("Intercept (hold for review)", "intercept"),
     ("Forward (bypass queue)", "forward"),
 ]
 
@@ -193,9 +193,9 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
             yield Label("Apply in:")
             with Horizontal(classes="scope-row"):
                 yield Checkbox(
-                    "Tamper (relay)",
-                    value=ex.apply_to_tamper if ex else True,
-                    id="r-scope-tamper",
+                    "Intercept (relay)",
+                    value=ex.apply_to_intercept if ex else True,
+                    id="r-scope-intercept",
                 )
                 yield Checkbox(
                     "Forge",
@@ -261,7 +261,7 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
         enabled  = self.query_one("#r-enabled", Switch).value
         rule_type_val = str(self.query_one("#r-type", Select).value)
 
-        scope_tamper = self.query_one("#r-scope-tamper", Checkbox).value
+        scope_intercept = self.query_one("#r-scope-intercept", Checkbox).value
         scope_forge  = self.query_one("#r-scope-forge",  Checkbox).value
         scope_sequence = self.query_one("#r-scope-sequence", Checkbox).value
 
@@ -299,7 +299,7 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
                 rule.replacement = replacement
                 rule.direction  = direction
                 rule.enabled    = enabled
-                rule.apply_to_tamper = scope_tamper
+                rule.apply_to_intercept = scope_intercept
                 rule.apply_to_forge  = scope_forge
                 rule.apply_to_sequence = scope_sequence
                 rule.compiled = compile_binary_pattern(pattern) if pattern else None
@@ -309,7 +309,7 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
                     label, pattern, replacement,
                     direction=direction, enabled=enabled,
                     rule_type="binary",
-                    apply_to_tamper=scope_tamper,
+                    apply_to_intercept=scope_intercept,
                     apply_to_forge=scope_forge,
                     apply_to_sequence=scope_sequence,
                 )
@@ -334,7 +334,7 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
                 rule.regex_replacement = regex_replacement
                 rule.direction        = direction
                 rule.enabled          = enabled
-                rule.apply_to_tamper = scope_tamper
+                rule.apply_to_intercept = scope_intercept
                 rule.apply_to_forge  = scope_forge
                 rule.apply_to_sequence = scope_sequence
                 rule.regex_compiled = compile_regex_pattern(regex_pattern) if regex_pattern else None
@@ -346,7 +346,7 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
                     rule_type="regex",
                     regex_pattern=regex_pattern,
                     regex_replacement=regex_replacement,
-                    apply_to_tamper=scope_tamper,
+                    apply_to_intercept=scope_intercept,
                     apply_to_forge=scope_forge,
                     apply_to_sequence=scope_sequence,
                 )
@@ -365,7 +365,7 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
                 rule.script_path = script_path
                 rule.direction   = direction
                 rule.enabled     = enabled
-                rule.apply_to_tamper = scope_tamper
+                rule.apply_to_intercept = scope_intercept
                 rule.apply_to_forge  = scope_forge
                 rule.apply_to_sequence = scope_sequence
                 rule.compiled = None
@@ -377,7 +377,7 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
                     direction=direction, enabled=enabled,
                     rule_type="script",
                     script_path=script_path,
-                    apply_to_tamper=scope_tamper,
+                    apply_to_intercept=scope_intercept,
                     apply_to_forge=scope_forge,
                     apply_to_sequence=scope_sequence,
                 )
@@ -390,64 +390,64 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
 
 
 # ---------------------------------------------------------------------------
-# AddTamperRuleModal
+# AddInterceptRuleModal
 # ---------------------------------------------------------------------------
 
-class AddTamperRuleModal(ModalScreen[TamperRule | None]):
+class AddInterceptRuleModal(ModalScreen[InterceptRule | None]):
     """
-    Modal form to create or edit an TamperRule.
+    Modal form to create or edit an InterceptRule.
 
     Dismisses with the new/updated rule, or None if cancelled.
     """
 
     DEFAULT_CSS = """
-    AddTamperRuleModal > Vertical {
+    AddInterceptRuleModal > Vertical {
         width: 72;
         height: auto;
         border: thick $primary;
         padding: 1 2;
         background: $surface;
     }
-    AddTamperRuleModal Label {
+    AddInterceptRuleModal Label {
         margin-top: 1;
     }
-    AddTamperRuleModal Input {
+    AddInterceptRuleModal Input {
         margin-bottom: 0;
     }
-    AddTamperRuleModal .hint {
+    AddInterceptRuleModal .hint {
         color: $text-muted;
     }
-    AddTamperRuleModal .tls-row {
+    AddInterceptRuleModal .tls-row {
         height: 3;
         margin-top: 1;
         align: left middle;
     }
-    AddTamperRuleModal .buttons {
+    AddInterceptRuleModal .buttons {
         height: 3;
         margin-top: 2;
         align: right middle;
     }
-    AddTamperRuleModal Button {
+    AddInterceptRuleModal Button {
         margin-left: 1;
         padding: 0 0;
     }
-    AddTamperRuleModal #validation-msg {
+    AddInterceptRuleModal #validation-msg {
         color: $error;
         height: 1;
     }
     """
 
-    def __init__(self, existing: TamperRule | None = None) -> None:
+    def __init__(self, existing: InterceptRule | None = None) -> None:
         super().__init__()
         self._existing = existing
 
     def compose(self) -> ComposeResult:
         ex = self._existing
         with Vertical():
-            yield Label("Tamper Rule", classes="modal-title")
+            yield Label("Intercept Rule", classes="modal-title")
 
             yield Label("Label:")
-            yield Input(value=ex.label if ex else "", placeholder="My tamper rule", id="i-label")
+            yield Input(value=ex.label if ex else "", placeholder="My intercept rule", id="i-label")
 
             yield Label("Pattern (hex binary syntax, empty = match all):")
             yield Input(
@@ -537,6 +537,6 @@ class AddTamperRuleModal(ModalScreen[TamperRule | None]):
             from ...rules.rule import compile_binary_pattern as _compile
             rule.compiled = _compile(pattern) if pattern else None
         else:
-            rule = TamperRule.create(label, pattern, action, direction=direction, enabled=enabled)
+            rule = InterceptRule.create(label, pattern, action, direction=direction, enabled=enabled)
 
         self.dismiss(rule)

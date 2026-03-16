@@ -1,14 +1,14 @@
 """
-Rules engines: RulesEngine (replace rules) and TamperFilter (intercept rules).
+Rules engines: RulesEngine (replace rules) and InterceptFilter (intercept rules).
 
 RulesEngine
 -----------
 Applies an ordered list of ReplaceRules to frame bytes.  All enabled rules
 that match the frame's direction are applied sequentially — rules stack.
 
-TamperFilter
+InterceptFilter
 ---------------
-Evaluates an ordered list of TamperRules against a frame and returns a
+Evaluates an ordered list of InterceptRules against a frame and returns a
 RuleAction decision.  The first matching rule wins (firewall semantics).
 
     - If no rules are configured:  ``should_intercept()`` returns ``True``
@@ -24,7 +24,7 @@ import logging
 from typing import Optional
 
 from ..models import Direction, Frame
-from .rule import ReplaceRule, TamperRule, RuleAction
+from .rule import ReplaceRule, InterceptRule, RuleAction
 
 logger = logging.getLogger(__name__)
 
@@ -163,9 +163,9 @@ class RulesEngine:
         return engine
 
 
-class TamperFilter:
+class InterceptFilter:
     """
-    Ordered list of TamperRules that decide whether to queue a frame.
+    Ordered list of InterceptRules that decide whether to queue a frame.
 
     Decision logic (firewall / first-match semantics):
 
@@ -180,26 +180,26 @@ class TamperFilter:
 
     Usage::
 
-        filt = TamperFilter()
-        filt.add_rule(TamperRule.create("Login", "01 00", RuleAction.INTERCEPT))
+        filt = InterceptFilter()
+        filt.add_rule(InterceptRule.create("Login", "01 00", RuleAction.INTERCEPT))
 
         if filt.should_intercept(frame):
             # queue it …
     """
 
     def __init__(self) -> None:
-        self._rules: list[TamperRule] = []
+        self._rules: list[InterceptRule] = []
 
     @property
-    def rules(self) -> list[TamperRule]:
+    def rules(self) -> list[InterceptRule]:
         """Snapshot of the current rule list (ordered)."""
         return list(self._rules)
 
-    def add_rule(self, rule: TamperRule) -> None:
+    def add_rule(self, rule: InterceptRule) -> None:
         """Append *rule* to the end of the list."""
         self._rules.append(rule)
 
-    def insert_rule(self, index: int, rule: TamperRule) -> None:
+    def insert_rule(self, index: int, rule: InterceptRule) -> None:
         """Insert *rule* at *index*."""
         self._rules.insert(index, rule)
 
@@ -211,7 +211,7 @@ class TamperFilter:
                 return True
         return False
 
-    def get_rule(self, rule_id: str) -> Optional[TamperRule]:
+    def get_rule(self, rule_id: str) -> Optional[InterceptRule]:
         """Return the rule with *rule_id*, or ``None`` if not found."""
         for r in self._rules:
             if r.id == rule_id:
@@ -239,7 +239,7 @@ class TamperFilter:
         for rule in self._rules:
             if rule.matches_frame(frame):
                 logger.debug(
-                    "Tamper rule %r matched frame %s (action=%s)",
+                    "Intercept rule %r matched frame %s (action=%s)",
                     rule.label, frame.id[:8], rule.action.value,
                 )
                 return rule.action
@@ -271,9 +271,13 @@ class TamperFilter:
         return [r.to_dict() for r in self._rules]
 
     @classmethod
-    def from_list(cls, data: list[dict]) -> "TamperFilter":
+    def from_list(cls, data: list[dict]) -> "InterceptFilter":
         """Deserialise from a list of dicts produced by ``to_list()``."""
         filt = cls()
         for d in data:
-            filt.add_rule(TamperRule.from_dict(d))
+            filt.add_rule(InterceptRule.from_dict(d))
         return filt
+
+
+# Backward-compatibility alias
+TamperFilter = InterceptFilter

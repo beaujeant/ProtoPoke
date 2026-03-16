@@ -45,7 +45,7 @@ from ..models import Direction, Frame, TamperedUnit, InterceptAction
 
 if TYPE_CHECKING:
     # Avoid a circular import at runtime; only used for type hints.
-    from ..rules.engine import TamperFilter
+    from ..rules.engine import InterceptFilter
 
 logger = logging.getLogger(__name__)
 
@@ -131,23 +131,23 @@ class QueuedTamperController(TamperController):
         tamper_enabled: bool = True,
         direction_filter:  Optional[Direction] = None,
         session_filter:    Optional[set[str]] = None,
-        tamper_filter:  Optional["TamperFilter"] = None,
+        intercept_filter: Optional["InterceptFilter"] = None,
     ) -> None:
         """
         Args:
-            tamper_enabled:  Master on/off switch.
-            direction_filter:   When set, only frames in this direction are
-                                queued; the other direction passes through.
-            session_filter:     When set, only frames from these session IDs
-                                are queued; others pass through.
-            tamper_filter:   When set, each frame is evaluated against the
-                                TamperFilter's rules before queuing.
-                                See TamperFilter.should_intercept().
+            tamper_enabled:   Master on/off switch.
+            direction_filter: When set, only frames in this direction are
+                              queued; the other direction passes through.
+            session_filter:   When set, only frames from these session IDs
+                              are queued; others pass through.
+            intercept_filter: When set, each frame is evaluated against the
+                              InterceptFilter's rules before queuing.
+                              See InterceptFilter.should_intercept().
         """
-        self._tamper_enabled = tamper_enabled
+        self._tamper_enabled    = tamper_enabled
         self._direction_filter  = direction_filter
         self._session_filter    = session_filter
-        self._tamper_filter  = tamper_filter
+        self._intercept_filter  = intercept_filter
 
         # Live futures: unit_id → (unit, Future[TamperedUnit])
         # The Future is resolved when set_verdict() is called.
@@ -196,13 +196,13 @@ class QueuedTamperController(TamperController):
         self._session_filter = value
 
     @property
-    def tamper_filter(self) -> "Optional[TamperFilter]":
+    def intercept_filter(self) -> "Optional[InterceptFilter]":
         """Rule-based intercept filter (``None`` = no rules, intercept all)."""
-        return self._tamper_filter
+        return self._intercept_filter
 
-    @tamper_filter.setter
-    def tamper_filter(self, value: "Optional[TamperFilter]") -> None:
-        self._tamper_filter = value
+    @intercept_filter.setter
+    def intercept_filter(self, value: "Optional[InterceptFilter]") -> None:
+        self._intercept_filter = value
 
     # ------------------------------------------------------------------
     # TamperController interface
@@ -217,7 +217,7 @@ class QueuedTamperController(TamperController):
           1. Master ``tamper_enabled`` switch.
           2. ``direction_filter`` — pass through wrong-direction frames.
           3. ``session_filter``   — pass through out-of-scope sessions.
-          4. ``tamper_filter`` — rule-based decision (INTERCEPT/FORWARD).
+          4. ``intercept_filter`` — rule-based decision (INTERCEPT/FORWARD).
         """
         unit = TamperedUnit.from_frame(frame)
 
@@ -242,8 +242,8 @@ class QueuedTamperController(TamperController):
             return unit
 
         # Rule-based intercept filter
-        if self._tamper_filter is not None:
-            if not self._tamper_filter.should_intercept(frame):
+        if self._intercept_filter is not None:
+            if not self._intercept_filter.should_intercept(frame):
                 unit.action = InterceptAction.FORWARD
                 return unit
 

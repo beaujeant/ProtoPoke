@@ -1,5 +1,5 @@
 """
-Binary pattern rules: ReplaceRule and TamperRule.
+Binary pattern rules: ReplaceRule and InterceptRule.
 
 Both use a user-friendly binary hex pattern syntax that is compiled to a
 Python bytes regex (re.compile on bytes).  Python's ``re`` module works
@@ -336,12 +336,12 @@ def pattern_to_display(pattern_str: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Rule action enum (tamper rules)
+# Rule action enum (intercept rules)
 # ---------------------------------------------------------------------------
 
 class RuleAction(Enum):
     """
-    Decision produced by an TamperRule when it matches a frame.
+    Decision produced by an InterceptRule when it matches a frame.
 
     INTERCEPT: hold the frame in the operator queue for manual review.
     FORWARD:   auto-forward the frame, skipping the queue entirely.
@@ -378,7 +378,7 @@ class ReplaceRule:
 
     Scope flags control which pipeline stages apply the rule:
 
-        ``apply_to_tamper``     — relay (before tamper/forward)
+        ``apply_to_intercept``  — relay (before intercept/forward)
         ``apply_to_forge``      — Forge tab (before send)
         ``apply_to_sequence``   — Sequence tab (before each step send)
 
@@ -406,7 +406,7 @@ class ReplaceRule:
     created_at:         float            = field(default_factory=time.time)
 
     # ---- Scope flags -------------------------------------------------------
-    apply_to_tamper:    bool = True
+    apply_to_intercept: bool = True
     apply_to_forge:     bool = True
     apply_to_sequence:  bool = True
 
@@ -436,9 +436,9 @@ class ReplaceRule:
         regex_pattern:      str  = "",
         regex_replacement:  str  = "",
         script_path:        str  = "",
-        apply_to_tamper:   bool = True,
-        apply_to_forge:    bool = True,
-        apply_to_sequence: bool = True,
+        apply_to_intercept: bool = True,
+        apply_to_forge:     bool = True,
+        apply_to_sequence:  bool = True,
     ) -> "ReplaceRule":
         """Factory: generates a unique ID and compiles the pattern."""
         return cls(
@@ -452,7 +452,7 @@ class ReplaceRule:
             script_path=script_path,
             direction=direction,
             enabled=enabled,
-            apply_to_tamper=apply_to_tamper,
+            apply_to_intercept=apply_to_intercept,
             apply_to_forge=apply_to_forge,
             apply_to_sequence=apply_to_sequence,
         )
@@ -467,16 +467,17 @@ class ReplaceRule:
 
         Args:
             data:  The bytes to transform.
-            scope: Optional scope name — ``"tamper"``, ``"forge"``,
-                   or ``"sequence"``.  When set and the corresponding
-                   ``apply_to_*`` flag is ``False``, the rule is skipped.
+            scope: Optional scope name — ``"intercept"`` (relay pipeline),
+                   ``"forge"``, or ``"sequence"``.  When set and the
+                   corresponding ``apply_to_*`` flag is ``False``, the rule
+                   is skipped.
 
         Returns modified bytes, or *data* unchanged if the rule does not
         apply or does not match.
         """
         if not self.enabled:
             return data
-        if scope == "tamper" and not self.apply_to_tamper:
+        if scope in ("tamper", "intercept") and not self.apply_to_intercept:
             return data
         if scope == "forge" and not self.apply_to_forge:
             return data
@@ -566,7 +567,7 @@ class ReplaceRule:
             "direction":         self.direction.value if self.direction else None,
             "enabled":           self.enabled,
             "created_at":        self.created_at,
-            "apply_to_tamper":    self.apply_to_tamper,
+            "apply_to_intercept": self.apply_to_intercept,
             "apply_to_forge":     self.apply_to_forge,
             "apply_to_sequence":  self.apply_to_sequence,
         }
@@ -591,20 +592,20 @@ class ReplaceRule:
             direction=direction,
             enabled=d.get("enabled", True),
             created_at=d.get("created_at", time.time()),
-            apply_to_tamper=d.get("apply_to_tamper", d.get("apply_to_intercept", True)),
+            apply_to_intercept=d.get("apply_to_intercept", d.get("apply_to_tamper", True)),
             apply_to_forge=d.get("apply_to_forge", d.get("apply_to_repeater", True)),
             apply_to_sequence=d.get("apply_to_sequence", d.get("apply_to_sequencer", True)),
         )
 
 
 # ---------------------------------------------------------------------------
-# TamperRule
+# InterceptRule
 # ---------------------------------------------------------------------------
 
 @dataclass
-class TamperRule:
+class InterceptRule:
     """
-    A rule that controls whether a frame is held in the tamper queue.
+    A rule that controls whether a frame is held in the intercept queue.
 
     Rules are evaluated top-to-bottom; the *first* matching rule wins.
     If no rule matches, the caller's default applies (auto-forward).
@@ -651,7 +652,7 @@ class TamperRule:
         direction:   Optional[Direction] = None,
         session_ids: Optional[set[str]] = None,
         enabled:     bool = True,
-    ) -> "TamperRule":
+    ) -> "InterceptRule":
         """Factory: generates a unique ID and compiles the pattern."""
         return cls(
             id=str(uuid.uuid4()),
@@ -703,7 +704,7 @@ class TamperRule:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "TamperRule":
+    def from_dict(cls, d: dict) -> "InterceptRule":
         """Deserialise from a dict produced by ``to_dict()``."""
         direction: Optional[Direction] = None
         if d.get("direction"):

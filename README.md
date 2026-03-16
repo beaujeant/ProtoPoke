@@ -14,12 +14,12 @@ This is a personal security research tool. It prioritises **readability, extensi
 - **TLS/SSL MITM** — auto-generates a root CA and per-session certificates (Burp-style); clients trust the CA once, proxy decrypts all sessions transparently
 - **Multi-session** — handles many concurrent connections on one listener
 - **Bidirectional capture** — every frame logged with direction, timestamp, sequence number
-- **Tamper queue** — pause frames mid-stream, inspect, modify, forward, or drop
-- **Tamper rules** — filter which frames get tampered (by pattern, direction); first-match-wins ordered list
-- **Replace rules** — auto-rewrite byte patterns before frames reach the tamper queue
+- **Intercept queue** — pause frames mid-stream, inspect, modify, forward, or drop
+- **Intercept rules** — filter which frames get intercepted (by pattern, direction); first-match-wins ordered list
+- **Global replace rules** — auto-rewrite byte patterns across relay, Forge, and Sequence pipelines
 - **Three built-in framers** — raw (passthrough), delimiter (`\n`, `\r\n`, …), length-prefix (1/2/4/8 byte)
 - **Forge** — hand-craft or modify frames and send them directly to the target; full send history
-- **Project system** — save/load proxy config, tamper/replace rules, and forge requests to a JSON file
+- **Project system** — save/load proxy config, intercept/replace rules, and forge requests to a JSON file
 - **Protocol definition DSL** — describe any binary protocol in a YAML or JSON file; no code required
 - **Protocol parser** — automatically decode frames into named, typed fields with offset and size metadata
 - **Three match strategies** — identify packet types by magic bytes, by stream sequence position, or with a catch-all
@@ -120,7 +120,7 @@ The TUI opens with five tabs:
 |---|---|---|
 | **Config** | F1 | Configure the listener, upstream server, TLS, framing, and protocol definition. Start/Stop the proxy. |
 | **Traffic** | F2 | Live session list → frame list → hex/parsed detail view. Send any frame to Forge. |
-| **Tamper** | F3 | View the tamper queue; forward, drop, or modify-and-forward individual frames. Manage ordered tamper and replace rules. |
+| **Tamper** | F3 | View the intercept queue; forward, drop, or modify-and-forward individual frames. Manage ordered intercept rules and global replace rules. |
 | **Forge** | F4 | Hand-craft frames in a hex editor and send them to the target; review the full send history. |
 | **Fuzzer** | F5 | Select a captured session, pick mutators, run a campaign, and review results with crash/anomaly flags. |
 
@@ -137,7 +137,7 @@ The TUI opens with five tabs:
 
 ### Project files
 
-Projects save your proxy config, tamper/replace rules, and forge requests to a JSON file. Use **Ctrl+N** to start fresh, **Ctrl+O** to open an existing project, and **Ctrl+S** to save.
+Projects save your proxy config, intercept/replace rules, and forge requests to a JSON file. Use **Ctrl+N** to start fresh, **Ctrl+O** to open an existing project, and **Ctrl+S** to save.
 
 ---
 
@@ -151,7 +151,7 @@ ProtoPoke exposes all proxy operations as [Model Context Protocol](https://model
 |---|---|
 | **Session inspection** | "List all sessions", "Show me the frames from session X", "How many bytes did the client send in session Y?", "Decode the frames and show me the field values" |
 | **Live tamper** | "Enable tamper mode", "Show me the pending tampered frames", "Forward the first one but change the `username` field to `admin`", "Drop the frame that matches pattern `01 FF`" |
-| **Rules** | "Add a tamper rule that holds all client→server frames starting with `0x01`", "Disable the replace rule named 'strip auth'", "Move the null-byte rule to position 0", "Clear all tamper rules" |
+| **Rules** | "Add an intercept rule that holds all client→server frames starting with `0x01`", "Disable the replace rule named 'strip auth'", "Move the null-byte rule to position 0", "Clear all intercept rules" |
 | **Search** | "Find all frames across all sessions that contain the bytes `FF FF 00`" |
 | **Replay** | "Replay session X against `staging.internal:9090`", "Replay session X but change the `password` field to `hunter2` in every LoginRequest" |
 | **Forge** | "Create a forge tab with the first frame from session X", "Send it and show me the response", "Change the payload to `deadbeef` and resend" |
@@ -322,7 +322,7 @@ async def main():
 asyncio.run(main())
 ```
 
-The agent automatically discovers all ProtoPoke tools (list_sessions, get_frames, tamper_toggle, add_tamper_rule, forge_session, etc.) and can call them as needed.
+The agent automatically discovers all ProtoPoke tools (list_sessions, get_frames, tamper_toggle, add_intercept_rule, forge_session, etc.) and can call them as needed.
 
 ---
 
@@ -361,7 +361,7 @@ asyncio.run(main())
 | Sessions | `list_sessions`, `get_session`, `get_frames`, `decode_frames` |
 | Tamper | `tamper_status`, `tamper_toggle`, `list_intercepted`, `tamper_forward`, `tamper_drop`, `tamper_modify_and_forward` |
 | Replace rules | `list_replace_rules`, `add_replace_rule`, `remove_replace_rule` |
-| Tamper rules | `list_tamper_rules`, `add_tamper_rule`, `remove_tamper_rule` |
+| Intercept rules | `list_intercept_rules`, `add_intercept_rule`, `remove_intercept_rule` |
 | Forge | `send_frame` |
 | Replay | `replay_session` |
 | Fuzzing | `fuzz_start`, `fuzz_status`, `fuzz_results`, `fuzz_stop`, `list_campaigns` |
@@ -398,12 +398,12 @@ asyncio.run(main())
 | | `remove_replace_rule` | Remove a rule by ID |
 | | `reorder_replace_rule` | Move a rule to a different position |
 | | `clear_replace_rules` | Remove all replace rules |
-| **Tamper rules** | `list_tamper_rules` | All tamper rules in evaluation order |
-| | `add_tamper_rule` | Add a filter rule (intercept or forward action) |
-| | `update_tamper_rule` | Toggle, rename, or flip the action of a rule |
-| | `remove_tamper_rule` | Remove a rule by ID |
-| | `reorder_tamper_rule` | Move a rule to a different priority position |
-| | `clear_tamper_rules` | Remove all intercept rules |
+| **Intercept rules** | `list_intercept_rules` | All intercept rules in evaluation order |
+| | `add_intercept_rule` | Add a filter rule (intercept or forward action) |
+| | `update_intercept_rule` | Toggle, rename, or flip the action of a rule |
+| | `remove_intercept_rule` | Remove a rule by ID |
+| | `reorder_intercept_rule` | Move a rule to a different priority position |
+| | `clear_intercept_rules` | Remove all intercept rules |
 | **Protocol** | `set_protocol_file` | Load a YAML/JSON protocol definition file |
 | | `set_protocol_dict` | Load a protocol definition from an inline dict |
 | | `get_protocol_info` | Currently loaded decoder/encoder names and status |
@@ -1979,9 +1979,9 @@ protopoke/
 │   ├── tamper/
 │   │   └── controller.py   # PassthroughController + QueuedTamperController
 │   ├── rules/
-│   │   ├── rule.py         # TamperRule, ReplaceRule dataclasses + RuleAction enum
+│   │   ├── rule.py         # InterceptRule, ReplaceRule dataclasses + RuleAction enum
 │   │   ├── engine.py       # RulesEngine: ordered replace-rule pipeline
-│   │   └── filter.py       # TamperFilter: ordered tamper-rule evaluation
+│   │   └── filter.py       # InterceptFilter: ordered intercept-rule evaluation
 │   ├── fuzzing/
 │   │   ├── models.py       # FuzzResult (anomaly heuristic) + FuzzCampaign
 │   │   ├── engine.py       # FuzzerEngine: baseline capture, round-robin mutation loop, crash detection
@@ -2014,7 +2014,7 @@ protopoke/
 │       ├── modals/
 │       │   ├── project.py  # NewProjectModal, OpenProjectModal, SaveAsModal
 │       │   ├── new_request.py # NewRequestModal — create a forge request
-│       │   └── add_rule.py # AddTamperRuleModal, AddReplaceRuleModal
+│       │   └── add_rule.py # AddInterceptRuleModal, AddReplaceRuleModal
 │       └── widgets/
 │           ├── rule_table.py # RuleTable — DataTable + Add/Remove/Move toolbar
 │           └── parsed_view.py # ParsedView — hex ↔ field-tree toggle pane
@@ -2099,7 +2099,7 @@ For TLS interception the proxy must terminate TLS on both sides independently so
 - **Field-level tamper editing** ✅ — `modify_field_and_forward()` re-encodes with field name → value dict; length fields auto-recomputed
 - **Field-level replay** ✅ — `replay_session_with_field_edits()` applies per-message-type field edits
 - **Wireshark-style display** ✅ — `render_hexdump()` with ANSI highlights, `render_field_tree()`, `render_frame_header()`
-- **Tamper / replace rules** ✅ — ordered, filterable, first-match-wins tamper rules; byte-pattern replace rules
+- **Intercept / replace rules** ✅ — ordered, filterable, first-match-wins intercept rules; byte-pattern global replace rules
 - **Terminal UI** ✅ — Textual TUI with Config, Traffic, Tamper, Forge, and Fuzzer tabs; project save/load
 - **MCP server** ✅ — FastMCP wrapper exposing all ProxyAPI operations as AI tools
 - **Fuzzing subsystem** ✅ — `FrameMutator` ABC; raw mutators (bit-flip, insert, delete, known-bad, radamsa, chain); protocol-aware mutators (field boundary, overflow, null-byte, length mangle); `FuzzerEngine` with baseline capture and anomaly detection; `api.fuzz_session()`; Fuzzer TUI tab (F5)

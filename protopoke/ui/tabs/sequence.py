@@ -16,7 +16,7 @@ from ..utils.frame_codec import hex_template_to_str, str_to_hex_template
 
 class SequenceTab(Widget):
     """
-    Tab 6 — Sequence: send ordered packet chains with {{VAR}} variable
+    Tab 6 — Sequence: send ordered frame chains with {{VAR}} variable
     substitution and an optional Python script for response-driven extraction.
 
     Layout (all panes 100% width, stacked vertically):
@@ -29,7 +29,7 @@ class SequenceTab(Widget):
       ├─────────────────────────────────────────────────────────┤
       │ [+ New]  [Import]  [Export]               h=3           │
       ├─────────────────────────────────────────────────────────┤
-      │ PACKET LIST  (~20%)                                     │
+      │ FRAME LIST  (~20%)                                      │
       │  #   Label      Len   Preview                           │
       ├─────────────────────────────────────────────────────────┤
       │ [↑ Up] [↓ Down] [+ Add] [- Remove]         h=3         │
@@ -185,9 +185,9 @@ class SequenceTab(Widget):
             yield Button("Import",   id="btn-import-seq", compact=True)
             yield Button("Export",   id="btn-export-seq", compact=True)
 
-        # Packet list
+        # Frame list
         with Vertical(id="step-list-pane"):
-            yield Static("  Packet List", classes="pane-header")
+            yield Static("  Frame List", classes="pane-header")
             yield DataTable(id="step-table", cursor_type="row")
 
         # Step controls

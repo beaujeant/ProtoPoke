@@ -1,4 +1,4 @@
-"""Tests for the binary rules module: ReplaceRule, TamperRule, RulesEngine, TamperFilter."""
+"""Tests for the binary rules module: ReplaceRule, InterceptRule, RulesEngine, InterceptFilter."""
 
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ from protopoke.rules.rule import (
     PatternError,
     RuleAction,
     ReplaceRule,
-    TamperRule,
+    InterceptRule,
     compile_binary_pattern,
     pattern_to_display,
 )
-from protopoke.rules.engine import RulesEngine, TamperFilter
+from protopoke.rules.engine import RulesEngine, InterceptFilter
 
 
 def make_frame(data: bytes, direction: Direction = Direction.CLIENT_TO_SERVER, seq: int = 0) -> Frame:
@@ -139,22 +139,22 @@ class TestReplaceRule:
 
 
 # ---------------------------------------------------------------------------
-# TamperRule
+# InterceptRule
 # ---------------------------------------------------------------------------
 
-class TestTamperRule:
+class TestInterceptRule:
     def test_matches_exact(self):
-        rule = TamperRule.create("login", "01 00", RuleAction.INTERCEPT)
+        rule = InterceptRule.create("login", "01 00", RuleAction.INTERCEPT)
         frame = make_frame(b"\x01\x00\x05")
         assert rule.matches_frame(frame)
 
     def test_no_match(self):
-        rule = TamperRule.create("login", "FF 00", RuleAction.INTERCEPT)
+        rule = InterceptRule.create("login", "FF 00", RuleAction.INTERCEPT)
         frame = make_frame(b"\x01\x00\x05")
         assert not rule.matches_frame(frame)
 
     def test_direction_filter(self):
-        rule = TamperRule.create(
+        rule = InterceptRule.create(
             "c2s only", "01", RuleAction.INTERCEPT,
             direction=Direction.CLIENT_TO_SERVER,
         )
@@ -164,7 +164,7 @@ class TestTamperRule:
         assert not rule.matches_frame(s2c)
 
     def test_session_filter(self):
-        rule = TamperRule.create(
+        rule = InterceptRule.create(
             "session-specific", "01", RuleAction.INTERCEPT,
             session_ids={"session-1"},
         )
@@ -174,22 +174,22 @@ class TestTamperRule:
         assert not rule.matches_frame(frame_other)
 
     def test_empty_pattern_matches_all(self):
-        rule = TamperRule.create("catch-all", "", RuleAction.FORWARD)
+        rule = InterceptRule.create("catch-all", "", RuleAction.FORWARD)
         frame = make_frame(b"\xDE\xAD\xBE\xEF")
         assert rule.matches_frame(frame)
 
     def test_disabled_never_matches(self):
-        rule = TamperRule.create("disabled", "", RuleAction.INTERCEPT, enabled=False)
+        rule = InterceptRule.create("disabled", "", RuleAction.INTERCEPT, enabled=False)
         frame = make_frame(b"\x01")
         assert not rule.matches_frame(frame)
 
     def test_serialise_round_trip(self):
-        rule = TamperRule.create(
+        rule = InterceptRule.create(
             "rule", "01 ??", RuleAction.FORWARD,
             direction=Direction.SERVER_TO_CLIENT,
             session_ids={"s1", "s2"},
         )
-        restored = TamperRule.from_dict(rule.to_dict())
+        restored = InterceptRule.from_dict(rule.to_dict())
         assert restored.id == rule.id
         assert restored.action == rule.action
         assert restored.direction == rule.direction
@@ -263,53 +263,53 @@ class TestRulesEngine:
 
 
 # ---------------------------------------------------------------------------
-# TamperFilter
+# InterceptFilter
 # ---------------------------------------------------------------------------
 
-class TestTamperFilter:
+class TestInterceptFilter:
     def test_no_rules_intercepts_all(self):
-        filt = TamperFilter()
+        filt = InterceptFilter()
         frame = make_frame(b"\x01\x02")
         assert filt.should_intercept(frame)
 
     def test_intercept_rule_matches(self):
-        filt = TamperFilter()
-        filt.add_rule(TamperRule.create("login", "01", RuleAction.INTERCEPT))
+        filt = InterceptFilter()
+        filt.add_rule(InterceptRule.create("login", "01", RuleAction.INTERCEPT))
         frame = make_frame(b"\x01\x00")
         assert filt.should_intercept(frame)
 
     def test_forward_rule_matches(self):
-        filt = TamperFilter()
-        filt.add_rule(TamperRule.create("heartbeat", "FF", RuleAction.FORWARD))
+        filt = InterceptFilter()
+        filt.add_rule(InterceptRule.create("heartbeat", "FF", RuleAction.FORWARD))
         frame = make_frame(b"\xFF\x00")
         assert not filt.should_intercept(frame)
 
     def test_no_match_auto_forwards_when_rules_present(self):
-        filt = TamperFilter()
-        filt.add_rule(TamperRule.create("login", "01", RuleAction.INTERCEPT))
+        filt = InterceptFilter()
+        filt.add_rule(InterceptRule.create("login", "01", RuleAction.INTERCEPT))
         other_frame = make_frame(b"\x02\x00")
         # Rules present but none match → auto-forward
         assert not filt.should_intercept(other_frame)
 
     def test_first_match_wins(self):
-        filt = TamperFilter()
-        filt.add_rule(TamperRule.create("catch-all fwd", "", RuleAction.FORWARD))
-        filt.add_rule(TamperRule.create("specific intercept", "01", RuleAction.INTERCEPT))
+        filt = InterceptFilter()
+        filt.add_rule(InterceptRule.create("catch-all fwd", "", RuleAction.FORWARD))
+        filt.add_rule(InterceptRule.create("specific intercept", "01", RuleAction.INTERCEPT))
         frame = make_frame(b"\x01")
         # First rule (FORWARD) matches first → forward
         assert not filt.should_intercept(frame)
 
     def test_evaluate_returns_none_on_no_match(self):
-        filt = TamperFilter()
-        filt.add_rule(TamperRule.create("login", "01", RuleAction.INTERCEPT))
+        filt = InterceptFilter()
+        filt.add_rule(InterceptRule.create("login", "01", RuleAction.INTERCEPT))
         frame = make_frame(b"\x02")
         assert filt.evaluate(frame) is None
 
     def test_serialise_round_trip(self):
-        filt = TamperFilter()
-        filt.add_rule(TamperRule.create("r1", "01", RuleAction.INTERCEPT))
-        filt.add_rule(TamperRule.create("r2", "", RuleAction.FORWARD))
-        restored = TamperFilter.from_list(filt.to_list())
+        filt = InterceptFilter()
+        filt.add_rule(InterceptRule.create("r1", "01", RuleAction.INTERCEPT))
+        filt.add_rule(InterceptRule.create("r2", "", RuleAction.FORWARD))
+        restored = InterceptFilter.from_list(filt.to_list())
         assert len(restored.rules) == 2
         assert restored.rules[0].action == RuleAction.INTERCEPT
         assert restored.rules[1].action == RuleAction.FORWARD
@@ -347,17 +347,17 @@ class TestQueuedControllerFilters:
         assert unit.action is InterceptAction.FORWARD
 
     @pytest.mark.asyncio
-    async def test_tamper_filter_auto_forwards(self):
+    async def test_intercept_filter_auto_forwards(self):
         from protopoke.models import InterceptAction
         from protopoke.tamper.controller import QueuedTamperController
 
-        filt = TamperFilter()
+        filt = InterceptFilter()
         # Only intercept 01-prefixed frames; everything else auto-forwards
-        filt.add_rule(TamperRule.create("login", "01", RuleAction.INTERCEPT))
+        filt.add_rule(InterceptRule.create("login", "01", RuleAction.INTERCEPT))
 
         ctrl = QueuedTamperController(
             tamper_enabled=True,
-            tamper_filter=filt,
+            intercept_filter=filt,
         )
         other_frame = Frame.create("s1", Direction.CLIENT_TO_SERVER, b"\x02\x00", 0)
         unit = await ctrl.process(other_frame)

@@ -5,7 +5,7 @@ A *project* is a single ``.pp`` ZIP file that bundles:
 
     project.json    — metadata (name, version, timestamps)
     config.json     — ProxyConfig serialised to JSON
-    rules.json      — replace rules + tamper rules
+    rules.json      — replace rules + intercept rules
     repeater.json   — forge request tabs (current bytes + history)
     sequencer.json  — sequence sessions (steps, variables, history)
     logs.json       — captured sessions and frames (the traffic tab content)
@@ -35,7 +35,7 @@ Usage::
     # Later: reload
     pm2 = ProjectManager()
     state = pm2.open("/tmp/capture.pp")
-    # state.config, state.rules_engine, state.tamper_filter,
+    # state.config, state.rules_engine, state.intercept_filter,
     # state.forge_requests, state.sequence_sessions, state.captured_sessions
 """
 
@@ -50,7 +50,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..config import ProxyConfig
-from ..rules.engine import RulesEngine, TamperFilter
+from ..rules.engine import RulesEngine, InterceptFilter
 from ..forge.models import ForgeRequest
 from ..sequence.models import SequenceSession
 
@@ -76,8 +76,8 @@ class ProjectState:
     Attributes:
         config:              Proxy configuration.
         rules_engine:        Active replace rules.
-        tamper_filter:    Active intercept rules.
-        forge_requests:   All repeater tabs (with history).
+        intercept_filter:    Active intercept rules.
+        forge_requests:      All repeater tabs (with history).
         sequence_sessions:  All sequencer sessions (with steps, variables, history).
         captured_sessions:   Serialised session + frame data for the Traffic tab.
         name:                Human-readable project name.
@@ -86,8 +86,8 @@ class ProjectState:
 
     config:              ProxyConfig
     rules_engine:        RulesEngine
-    tamper_filter:    TamperFilter
-    forge_requests:   list[ForgeRequest]
+    intercept_filter:    InterceptFilter
+    forge_requests:      list[ForgeRequest]
     sequence_sessions:  list[SequenceSession]
     captured_sessions:   list[dict]       = field(default_factory=list)
     name:                str              = "Untitled"
@@ -105,7 +105,7 @@ class ProjectManager:
     Attributes:
         config:             The active :class:`~protopoke.config.ProxyConfig`.
         rules_engine:       The active :class:`~protopoke.rules.engine.RulesEngine`.
-        tamper_filter:   The active :class:`~protopoke.rules.engine.TamperFilter`.
+        intercept_filter: The active :class:`~protopoke.rules.engine.InterceptFilter`.
         forge_requests:  List of active :class:`~protopoke.forge.models.ForgeRequest`.
         sequence_sessions: List of active :class:`~protopoke.sequence.models.SequenceSession`.
         captured_sessions:  Serialised sessions+frames (set by the app before saving).
@@ -118,7 +118,7 @@ class ProjectManager:
     def __init__(self) -> None:
         self.config:              ProxyConfig            = ProxyConfig()
         self.rules_engine:        RulesEngine            = RulesEngine()
-        self.tamper_filter:    TamperFilter        = TamperFilter()
+        self.intercept_filter: InterceptFilter     = InterceptFilter()
         self.forge_requests:   list[ForgeRequest]  = []
         self.sequence_sessions:  list[SequenceSession] = []
         self.captured_sessions:   list[dict]             = []
@@ -143,7 +143,7 @@ class ProjectManager:
         """
         self.config             = ProxyConfig()
         self.rules_engine       = RulesEngine()
-        self.tamper_filter   = TamperFilter()
+        self.intercept_filter = InterceptFilter()
         self.forge_requests  = []
         self.sequence_sessions = []
         self.captured_sessions  = []
@@ -231,7 +231,7 @@ class ProjectManager:
 
         rules_data = {
             "replace":   self.rules_engine.to_list(),
-            "intercept": self.tamper_filter.to_list(),
+            "intercept": self.intercept_filter.to_list(),
         }
 
         repeater_data = {
@@ -350,10 +350,10 @@ class ProjectManager:
             if rules_raw:
                 rules_data = json.loads(rules_raw)
                 self.rules_engine     = RulesEngine.from_list(rules_data.get("replace", []))
-                self.tamper_filter = TamperFilter.from_list(rules_data.get("intercept", []))
+                self.intercept_filter = InterceptFilter.from_list(rules_data.get("intercept", []))
             else:
                 self.rules_engine     = RulesEngine()
-                self.tamper_filter = TamperFilter()
+                self.intercept_filter = InterceptFilter()
 
             # Forge
             repeater_raw = _read("repeater.json")
@@ -391,7 +391,7 @@ class ProjectManager:
         return ProjectState(
             config=self.config,
             rules_engine=self.rules_engine,
-            tamper_filter=self.tamper_filter,
+            intercept_filter=self.intercept_filter,
             forge_requests=self.forge_requests,
             sequence_sessions=self.sequence_sessions,
             captured_sessions=self.captured_sessions,
@@ -426,10 +426,10 @@ class ProjectManager:
         if rules_path.exists():
             rules_data = json.loads(rules_path.read_text(encoding="utf-8"))
             self.rules_engine     = RulesEngine.from_list(rules_data.get("replace", []))
-            self.tamper_filter = TamperFilter.from_list(rules_data.get("intercept", []))
+            self.intercept_filter = InterceptFilter.from_list(rules_data.get("intercept", []))
         else:
             self.rules_engine     = RulesEngine()
-            self.tamper_filter = TamperFilter()
+            self.intercept_filter = InterceptFilter()
 
         # Forge
         repeater_path = project_dir / "repeater.json"
@@ -472,7 +472,7 @@ class ProjectManager:
         return ProjectState(
             config=self.config,
             rules_engine=self.rules_engine,
-            tamper_filter=self.tamper_filter,
+            intercept_filter=self.intercept_filter,
             forge_requests=self.forge_requests,
             sequence_sessions=self.sequence_sessions,
             captured_sessions=self.captured_sessions,
