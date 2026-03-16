@@ -211,6 +211,7 @@ class TamperTab(Widget):
         dt.add_column("Dir",      key="dir")
         dt.add_column("Len",      key="len")
         dt.add_column("Preview",  key="preview")
+        self._update_direction_buttons()
 
     # ------------------------------------------------------------------
     # Queue management (called by the app)
@@ -394,6 +395,25 @@ class TamperTab(Widget):
         self.notify(f"Script state reset for rule '{rule.label}'.")
 
     # ------------------------------------------------------------------
+    # Direction button state
+    # ------------------------------------------------------------------
+
+    def _update_direction_buttons(self) -> None:
+        """Disable the active direction button; enable the other two with a distinct colour."""
+        current = self.app.api.tamper_direction_filter
+        active_id = {
+            None: "dir-both",
+            Direction.CLIENT_TO_SERVER: "dir-c2s",
+            Direction.SERVER_TO_CLIENT: "dir-s2c",
+        }[current]
+
+        for bid in ("dir-both", "dir-c2s", "dir-s2c"):
+            btn = self.query_one(f"#{bid}", Button)
+            is_active = bid == active_id
+            btn.disabled = is_active
+            btn.variant = "default" if is_active else "primary"
+
+    # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
 
@@ -463,10 +483,13 @@ class TamperTab(Widget):
 
         if bid == "dir-both":
             self.app.api.tamper_direction_filter = None
+            self._update_direction_buttons()
         elif bid == "dir-c2s":
             self.app.api.tamper_direction_filter = Direction.CLIENT_TO_SERVER
+            self._update_direction_buttons()
         elif bid == "dir-s2c":
             self.app.api.tamper_direction_filter = Direction.SERVER_TO_CLIENT
+            self._update_direction_buttons()
         elif bid == "btn-forward":
             self._do_forward()
         elif bid == "btn-drop":
