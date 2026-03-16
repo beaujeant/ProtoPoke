@@ -20,11 +20,11 @@ from ..forge.models import ForgeRequest
 from .modals.request_modal import RequestModal, RequestResult
 from .modals.project import NewProjectModal, OpenProjectModal, SaveAsModal
 from .tabs.config import ConfigTab
-from .tabs.fuzzer import FuzzerTab
 from .tabs.tamper import TamperTab
 from .tabs.traffic import TrafficTab
 from .tabs.forge import ForgeTab
 from .tabs.sequence import SequenceTab
+from .tabs.fuzzer import FuzzerTab
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +71,8 @@ class ProtoPoke(App):
         F2 → Traffic tab
         F3 → Tamper tab
         F4 → Forge tab
+        F5 → Sequence tab
+        F6 → Fuzzer tab
         ctrl+n → New project
         ctrl+o → Open project
         ctrl+s → Save project
@@ -86,8 +88,8 @@ class ProtoPoke(App):
         Binding("f2",           "switch_tab('traffic')",   "Traffic",   show=True),
         Binding("f3",           "switch_tab('tamper')",    "Tamper",    show=True),
         Binding("f4",           "switch_tab('forge')",     "Forge",     show=True),
-        Binding("f5",           "switch_tab('fuzzer')",    "Fuzzer",    show=True),
-        Binding("f6",           "switch_tab('sequence')",  "Sequence",  show=True),
+        Binding("f5",           "switch_tab('sequence')",  "Sequence",  show=True),
+        Binding("f6",           "switch_tab('fuzzer')",    "Fuzzer",    show=True),
         Binding("ctrl+r",       "send_to_forge",           "→Forge",    show=False, priority=True),
         Binding("ctrl+n",       "new_project",             "New",       show=False),
         Binding("ctrl+o",       "open_project",            "Open",      show=False),
@@ -142,10 +144,10 @@ class ProtoPoke(App):
                 yield TamperTab(id="tamper-tab")
             with TabPane("Forge [F4]", id="forge"):
                 yield ForgeTab(id="forge-tab")
-            with TabPane("Fuzzer [F5]", id="fuzzer"):
-                yield FuzzerTab(id="fuzzer-tab")
-            with TabPane("Sequence [F6]", id="sequence"):
+            with TabPane("Sequence [F5]", id="sequence"):
                 yield SequenceTab(id="sequence-tab")
+            with TabPane("Fuzzer [F6]", id="fuzzer"):
+                yield FuzzerTab(id="fuzzer-tab")
         yield Footer()
 
     def on_mount(self) -> None:

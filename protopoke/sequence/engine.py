@@ -10,15 +10,15 @@ Script hooks
 ------------
 The script at ``config.sequence_script`` (if configured) may define:
 
-    def on_send(data: bytes, variables: dict, step_idx: int, step_label: str) -> bytes:
-        '''Called just before each packet is sent (after ##VAR## substitution).
+    def on_send(data: bytes, variables: dict, frame_idx: int, frame_label: str) -> bytes:
+        '''Called just before each packet is sent (after {{VAR}} substitution).
         Return the bytes to actually put on the wire.  If not defined, the
         substituted bytes are sent as-is.'''
 
-    def on_response(response: bytes, variables: dict, step_idx: int, step_label: str) -> None:
-        '''Called after the server's response is collected for one step.
-        Mutate ``variables`` in-place to capture values for subsequent steps.
-        ``response`` is the concatenation of all received packets for this step.'''
+    def on_response(response: bytes, variables: dict, frame_idx: int, frame_label: str) -> None:
+        '''Called after the server's response is collected for one frame.
+        Mutate ``variables`` in-place to capture values for subsequent frames.
+        ``response`` is the concatenation of all received packets for this frame.'''
 
 Both hooks are optional.  A script that only defines ``on_response`` is the
 common case: extract session tokens, increment counters, etc.
@@ -37,7 +37,7 @@ from .variables import resolve_hex
 logger = logging.getLogger(__name__)
 
 # Type alias for the send callable supplied by the caller.
-# Receives the bytes to send and the step direction ("client_to_server" or
+# Receives the bytes to send and the frame direction ("client_to_server" or
 # "server_to_client"), returns the list of received packets (may be empty).
 SendFn = Callable[[bytes, str], Awaitable[List[bytes]]]
 
@@ -83,10 +83,10 @@ class SequenceEngine:
         on_entry: Optional[Callable[[HistoryEntry], None]] = None,
     ) -> None:
         """
-        Execute all steps in *seq* in order.
+        Execute all frames in *seq* in order.
 
-        For each step:
-          1. Resolve ``##VAR##`` placeholders against the current variable store.
+        For each frame:
+          1. Resolve ``{{VAR}}`` placeholders against the current variable store.
           2. Call ``script.on_send`` (if defined) for advanced pre-send transforms.
           3. Record a ``HistoryEntry`` (direction=sent).
           4. Call ``send_fn(data)`` and collect received packets.
@@ -94,7 +94,7 @@ class SequenceEngine:
           6. Call ``script.on_response`` (if defined) to extract new variable values.
 
         Variable changes from ``on_response`` are carried forward to all
-        subsequent steps.  At the end, ``seq.variables`` is updated in-place
+        subsequent frames.  At the end, ``seq.variables`` is updated in-place
         with the final state.
 
         Args:
@@ -115,16 +115,16 @@ class SequenceEngine:
             if on_entry is not None:
                 on_entry(entry)
 
-        for idx, step in enumerate(seq.steps):
+        for frame_idx, frame in enumerate(seq.frames):
             # ------------------------------------------------------------------
-            # 1. Resolve ##VAR## placeholders
+            # 1. Resolve {{VAR}} placeholders
             # ------------------------------------------------------------------
             try:
-                data = resolve_hex(step.raw_hex, variables)
+                data = resolve_hex(frame.raw_hex, variables)
             except ValueError as exc:
                 logger.error(
-                    "Sequence step %d (%r): placeholder resolution failed — %s",
-                    idx, step.label, exc,
+                    "Sequence frame %d (%r): placeholder resolution failed — %s",
+                    frame_idx, frame.label, exc,
                 )
                 continue
 
@@ -133,38 +133,38 @@ class SequenceEngine:
             # ------------------------------------------------------------------
             if script is not None and hasattr(script, "on_send"):
                 try:
-                    result = script.on_send(data, variables, idx, step.label)
+                    result = script.on_send(data, variables, frame_idx, frame.label)
                     if isinstance(result, (bytes, bytearray)):
                         data = bytes(result)
                     else:
                         logger.warning(
-                            "on_send at step %d returned %s (expected bytes); ignoring",
-                            idx, type(result).__name__,
+                            "on_send at frame %d returned %s (expected bytes); ignoring",
+                            frame_idx, type(result).__name__,
                         )
                 except Exception as exc:
-                    logger.error("on_send hook raised at step %d: %s", idx, exc)
+                    logger.error("on_send hook raised at frame %d: %s", frame_idx, exc)
 
             # ------------------------------------------------------------------
             # 3. Record sent packet
             # ------------------------------------------------------------------
-            _emit(HistoryEntry.create_sent(data, step.label))
+            _emit(HistoryEntry.create_sent(data, frame.label))
 
             # ------------------------------------------------------------------
             # 4. Send and collect response
             # ------------------------------------------------------------------
             received_packets: list[bytes] = []
             try:
-                received_packets = await send_fn(data, step.direction)
+                received_packets = await send_fn(data, frame.direction)
             except Exception as exc:
                 logger.error(
-                    "Sequence step %d (%r): send_fn raised — %s", idx, step.label, exc
+                    "Sequence frame %d (%r): send_fn raised — %s", frame_idx, frame.label, exc
                 )
 
             # ------------------------------------------------------------------
             # 5. Record received packets
             # ------------------------------------------------------------------
             for pkt in received_packets:
-                _emit(HistoryEntry.create_received(pkt, step.label))
+                _emit(HistoryEntry.create_received(pkt, frame.label))
 
             # ------------------------------------------------------------------
             # 6. on_response hook
@@ -172,9 +172,9 @@ class SequenceEngine:
             if script is not None and hasattr(script, "on_response"):
                 full_response = b"".join(received_packets)
                 try:
-                    script.on_response(full_response, variables, idx, step.label)
+                    script.on_response(full_response, variables, frame_idx, frame.label)
                 except Exception as exc:
-                    logger.error("on_response hook raised at step %d: %s", idx, exc)
+                    logger.error("on_response hook raised at frame %d: %s", frame_idx, exc)
 
         # Persist updated variable state back into the session
         seq.variables = variables

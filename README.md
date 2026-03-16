@@ -122,13 +122,14 @@ The TUI opens with five tabs:
 | **Traffic** | F2 | Live session list → frame list → hex/parsed detail view. Send any frame to Forge. |
 | **Tamper** | F3 | View the intercept queue; forward, drop, or modify-and-forward individual frames. Manage ordered intercept rules and global replace rules. |
 | **Forge** | F4 | Hand-craft frames in a hex editor and send them to the target; review the full send history. |
-| **Fuzzer** | F5 | Select a captured session, pick mutators, run a campaign, and review results with crash/anomaly flags. |
+| **Sequence** | F5 | Build and replay ordered packet sequences with variable substitution and capture hooks. |
+| **Fuzzer** | F6 | Select a captured session, pick mutators, run a campaign, and review results with crash/anomaly flags. |
 
 ### Keyboard shortcuts
 
 | Key | Action |
 |---|---|
-| F1–F5 | Switch tabs |
+| F1–F6 | Switch tabs |
 | Ctrl+N | New project |
 | Ctrl+O | Open project |
 | Ctrl+S | Save project |
@@ -2102,7 +2103,7 @@ For TLS interception the proxy must terminate TLS on both sides independently so
 - **Intercept / replace rules** ✅ — ordered, filterable, first-match-wins intercept rules; byte-pattern global replace rules
 - **Terminal UI** ✅ — Textual TUI with Config, Traffic, Tamper, Forge, and Fuzzer tabs; project save/load
 - **MCP server** ✅ — FastMCP wrapper exposing all ProxyAPI operations as AI tools
-- **Fuzzing subsystem** ✅ — `FrameMutator` ABC; raw mutators (bit-flip, insert, delete, known-bad, radamsa, chain); protocol-aware mutators (field boundary, overflow, null-byte, length mangle); `FuzzerEngine` with baseline capture and anomaly detection; `api.fuzz_session()`; Fuzzer TUI tab (F5)
+- **Fuzzing subsystem** ✅ — `FrameMutator` ABC; raw mutators (bit-flip, insert, delete, known-bad, radamsa, chain); protocol-aware mutators (field boundary, overflow, null-byte, length mangle); `FuzzerEngine` with baseline capture and anomaly detection; `api.fuzz_session()`; Fuzzer TUI tab (F6)
 
 ### Near term
 

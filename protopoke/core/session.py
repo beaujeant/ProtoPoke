@@ -77,6 +77,16 @@ class Session:
         self.info.state = SessionState.CLOSED
         self.info.closed_at = time.time()
 
+    def mark_client_disconnected(self) -> None:
+        """The client sent EOF / closed the connection first."""
+        self.info.state = SessionState.CLIENT_DISCONNECTED
+        self.info.closed_at = time.time()
+
+    def mark_server_disconnected(self) -> None:
+        """The server sent EOF / closed the connection first."""
+        self.info.state = SessionState.SERVER_DISCONNECTED
+        self.info.closed_at = time.time()
+
     # ------------------------------------------------------------------
     # Queries
     # ------------------------------------------------------------------
@@ -86,6 +96,7 @@ class Session:
         return [f for f in self.frames if f.direction == direction]
 
     def is_active(self) -> bool:
+        # CLIENT_DISCONNECTED and SERVER_DISCONNECTED are terminal states
         return self.info.state in (
             SessionState.CONNECTING,
             SessionState.ACTIVE,
@@ -160,6 +171,26 @@ class SessionRegistry:
             session.mark_closed()
             logger.info(
                 "Session closed: %s (frames captured: %d)",
+                session_id, len(session.frames),
+            )
+
+    def mark_client_disconnected(self, session_id: str) -> None:
+        """Transition session to CLIENT_DISCONNECTED state (client closed first)."""
+        session = self._sessions.get(session_id)
+        if session:
+            session.mark_client_disconnected()
+            logger.info(
+                "Session client-disconnected: %s (frames captured: %d)",
+                session_id, len(session.frames),
+            )
+
+    def mark_server_disconnected(self, session_id: str) -> None:
+        """Transition session to SERVER_DISCONNECTED state (server closed first)."""
+        session = self._sessions.get(session_id)
+        if session:
+            session.mark_server_disconnected()
+            logger.info(
+                "Session server-disconnected: %s (frames captured: %d)",
                 session_id, len(session.frames),
             )
 

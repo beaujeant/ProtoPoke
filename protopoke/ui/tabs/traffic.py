@@ -184,11 +184,11 @@ class TrafficTab(Widget):
 
         # Frames table
         fdt = self.query_one("#frames-table", DataTable)
-        fdt.add_column("→#",  key="seq_c2s")
-        fdt.add_column("←#",  key="seq_s2c")
-        fdt.add_column("Dir", key="dir")
-        fdt.add_column("Len",     key="len")
+        fdt.add_column("#",       key="seq_c2s")
+        fdt.add_column("Dir",     key="dir")
+        fdt.add_column("#",       key="seq_s2c")
         fdt.add_column("Framer",  key="framer")
+        fdt.add_column("Len",     key="len")
         fdt.add_column("Preview", key="preview")
 
     # ------------------------------------------------------------------
@@ -271,10 +271,10 @@ class TrafficTab(Widget):
             preview += "…"
         values = (
             seq_c2s,
-            seq_s2c,
             direction,
-            str(len(frame.raw_bytes)),
+            seq_s2c,
             frame.framer_name,
+            str(len(frame.raw_bytes)),
             preview,
         )
         self._row_data[frame.id] = values
@@ -300,7 +300,7 @@ class TrafficTab(Widget):
                 self.query_one("#parsed-view", ParsedView).show_frame(frame, message)
                 return
 
-    _COL_KEYS = ("seq", "dir", "len", "framer", "preview")
+    _COL_KEYS = ("seq_c2s", "dir", "seq_s2c", "framer", "len", "preview")
     _SELECTED_STYLE = "bold underline"
 
     def _highlight_selection(self) -> None:

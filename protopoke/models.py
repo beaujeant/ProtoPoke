@@ -43,10 +43,12 @@ class Direction(Enum):
 
 class SessionState(Enum):
     """Lifecycle states of a proxied TCP session."""
-    CONNECTING = "connecting"   # Client accepted; connecting to server
-    ACTIVE     = "active"       # Both sides up; data flowing
-    CLOSING    = "closing"      # One side has started to close
-    CLOSED     = "closed"       # Fully closed
+    CONNECTING           = "connecting"            # Client accepted; connecting to server
+    ACTIVE               = "active"                # Both sides up; data flowing
+    CLOSING              = "closing"               # One side has started to close
+    CLOSED               = "closed"                # Fully closed (e.g. proxy-terminated)
+    CLIENT_DISCONNECTED  = "client disconnected"   # Client sent EOF / closed connection first
+    SERVER_DISCONNECTED  = "server disconnected"   # Server sent EOF / closed connection first
 
 
 class InterceptAction(Enum):
