@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import codecs
 import importlib.util
-import inspect
 import logging
 import re
 import time
@@ -375,11 +374,11 @@ class ReplaceRule:
 
     ``"script"``
         A Python script at ``script_path`` that exports an
-        ``apply(data: bytes[, variables: dict]) -> bytes`` function.
-        The optional ``variables`` argument is the shared global variable
-        store; scripts can read from or write to it to pass state between
-        pipelines (e.g. save a captured token in traffic, use it in a
-        sequence via ``{{VAR}}``).
+        ``apply(data: bytes, variables: dict) -> bytes`` function.
+        ``variables`` is the shared global variable store; scripts can read
+        from or write to it to pass state between pipelines (e.g. save a
+        captured token in traffic, then use it in a sequence via
+        ``{{VAR}}``).
 
     Scope flags control which pipeline stages apply the rule:
 
@@ -511,18 +510,17 @@ class ReplaceRule:
 
     def _apply_script(self, data: bytes, variables: dict) -> bytes:
         """
-        Run the ``apply`` hook in the configured script.
+        Run the ``apply(data, variables)`` hook in the configured script.
 
-        The script may define either of the following signatures:
+        ``variables`` is the shared global variable store.  The script may
+        read from it (e.g. to use a previously captured sequence number) or
+        write to it (e.g. to save a value extracted from traffic for use in
+        subsequent frames).  Mutations are visible to all pipelines
+        immediately.
 
-            def apply(data: bytes) -> bytes
-            def apply(data: bytes, variables: dict) -> bytes
-
-        When the two-argument form is used, ``variables`` is the shared
-        global variable store.  The script may read from it (e.g. to use a
-        previously captured sequence number) or write to it (e.g. to save a
-        value extracted from server traffic for use in subsequent frames).
-        Mutations are visible to all pipelines immediately.
+        If loading or execution raises any exception, the error is logged,
+        the cached module is cleared (so a fixed script reloads automatically
+        on the next frame), and the original data is returned unchanged.
         """
         if not self.script_path:
             return data
@@ -538,16 +536,26 @@ class ReplaceRule:
         try:
             fn = getattr(self._script_module, "apply", None)
             if fn is None:
+                logger.warning(
+                    "Replace rule %r: script %s has no apply() function",
+                    self.label, self.script_path,
+                )
                 return data
-            # Support both apply(data) and apply(data, variables)
-            try:
-                n_params = len(inspect.signature(fn).parameters)
-            except (ValueError, TypeError):
-                n_params = 1
-            result = fn(data, variables) if n_params >= 2 else fn(data)
-            return bytes(result) if isinstance(result, (bytes, bytearray)) else data
+            result = fn(data, variables)
+            if not isinstance(result, (bytes, bytearray)):
+                logger.error(
+                    "Replace rule %r: apply() returned %s, expected bytes; skipping",
+                    self.label, type(result).__name__,
+                )
+                return data
+            return bytes(result)
         except Exception as exc:
-            logger.error("Replace rule %r: script apply() raised: %s", self.label, exc)
+            logger.error(
+                "Replace rule %r: apply() raised %s: %s; script will reload on next frame",
+                self.label, type(exc).__name__, exc,
+            )
+            # Clear the cache so a fixed script on disk is reloaded automatically.
+            self._script_module = None
             return data
 
     def reset_script_state(self) -> None:
