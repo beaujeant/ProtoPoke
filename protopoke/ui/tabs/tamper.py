@@ -87,7 +87,6 @@ class TamperTab(Widget):
     }
     TamperTab #hex-editor-pane {
         height: 20%;
-        border-bottom: solid $primary-darken-2;
     }
     TamperTab #hex-editor-pane .pane-header {
         height: 1;
@@ -104,6 +103,7 @@ class TamperTab(Widget):
     }
     TamperTab #intercept-rules-pane {
         height: 1fr;
+        border-bottom: solid $primary-darken-2;
     }
     TamperTab #replace-rules-pane {
         height: 1fr;

@@ -60,7 +60,6 @@ class SequenceTab(Widget):
     }
     SequenceTab #seq-list-pane {
         height: 20%;
-        border-bottom: solid $primary-darken-2;
     }
     SequenceTab #seq-list-pane DataTable {
         height: 1fr;
@@ -83,7 +82,6 @@ class SequenceTab(Widget):
     }
     SequenceTab #step-list-pane {
         height: 20%;
-        border-bottom: solid $primary-darken-2;
     }
     SequenceTab #step-list-pane DataTable {
         height: 1fr;
@@ -99,7 +97,6 @@ class SequenceTab(Widget):
     }
     SequenceTab #step-editor-pane {
         height: 22%;
-        border-bottom: solid $primary-darken-2;
     }
     SequenceTab #step-label-bar {
         height: 3;
@@ -181,9 +178,9 @@ class SequenceTab(Widget):
 
         # Sequence controls
         with Horizontal(classes="seq-controls"):
-            yield Button("+ New",    id="btn-new-seq",    variant="success", compact=True)
-            yield Button("Import",   id="btn-import-seq", compact=True)
-            yield Button("Export",   id="btn-export-seq", compact=True)
+            yield Button("+ New",    id="btn-new-seq",    variant="success", flat=True)
+            yield Button("Import",   id="btn-import-seq", flat=True)
+            yield Button("Export",   id="btn-export-seq", flat=True)
 
         # Frame list
         with Vertical(id="step-list-pane"):
@@ -192,10 +189,10 @@ class SequenceTab(Widget):
 
         # Step controls
         with Horizontal(classes="step-controls"):
-            yield Button("↑ Up",     id="btn-step-up",     compact=True)
-            yield Button("↓ Down",   id="btn-step-down",   compact=True)
-            yield Button("+ Add",    id="btn-step-add",    variant="success", compact=True)
-            yield Button("- Remove", id="btn-step-remove", variant="error",   compact=True)
+            yield Button("↑ Up",     id="btn-step-up",     flat=True)
+            yield Button("↓ Down",   id="btn-step-down",   flat=True)
+            yield Button("+ Add",    id="btn-step-add",    variant="success", flat=True)
+            yield Button("- Remove", id="btn-step-remove", variant="error",   flat=True)
 
         # Step editor
         with Vertical(id="step-editor-pane"):
@@ -220,8 +217,8 @@ class SequenceTab(Widget):
         # Run bar (two rows)
         with Vertical(classes="run-bar"):
             with Horizontal(classes="run-bar-row"):
-                yield Button("▶ Run Sequence", id="btn-run",  variant="success", compact=True)
-                yield Button("■ Stop",         id="btn-stop", variant="error",   compact=True)
+                yield Button("▶ Run Sequence", id="btn-run",  variant="success", flat=True)
+                yield Button("■ Stop",         id="btn-stop", variant="error",   flat=True)
                 yield Label("Session ID (blank=new):")
                 yield Input("", id="seq-session-id", placeholder="leave blank for new connection")
             with Horizontal(classes="run-bar-row"):
