@@ -164,7 +164,6 @@ class TrafficTab(Widget):
                 lbl = Static("  Frames  [Shift+↑↓ to multi-select]")
                 self._frames_label = lbl
                 yield lbl
-                yield Button("→ Forge",    id="btn-to-forge",    variant="default", flat=True)
                 yield Button("→ Forge", id="btn-to-forge", variant="default", flat=True)
             yield _FramesTable(id="frames-table", cursor_type="row")
 
