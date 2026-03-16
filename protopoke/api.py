@@ -104,8 +104,16 @@ class ProxyAPI:
         self.session_registry = SessionRegistry()
         self.storage          = storage or NullStorageBackend()
 
+        # Global variable store — shared across all pipelines (intercept,
+        # forge, sequence).  Script-type replace rules receive this dict and
+        # may read from or write to it so that state (e.g. a captured session
+        # token or incrementing sequence number) flows between pipelines.
+        # Values are hex-encoded byte strings, matching the Sequence variable
+        # convention (e.g. {"SEQ": "00000001"}).
+        self.variables: dict = {}
+
         # Rules engines (replace rules + intercept rules)
-        self.rules_engine     = rules_engine      or RulesEngine()
+        self.rules_engine     = rules_engine      or RulesEngine(variables=self.variables)
         self.intercept_filter = intercept_filter  or InterceptFilter()
 
         # Always use QueuedTamperController; config.tamper_enabled sets
@@ -1021,7 +1029,8 @@ class ProxyAPI:
 
                 return record.response_packets
 
-        await engine.run(seq, send_fn=send_fn, on_entry=on_entry)
+        await engine.run(seq, send_fn=send_fn, on_entry=on_entry,
+                         global_variables=self.variables)
 
     # ------------------------------------------------------------------
     # Replace rules management

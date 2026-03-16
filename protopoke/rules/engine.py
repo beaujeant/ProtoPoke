@@ -45,8 +45,12 @@ class RulesEngine:
         modified = engine.apply(frame)   # returns bytes
     """
 
-    def __init__(self) -> None:
+    def __init__(self, variables: Optional[dict] = None) -> None:
         self._rules: list[ReplaceRule] = []
+        # Shared global variable store.  Script-type rules receive this dict
+        # and may read from or write to it.  Mutations are visible across all
+        # pipelines (intercept, forge, sequence) immediately.
+        self._variables: dict = variables if variables is not None else {}
 
     @property
     def rules(self) -> list[ReplaceRule]:
@@ -104,7 +108,7 @@ class RulesEngine:
             if rule.direction is not None and rule.direction is not frame.direction:
                 continue
             before = data
-            data = rule.apply(data, scope=scope)
+            data = rule.apply(data, scope=scope, variables=self._variables)
             if data != before:
                 logger.debug(
                     "Replace rule %r fired on frame %s (session %s)",
@@ -139,7 +143,7 @@ class RulesEngine:
             if rule.direction is not None and rule.direction is not direction:
                 continue
             before = data
-            data = rule.apply(data, scope=scope)
+            data = rule.apply(data, scope=scope, variables=self._variables)
             if data != before:
                 logger.debug(
                     "Replace rule %r fired (scope=%s)", rule.label, scope

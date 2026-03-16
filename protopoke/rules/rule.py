@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import codecs
 import importlib.util
+import inspect
 import logging
 import re
 import time
@@ -374,7 +375,11 @@ class ReplaceRule:
 
     ``"script"``
         A Python script at ``script_path`` that exports an
-        ``apply(data: bytes) -> bytes`` function.
+        ``apply(data: bytes[, variables: dict]) -> bytes`` function.
+        The optional ``variables`` argument is the shared global variable
+        store; scripts can read from or write to it to pass state between
+        pipelines (e.g. save a captured token in traffic, use it in a
+        sequence via ``{{VAR}}``).
 
     Scope flags control which pipeline stages apply the rule:
 
@@ -461,16 +466,20 @@ class ReplaceRule:
     # Apply
     # ------------------------------------------------------------------
 
-    def apply(self, data: bytes, scope: Optional[str] = None) -> bytes:
+    def apply(self, data: bytes, scope: Optional[str] = None,
+              variables: Optional[dict] = None) -> bytes:
         """
         Apply the substitution to *data*.
 
         Args:
-            data:  The bytes to transform.
-            scope: Optional scope name — ``"intercept"`` (relay pipeline),
-                   ``"forge"``, or ``"sequence"``.  When set and the
-                   corresponding ``apply_to_*`` flag is ``False``, the rule
-                   is skipped.
+            data:      The bytes to transform.
+            scope:     Optional scope name — ``"intercept"`` (relay pipeline),
+                       ``"forge"``, or ``"sequence"``.  When set and the
+                       corresponding ``apply_to_*`` flag is ``False``, the rule
+                       is skipped.
+            variables: Optional shared global variable store.  Passed to
+                       script-type rules so that ``apply(data, variables)``
+                       hooks can read and write cross-pipeline state.
 
         Returns modified bytes, or *data* unchanged if the rule does not
         apply or does not match.
@@ -496,12 +505,25 @@ class ReplaceRule:
             return self.regex_compiled.sub(repl_bytes, data)
 
         elif self.rule_type == "script":
-            return self._apply_script(data)
+            return self._apply_script(data, variables if variables is not None else {})
 
         return data
 
-    def _apply_script(self, data: bytes) -> bytes:
-        """Run the ``apply(data)`` hook in the configured script."""
+    def _apply_script(self, data: bytes, variables: dict) -> bytes:
+        """
+        Run the ``apply`` hook in the configured script.
+
+        The script may define either of the following signatures:
+
+            def apply(data: bytes) -> bytes
+            def apply(data: bytes, variables: dict) -> bytes
+
+        When the two-argument form is used, ``variables`` is the shared
+        global variable store.  The script may read from it (e.g. to use a
+        previously captured sequence number) or write to it (e.g. to save a
+        value extracted from server traffic for use in subsequent frames).
+        Mutations are visible to all pipelines immediately.
+        """
         if not self.script_path:
             return data
         if self._script_module is None:
@@ -517,7 +539,12 @@ class ReplaceRule:
             fn = getattr(self._script_module, "apply", None)
             if fn is None:
                 return data
-            result = fn(data)
+            # Support both apply(data) and apply(data, variables)
+            try:
+                n_params = len(inspect.signature(fn).parameters)
+            except (ValueError, TypeError):
+                n_params = 1
+            result = fn(data, variables) if n_params >= 2 else fn(data)
             return bytes(result) if isinstance(result, (bytes, bytearray)) else data
         except Exception as exc:
             logger.error("Replace rule %r: script apply() raised: %s", self.label, exc)

@@ -39,9 +39,10 @@ class SequenceEngine:
 
     async def run(
         self,
-        seq:      SequenceSession,
-        send_fn:  SendFn,
-        on_entry: Optional[Callable[[HistoryEntry], None]] = None,
+        seq:              SequenceSession,
+        send_fn:          SendFn,
+        on_entry:         Optional[Callable[[HistoryEntry], None]] = None,
+        global_variables: Optional[Dict[str, str]] = None,
     ) -> None:
         """
         Execute all frames in *seq* in order.
@@ -53,15 +54,28 @@ class SequenceEngine:
           4. Record a ``HistoryEntry`` per received packet (direction=received).
 
         Args:
-            seq:      The sequence to run.  ``seq.history`` and
-                      ``seq.variables`` are updated in-place.
-            send_fn:  Async callable that sends bytes and returns the list of
-                      received packet chunks.
-            on_entry: Optional callback invoked immediately after each
-                      :class:`HistoryEntry` is created.  Useful for live UI
-                      updates without polling.
+            seq:              The sequence to run.  ``seq.history`` and
+                              ``seq.variables`` are updated in-place.
+            send_fn:          Async callable that sends bytes and returns the
+                              list of received packet chunks.
+            on_entry:         Optional callback invoked immediately after each
+                              :class:`HistoryEntry` is created.  Useful for
+                              live UI updates without polling.
+            global_variables: Optional global variable store shared across all
+                              pipelines.  Used as a fallback for ``{{VAR}}``
+                              placeholder resolution: sequence-local variables
+                              take priority; global variables fill in the rest.
+                              This allows a traffic script (e.g. on intercept)
+                              to capture a value and have the sequence use it
+                              via ``{{VAR}}`` without any extra plumbing.
         """
+        # Sequence-local variables take priority over global ones.
         variables: Dict[str, str] = dict(seq.variables)
+        _global = global_variables if global_variables is not None else {}
+
+        def _effective_vars() -> Dict[str, str]:
+            """Merge global (base) + local (override) for placeholder resolution."""
+            return {**_global, **variables}
 
         def _emit(entry: HistoryEntry) -> None:
             seq.history.append(entry)
@@ -73,7 +87,7 @@ class SequenceEngine:
             # 1. Resolve {{VAR}} placeholders
             # ------------------------------------------------------------------
             try:
-                data = resolve_hex(frame.raw_hex, variables)
+                data = resolve_hex(frame.raw_hex, _effective_vars())
             except ValueError as exc:
                 logger.error(
                     "Sequence frame %d (%r): placeholder resolution failed — %s",
