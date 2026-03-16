@@ -68,7 +68,7 @@ class TrafficTab(Widget):
       • First frame captured for the current session is selected automatically.
       • Shift+Up/Down in the Frames table extends the selection range from the
         anchor row.  The direction of the first selected frame determines which
-        direction is sent when using "→ Sequence".
+        direction is sent when using "→ Forge".
     """
 
     DEFAULT_CSS = """
@@ -165,7 +165,7 @@ class TrafficTab(Widget):
                 self._frames_label = lbl
                 yield lbl
                 yield Button("→ Forge",    id="btn-to-forge",    variant="default", flat=True)
-                yield Button("→ Sequence", id="btn-to-sequence", variant="default", flat=True)
+                yield Button("→ Forge", id="btn-to-forge", variant="default", flat=True)
             yield _FramesTable(id="frames-table", cursor_type="row")
 
         # Detail pane with hex↔parsed toggle
@@ -457,10 +457,10 @@ class TrafficTab(Widget):
             else:
                 self.notify("Select a frame first.", severity="warning")
 
-        elif event.button.id == "btn-to-sequence":
+        elif event.button.id == "btn-to-forge":
             event.stop()
             if self._selected_frame_ids and self._current_session_id:
-                self.app.send_frames_to_sequence(
+                self.app.send_frames_to_forge(
                     self._current_session_id, list(self._selected_frame_ids)
                 )
             else:

@@ -1,58 +1,26 @@
 """
-Replay engine.
+Forge engine — session replay, persistent send sessions, and playbook execution.
 
-Replay is a first-class concern in this architecture — not an afterthought.
-The ability to record a session and send it again (to the same or a different
-server, with optional modifications) is essential for security testing:
+ForgeEngine
+-----------
+Replays captured TCP sessions against a target server. Used by the fuzzer
+and any code that needs direct session replay.
 
-    - Confirming a finding is reproducible
-    - Testing a fix (did the server behavior change?)
-    - Fuzzing: replay with modified fields
-    - Regression testing: compare responses between server versions
+PlaybookEngine
+--------------
+Executes an ordered list of PlaybookFrames (a Playbook) over a transport
+send function, resolving {{VAR}} placeholders, emitting TrafficEntry objects,
+and returning a completed PlaybookRun.
 
-Design:
-    ForgeEngine replays frames from a captured Session to a target server,
-    captures the server's responses, and returns a new Session containing both
-    the sent frames and the received responses.
+SendResult
+----------
+Lightweight return type for individual send operations. Contains the sent
+bytes, received bytes, response packets, and success / error information.
 
-    The new session is registered in the SessionRegistry, so it appears in
-    the API's session list like any other session. It can itself be replayed,
-    compared, or have its frames inspected.
-
-Frame selection:
-    By default all client→server frames are replayed in sequence order.
-
-    direction:      Which direction's frames to source. Defaults to
-                    CLIENT_TO_SERVER. Set to SERVER_TO_CLIENT to replay
-                    what the server sent (useful for testing client-side
-                    parsing or unusual server-replay scenarios).
-
-    frame_selector: A selector string that picks specific frames by sequence
-                    number within the chosen direction. Syntax:
-
-                        "5"          — only frame with sequence_number 5
-                        "3-13"       — frames 3 through 13 inclusive
-                        "3,4,7"      — frames 3, 4 and 7
-                        "3,5,7-9,11" — frames 3, 5, 7, 8, 9 and 11
-
-                    Sequence numbers that don't exist in the captured session
-                    are silently ignored. If the selector matches no frames,
-                    replay returns a failure result.
-
-Limitations of the current implementation:
-    - No timing: frames are sent as fast as the server accepts them.
-      (frame_delay parameter adds a uniform inter-frame delay.)
-    - No stateful replay: if the protocol requires a handshake that changes
-      per session (e.g. a nonce), the replayed bytes may be rejected.
-    - No mid-replay interception: replayed frames are not passed through the
-      intercept controller. (Future: make this optional.)
-
-Future improvements:
-    - Stateful replay: allow the caller to supply a transformer function that
-      adapts frames based on server responses (for protocols with session tokens).
-    - Differential replay: two engines, compare responses frame-by-frame.
-    - Timed replay: honor original inter-frame delays.
-    - Intercepted replay: route replayed frames through the intercept controller.
+parse_frame_selector
+--------------------
+Utility for parsing frame selector strings used by the fuzzer
+(e.g. "5", "3-13", "3,5,7-9,11").
 """
 
 from __future__ import annotations
@@ -62,18 +30,19 @@ import logging
 import ssl
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Awaitable, Callable, Dict, List, Optional
 
 from ..models import Direction, Frame, SessionInfo
 from ..core.session import Session, SessionRegistry
 from ..framing import create_framer
-from .models import ForgeRequest, ForgeRecord
+from .models import Playbook, PlaybookRun, TrafficEntry
+from .variables import resolve_hex
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Frame selector parser
+# Frame selector parser  (used by FuzzerEngine)
 # ---------------------------------------------------------------------------
 
 def parse_frame_selector(selector: str) -> set[int]:
@@ -125,7 +94,58 @@ def parse_frame_selector(selector: str) -> set[int]:
 
 
 # ---------------------------------------------------------------------------
-# ForgeResult
+# SendResult  (returned by per-send operations on ForgeEngine)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SendResult:
+    """
+    The outcome of a single send operation.
+
+    Attributes:
+        sent_bytes:       Bytes that were sent.
+        received_bytes:   All bytes received (concatenated).
+        response_packets: Individual framed chunks received from the server.
+        host:             Target host.
+        port:             Target port.
+        tls:              Whether TLS was used.
+        success:          False if a connection or I/O error occurred.
+        error:            Error message when success is False.
+    """
+    sent_bytes:       bytes
+    received_bytes:   bytes
+    response_packets: list[bytes]
+    host:             str
+    port:             int
+    tls:              bool           = False
+    success:          bool           = True
+    error:            Optional[str]  = None
+
+    @classmethod
+    def failure(
+        cls,
+        sent_bytes: bytes,
+        host: str,
+        port: int,
+        tls: bool,
+        error: str,
+        received_bytes: bytes = b"",
+        response_packets: Optional[list[bytes]] = None,
+    ) -> "SendResult":
+        return cls(
+            sent_bytes=sent_bytes,
+            received_bytes=received_bytes,
+            response_packets=response_packets or [],
+            host=host,
+            port=port,
+            tls=tls,
+            success=False,
+            error=error,
+        )
+
+
+# ---------------------------------------------------------------------------
+# ForgeResult  (returned by session replay operations)
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -149,14 +169,12 @@ class ForgeResult:
     completed_at:        Optional[float] = None
 
     def frames_sent(self) -> list[Frame]:
-        """Frames that were sent to the server during replay."""
         return [
             f for f in self.replayed_session.frames
             if f.direction is Direction.CLIENT_TO_SERVER
         ]
 
     def frames_received(self) -> list[Frame]:
-        """Frames received from the server during replay."""
         return [
             f for f in self.replayed_session.frames
             if f.direction is Direction.SERVER_TO_CLIENT
@@ -168,15 +186,7 @@ class ForgeResult:
     def total_bytes_received(self) -> int:
         return sum(len(f.raw_bytes) for f in self.frames_received())
 
-    # Backward-compatible aliases
-    def client_frames_sent(self) -> list[Frame]:
-        return self.frames_sent()
-
-    def server_frames_received(self) -> list[Frame]:
-        return self.frames_received()
-
     def to_dict(self) -> dict:
-        """Serialise to a JSON-compatible dict for MCP tool responses."""
         return {
             "original_session_id":  self.original_session_id,
             "replayed_session_id":  self.replayed_session.id,
@@ -192,34 +202,15 @@ class ForgeResult:
 
 
 # ---------------------------------------------------------------------------
-# ForgeEngine
+# ForgeEngine  (used by FuzzerEngine and API replay methods)
 # ---------------------------------------------------------------------------
 
 class ForgeEngine:
     """
-    Replays captured TCP sessions against a target server.
+    Replays captured TCP sessions against a target server, and manages
+    persistent forge sessions for repeated sends.
 
-    Usage:
-        engine = ForgeEngine(session_registry)
-
-        # Replay all client→server frames (default)
-        result = await engine.forge_session(session_id="...")
-
-        # Replay only frames 3 through 7
-        result = await engine.forge_session(
-            session_id="...",
-            frame_selector="3-7",
-        )
-
-        # Replay only the server→client direction
-        result = await engine.forge_session(
-            session_id="...",
-            direction=Direction.SERVER_TO_CLIENT,
-        )
-
-        if result.success:
-            for frame in result.frames_received():
-                print(frame.raw_bytes)
+    Used by FuzzerEngine and the ProxyAPI replay methods.
     """
 
     def __init__(
@@ -233,13 +224,7 @@ class ForgeEngine:
         self._connect_timeout  = connect_timeout
         self._framer_name      = framer_name
         self._framer_kwargs    = framer_kwargs or {}
-        # Persistent connections created by Forge for custom host:port sends.
-        # Maps session_id → (writer, tls, reader_queue, reader_task)
-        # The StreamReader is owned exclusively by the background reader_task so
-        # that only one coroutine ever calls reader.read() — avoiding the
-        # Python 3.12+ RuntimeError "read() called while another coroutine is
-        # already waiting for incoming data" that occurs when asyncio.wait_for
-        # times out and leaves StreamReader._waiter in a cancelled state.
+        # Persistent connections: session_id → (writer, tls, reader_queue, reader_task)
         self._open_connections: dict[
             str,
             tuple[asyncio.StreamWriter, bool, asyncio.Queue, asyncio.Task]
@@ -255,30 +240,7 @@ class ForgeEngine:
         direction:       Direction                  = Direction.CLIENT_TO_SERVER,
         frame_selector:  Optional[str]              = None,
     ) -> ForgeResult:
-        """
-        Replay a captured session.
-
-        Args:
-            session_id:      ID of the session to replay. Must exist in registry.
-            server_host:     Override target host (default: same as original session).
-            server_port:     Override target port (default: same as original session).
-            frame_delay:     Seconds to wait between sending frames. 0 = no delay.
-            modified_frames: Dict of frame_id → replacement bytes. Frames not in
-                             the dict are sent with their original bytes.
-            direction:       Which direction's frames to source for replay.
-                             Default: CLIENT_TO_SERVER (what the client sent).
-                             Use SERVER_TO_CLIENT to replay server-side frames.
-            frame_selector:  Selector string to pick specific frames by sequence
-                             number within the chosen direction. Examples:
-                               "5"          — only sequence 5
-                               "3-13"       — sequences 3 through 13 inclusive
-                               "3,4,7"      — sequences 3, 4 and 7
-                               "3,5,7-9,11" — sequences 3, 5, 7, 8, 9 and 11
-                             None (default) means all frames in that direction.
-
-        Returns:
-            ForgeResult with the new replayed session and metadata.
-        """
+        """Replay a captured session to a target server."""
         original = self._session_registry.get(session_id)
         if not original:
             stub_info = SessionInfo.create("replay", 0, server_host or "", server_port or 0)
@@ -294,7 +256,6 @@ class ForgeEngine:
         target_host = server_host or original.info.server_host
         target_port = server_port or original.info.server_port
 
-        # Parse the selector into a set of sequence numbers (or None = all)
         selected_seqs: Optional[set[int]] = None
         if frame_selector is not None:
             try:
@@ -310,13 +271,10 @@ class ForgeEngine:
                     completed_at=time.time(),
                 )
 
-        # Collect frames for the requested direction, sorted by sequence number
         source_frames = sorted(
             (f for f in original.frames if f.direction is direction),
             key=lambda f: f.sequence_number,
         )
-
-        # Apply the selector if provided
         if selected_seqs is not None:
             source_frames = [f for f in source_frames if f.sequence_number in selected_seqs]
 
@@ -333,20 +291,11 @@ class ForgeEngine:
                 completed_at=time.time(),
             )
 
-        # Register a new session for this replay run
         replayed = self._session_registry.create(
             client_host="replay",
             client_port=0,
             server_host=target_host,
             server_port=target_port,
-        )
-
-        logger.info(
-            "Replaying session %s → new session %s to %s:%d "
-            "(%d %s frames%s)",
-            session_id, replayed.id, target_host, target_port,
-            len(source_frames), direction.value,
-            f" [selector={frame_selector!r}]" if frame_selector else "",
         )
 
         result = ForgeResult(
@@ -385,22 +334,18 @@ class ForgeEngine:
         modified_frames:  dict[str, bytes],
         result:           ForgeResult,
     ) -> None:
-        """Internal: connect to the server, send frames, capture responses."""
         try:
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(target_host, target_port),
                 timeout=self._connect_timeout,
             )
         except asyncio.TimeoutError:
-            raise ConnectionError(
-                f"Timeout connecting to {target_host}:{target_port}"
-            )
+            raise ConnectionError(f"Timeout connecting to {target_host}:{target_port}")
         except OSError as exc:
             raise ConnectionError(f"Connection failed: {exc}")
 
         self._session_registry.mark_active(replayed_session.id)
 
-        # Framer for server responses
         server_framer = create_framer(
             self._framer_name,
             session_id=replayed_session.id,
@@ -411,7 +356,6 @@ class ForgeEngine:
         try:
             for original_frame in source_frames:
                 data = modified_frames.get(original_frame.id, original_frame.raw_bytes)
-
                 sent_frame = Frame.create(
                     session_id=replayed_session.id,
                     direction=Direction.CLIENT_TO_SERVER,
@@ -420,24 +364,14 @@ class ForgeEngine:
                     framer_name="replay",
                 )
                 replayed_session.add_frame(sent_frame)
-
                 writer.write(data)
                 await writer.drain()
-
-                logger.debug(
-                    "Sent frame seq=%d len=%d to %s:%d",
-                    original_frame.sequence_number, len(data),
-                    target_host, target_port,
-                )
-
                 if frame_delay > 0:
                     await asyncio.sleep(frame_delay)
 
-            # Signal EOF to the server
             writer.write_eof()
             await writer.drain()
 
-            # Read all server responses
             while True:
                 data = await reader.read(4096)
                 if not data:
@@ -449,12 +383,6 @@ class ForgeEngine:
                 replayed_session.add_frame(recv_frame)
 
             result.success = True
-            logger.info(
-                "Replay complete: sent=%d frames (%d bytes), received=%d frames (%d bytes)",
-                len(result.frames_sent()), result.total_bytes_sent(),
-                len(result.frames_received()), result.total_bytes_received(),
-            )
-
         finally:
             try:
                 writer.close()
@@ -463,7 +391,7 @@ class ForgeEngine:
                 pass
 
     # ------------------------------------------------------------------
-    # Persistent repeater sessions (custom host:port)
+    # Persistent forge sessions (used by PlaybookEngine via API)
     # ------------------------------------------------------------------
 
     async def open_forge_session(
@@ -473,15 +401,11 @@ class ForgeEngine:
         tls:  bool = False,
     ) -> "Session":
         """
-        Open a persistent TCP connection to *host*:*port* and register it as a
-        session in the registry.
-
-        The connection is kept alive between sends (no EOF signalled).  Call
-        :meth:`send_on_forge_session` to send data through it.  The session
-        is automatically closed and removed when the server drops the connection.
+        Open a persistent TCP connection and register it as a session.
+        The connection is kept alive between sends.
 
         Returns:
-            The newly created :class:`Session` (state=ACTIVE).
+            The newly created Session (state=ACTIVE).
 
         Raises:
             ConnectionError: if the connection cannot be established.
@@ -516,21 +440,12 @@ class ForgeEngine:
         )
         self._session_registry.mark_active(session.id)
 
-        # Start a dedicated background task that is the *sole* reader of the
-        # StreamReader.  It feeds received bytes into a Queue so that
-        # send_on_forge_session can drain from the Queue with a timeout
-        # without ever calling reader.read() from a second coroutine.
         reader_queue: asyncio.Queue = asyncio.Queue()
         reader_task = asyncio.get_event_loop().create_task(
             self._background_reader(reader, reader_queue),
             name=f"forge-reader-{session.id[:8]}",
         )
         self._open_connections[session.id] = (writer, tls, reader_queue, reader_task)
-
-        logger.info(
-            "Forge session opened: %s → %s:%d (tls=%s)",
-            session.id[:8], host, port, tls,
-        )
         return session
 
     async def _background_reader(
@@ -538,23 +453,17 @@ class ForgeEngine:
         reader: asyncio.StreamReader,
         queue:  asyncio.Queue,
     ) -> None:
-        """
-        Background task — sole consumer of *reader*.
-
-        Feeds every chunk into *queue*.  Puts ``b""`` when the server closes
-        the connection (EOF).  Puts the exception object itself if an I/O
-        error occurs, so the send-side can distinguish EOF from errors.
-        """
+        """Background task — sole consumer of *reader*. Puts b"" on EOF."""
         try:
             while True:
                 chunk = await reader.read(4096)
                 await queue.put(chunk)
-                if not chunk:   # EOF sentinel
+                if not chunk:
                     break
         except asyncio.CancelledError:
             pass
         except Exception as exc:
-            await queue.put(exc)   # propagate error as a sentinel value
+            await queue.put(exc)
 
     async def send_on_forge_session(
         self,
@@ -562,40 +471,21 @@ class ForgeEngine:
         data:             bytes,
         receive_timeout:  float = 10.0,
         packet_callback:  Optional[Callable[[bytes], None]] = None,
-    ) -> ForgeRecord:
+    ) -> SendResult:
         """
-        Send *data* through an existing persistent repeater session and read
-        the server's response.
+        Send *data* through a persistent forge session and collect the response.
 
-        Unlike :meth:`send_frame`, this method does **not** signal EOF after
-        sending, so the TCP connection stays alive for subsequent sends.
-
-        If the server closes the connection during the send, the session is
-        marked closed, removed from the pool, and the partial response (if
-        any) is returned as a successful record so the operator can see what
-        came back before the close.
-
-        Args:
-            session_id:      ID of the session opened via :meth:`open_forge_session`.
-            data:            Bytes to send.
-            receive_timeout: Seconds to wait for the server's response.
-                             On timeout the bytes received so far are returned
-                             and the connection stays open.
+        Does not signal EOF — the TCP connection stays alive for subsequent sends.
 
         Returns:
-            A :class:`ForgeRecord` with the sent bytes and received response.
+            A SendResult with the sent bytes and received response.
         """
-        conn = self._open_connections.get(session_id)
+        conn    = self._open_connections.get(session_id)
         session = self._session_registry.get(session_id)
 
         if not conn or not session:
-            return ForgeRecord.create(
-                sent_bytes=data,
-                received_bytes=b"",
-                host="",
-                port=0,
-                tls=False,
-                success=False,
+            return SendResult.failure(
+                sent_bytes=data, host="", port=0, tls=False,
                 error=f"Forge session {session_id[:8]} not found or not open",
             )
 
@@ -603,8 +493,6 @@ class ForgeEngine:
         host = session.info.server_host
         port = session.info.server_port
 
-        # Framer for the response direction — produces logical frames according
-        # to the configured framing strategy (raw, delimiter, length_prefix, …).
         response_framer = create_framer(
             self._framer_name,
             session_id=session_id,
@@ -612,24 +500,19 @@ class ForgeEngine:
             **self._framer_kwargs,
         )
 
-        received         = bytearray()
-        received_packets: list[bytes] = []
-        server_closed    = False
-        io_error: Optional[Exception] = None
+        received:          bytearray      = bytearray()
+        received_packets:  list[bytes]    = []
+        server_closed:     bool           = False
+        io_error: Optional[Exception]     = None
 
         try:
-            writer.write(data)   # No write_eof() — keep connection alive
+            writer.write(data)
             await writer.drain()
         except (ConnectionResetError, BrokenPipeError, OSError) as exc:
             io_error      = exc
             server_closed = True
 
         if not server_closed:
-            # Collect whatever the server sends back within the timeout window.
-            # We read from the Queue fed by _background_reader rather than
-            # calling reader.read() directly.  This ensures only one coroutine
-            # ever touches the StreamReader, avoiding the Python 3.12+
-            # RuntimeError about concurrent readers.
             deadline = asyncio.get_event_loop().time() + receive_timeout
             while True:
                 remaining = deadline - asyncio.get_event_loop().time()
@@ -638,12 +521,12 @@ class ForgeEngine:
                 try:
                     chunk = await asyncio.wait_for(queue.get(), timeout=remaining)
                 except asyncio.TimeoutError:
-                    break   # No more data in window; connection stays alive
+                    break
                 if isinstance(chunk, Exception):
                     io_error      = chunk
                     server_closed = True
                     break
-                if not chunk:   # EOF sentinel — server closed the connection
+                if not chunk:
                     server_closed = True
                     break
                 received.extend(chunk)
@@ -652,8 +535,6 @@ class ForgeEngine:
                     if packet_callback is not None:
                         packet_callback(frame.raw_bytes)
 
-        # Flush any bytes still buffered inside the framer (e.g. a partial
-        # message that arrived before the window closed).
         for frame in response_framer.flush():
             if frame.raw_bytes:
                 received_packets.append(frame.raw_bytes)
@@ -664,32 +545,20 @@ class ForgeEngine:
             reader_task.cancel()
             self._open_connections.pop(session_id, None)
             self._session_registry.mark_closed(session_id)
-            logger.info(
-                "Forge session %s closed by server after send", session_id[:8]
-            )
             if io_error:
-                return ForgeRecord.create(
+                return SendResult.failure(
                     sent_bytes=data,
                     received_bytes=bytes(received),
                     response_packets=received_packets,
-                    host=host,
-                    port=port,
-                    tls=tls,
-                    success=False,
+                    host=host, port=port, tls=tls,
                     error=f"I/O error: {io_error}",
                 )
 
-        logger.info(
-            "send_on_forge_session %s: sent=%d bytes, received=%d bytes (%d frames, framer=%s)",
-            session_id[:8], len(data), len(received), len(received_packets), self._framer_name,
-        )
-        return ForgeRecord.create(
+        return SendResult(
             sent_bytes=data,
             received_bytes=bytes(received),
             response_packets=received_packets,
-            host=host,
-            port=port,
-            tls=tls,
+            host=host, port=port, tls=tls,
             success=True,
         )
 
@@ -702,37 +571,17 @@ class ForgeEngine:
         connect_timeout:  Optional[float] = None,
         receive_timeout:  Optional[float] = None,
         packet_callback:  Optional[Callable[[bytes], None]] = None,
-    ) -> ForgeRecord:
+    ) -> SendResult:
         """
-        Send raw bytes to *host*:*port* and read all response bytes.
-
-        Opens a new direct TCP connection (bypassing the proxy listener),
-        sends *data*, signals EOF, reads the full response, then closes
-        the connection.  Suitable for Forge's one-shot send action.
-
-        Args:
-            data:             Bytes to send.
-            host:             Target hostname or IP address.
-            port:             Target TCP port.
-            tls:              Wrap the connection in TLS (no cert verification).
-            connect_timeout:  Override the engine's default connect timeout.
-            receive_timeout:  Seconds to wait for the server to finish sending
-                              its response.  When the deadline is reached the
-                              bytes received so far are returned as a successful
-                              record (the server simply kept the connection open).
-                              Defaults to the same value as *connect_timeout*.
-
-        Returns:
-            A ``ForgeRecord`` capturing the sent bytes, response bytes,
-            success flag, and error message (if any).
+        One-shot send: open connection, send data, signal EOF, read all response, close.
         """
-        timeout = connect_timeout if connect_timeout is not None else self._connect_timeout
+        timeout      = connect_timeout if connect_timeout is not None else self._connect_timeout
         recv_timeout = receive_timeout if receive_timeout is not None else timeout
         ssl_ctx: Optional[ssl.SSLContext] = None
         if tls:
             ssl_ctx = ssl.create_default_context()
             ssl_ctx.check_hostname = False
-            ssl_ctx.verify_mode = ssl.CERT_NONE
+            ssl_ctx.verify_mode    = ssl.CERT_NONE
 
         try:
             reader, writer = await asyncio.wait_for(
@@ -744,28 +593,16 @@ class ForgeEngine:
                 timeout=timeout,
             )
         except asyncio.TimeoutError:
-            return ForgeRecord.create(
-                sent_bytes=data,
-                received_bytes=b"",
-                host=host,
-                port=port,
-                tls=tls,
-                success=False,
+            return SendResult.failure(
+                sent_bytes=data, host=host, port=port, tls=tls,
                 error=f"Connection timeout ({timeout}s)",
             )
         except OSError as exc:
-            return ForgeRecord.create(
-                sent_bytes=data,
-                received_bytes=b"",
-                host=host,
-                port=port,
-                tls=tls,
-                success=False,
+            return SendResult.failure(
+                sent_bytes=data, host=host, port=port, tls=tls,
                 error=f"Connection failed: {exc}",
             )
 
-        # Framer for the server's response — uses the same strategy as the proxy.
-        # For one-shot sends there is no real session yet; use a temporary ID.
         oneshot_id = f"oneshot-{host}-{port}"
         response_framer = create_framer(
             self._framer_name,
@@ -774,7 +611,7 @@ class ForgeEngine:
             **self._framer_kwargs,
         )
 
-        received         = bytearray()
+        received:         bytearray   = bytearray()
         received_packets: list[bytes] = []
         try:
             writer.write(data)
@@ -796,10 +633,7 @@ class ForgeEngine:
             try:
                 await asyncio.wait_for(_read_all(), timeout=recv_timeout)
             except asyncio.TimeoutError:
-                logger.debug(
-                    "send_frame: receive timeout (%ss) — returning %d bytes received so far",
-                    recv_timeout, len(received),
-                )
+                pass
 
         except (ConnectionResetError, BrokenPipeError, OSError) as exc:
             for frame in response_framer.flush():
@@ -807,14 +641,11 @@ class ForgeEngine:
                     received_packets.append(frame.raw_bytes)
                     if packet_callback is not None:
                         packet_callback(frame.raw_bytes)
-            return ForgeRecord.create(
+            return SendResult.failure(
                 sent_bytes=data,
                 received_bytes=bytes(received),
                 response_packets=received_packets,
-                host=host,
-                port=port,
-                tls=tls,
-                success=False,
+                host=host, port=port, tls=tls,
                 error=f"I/O error: {exc}",
             )
         finally:
@@ -824,23 +655,98 @@ class ForgeEngine:
             except Exception:
                 pass
 
-        # Flush any bytes still buffered in the framer after EOF / timeout.
         for frame in response_framer.flush():
             if frame.raw_bytes:
                 received_packets.append(frame.raw_bytes)
                 if packet_callback is not None:
                     packet_callback(frame.raw_bytes)
 
-        logger.info(
-            "send_frame: sent=%d bytes, received=%d bytes (%d frames, framer=%s) to %s:%d",
-            len(data), len(received), len(received_packets), self._framer_name, host, port,
-        )
-        return ForgeRecord.create(
+        return SendResult(
             sent_bytes=data,
             received_bytes=bytes(received),
             response_packets=received_packets,
-            host=host,
-            port=port,
-            tls=tls,
+            host=host, port=port, tls=tls,
             success=True,
         )
+
+
+# ---------------------------------------------------------------------------
+# PlaybookEngine
+# ---------------------------------------------------------------------------
+
+# Type alias for the send function passed into PlaybookEngine.run()
+SendFn = Callable[[bytes, str], Awaitable[List[bytes]]]
+
+
+class PlaybookEngine:
+    """
+    Executes a Playbook: sends each frame in order, collecting traffic.
+
+    The engine is stateless — create one instance and call run() for each
+    playbook execution. The returned PlaybookRun is NOT automatically appended
+    to playbook.runs; the caller decides whether to persist it (so partial runs
+    from interrupted executions are not silently stored).
+
+    Variable resolution uses the same {{VAR}} syntax as the old sequence engine.
+    Playbook-local variables in playbook.variables override global_variables.
+    """
+
+    async def run(
+        self,
+        playbook:         Playbook,
+        send_fn:          SendFn,
+        on_entry:         Optional[Callable[[TrafficEntry], None]] = None,
+        global_variables: Optional[Dict[str, str]] = None,
+    ) -> PlaybookRun:
+        """
+        Execute all frames in the playbook and return a PlaybookRun.
+
+        For each frame:
+          1. Resolve {{VAR}} placeholders (playbook vars override globals).
+          2. Emit a TrafficEntry(direction="sent").
+          3. Call send_fn(data, frame.direction) → list[bytes].
+          4. Emit a TrafficEntry(direction="received") per received chunk.
+
+        Args:
+            playbook:         The playbook to run.
+            send_fn:          Async callable: (data, direction) → [received_bytes, ...].
+            on_entry:         Optional callback invoked immediately after each
+                              TrafficEntry is appended, for live UI updates.
+            global_variables: Optional global variable dict merged with
+                              playbook.variables (playbook vars take priority).
+
+        Returns:
+            A completed PlaybookRun (not yet appended to playbook.runs).
+        """
+        run = PlaybookRun.create(playbook.label)
+
+        merged_vars: Dict[str, str] = {}
+        if global_variables:
+            merged_vars.update(global_variables)
+        merged_vars.update(playbook.variables)
+
+        def _emit(entry: TrafficEntry) -> None:
+            run.traffic.append(entry)
+            if on_entry is not None:
+                on_entry(entry)
+
+        for frame in playbook.frames:
+            try:
+                data = resolve_hex(frame.raw_hex, merged_vars)
+            except ValueError as exc:
+                logger.error(
+                    "PlaybookEngine: variable resolution failed for frame %r: %s",
+                    frame.label, exc,
+                )
+                raise
+
+            sent_entry = TrafficEntry.create_sent(data, frame.label)
+            _emit(sent_entry)
+
+            received_chunks = await send_fn(data, frame.direction)
+
+            for chunk in received_chunks:
+                recv_entry = TrafficEntry.create_received(chunk, frame.label)
+                _emit(recv_entry)
+
+        return run

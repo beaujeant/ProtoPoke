@@ -6,13 +6,11 @@ A *project* is a single ``.pp`` ZIP file that bundles:
     project.json    — metadata (name, version, timestamps)
     config.json     — ProxyConfig serialised to JSON
     rules.json      — replace rules + intercept rules
-    repeater.json   — forge request tabs (current bytes + history)
-    sequencer.json  — sequence sessions (steps, variables, history)
+    forge.json      — playbooks (frames, runs/history, connection config)
     logs.json       — captured sessions and frames (the traffic tab content)
 
 The file is a standard ZIP archive (no extra dependencies needed — Python's
-built-in ``zipfile`` module is used).  Older directory-based projects are
-still readable for backward compatibility.
+built-in ``zipfile`` module is used).
 
 Everything is temporary (in-memory) by default.  The UI calls
 ``ProjectManager.save()`` / ``save_as()`` to persist, and ``open()`` to
@@ -21,22 +19,14 @@ restore a previous session.
 Usage::
 
     pm = ProjectManager()
-
-    # Start with a blank in-memory project
     pm.new("My Capture")
-
-    # Mutate state ...
     pm.config.listen_port = 9000
-    pm.rules_engine.add_rule(ReplaceRule.create(...))
-
-    # Save to disk (single ZIP file)
     pm.save_as("/tmp/capture.pp")
 
-    # Later: reload
     pm2 = ProjectManager()
     state = pm2.open("/tmp/capture.pp")
     # state.config, state.rules_engine, state.intercept_filter,
-    # state.forge_requests, state.sequence_sessions, state.captured_sessions
+    # state.playbooks, state.captured_sessions
 """
 
 from __future__ import annotations
@@ -51,16 +41,12 @@ from typing import Optional
 
 from ..config import ProxyConfig
 from ..rules.engine import RulesEngine, InterceptFilter
-from ..forge.models import ForgeRequest
-from ..sequence.models import SequenceSession
+from ..forge.models import Playbook
 
 # Project format version — bump when the schema changes incompatibly.
-_FORMAT_VERSION = 2
+_FORMAT_VERSION = 3
 
 # Safety limits for ZIP loading.
-# Each individual member must not expand beyond 100 MB when decompressed, and
-# the archive may contain at most 32 members total.  These bounds are generous
-# for any legitimate project file while guarding against decompression bombs.
 _ZIP_MAX_MEMBERS      = 32
 _ZIP_MAX_MEMBER_BYTES = 100 * 1024 * 1024  # 100 MB
 
@@ -74,24 +60,20 @@ class ProjectState:
     and wire it into the running ProxyAPI.
 
     Attributes:
-        config:              Proxy configuration.
-        rules_engine:        Active replace rules.
-        intercept_filter:    Active intercept rules.
-        forge_requests:      All repeater tabs (with history).
-        sequence_sessions:  All sequencer sessions (with steps, variables, history).
-        captured_sessions:   Serialised session + frame data for the Traffic tab.
-        name:                Human-readable project name.
-        db_path:             Legacy: path to the SQLite sessions database, or ``None``.
+        config:            Proxy configuration.
+        rules_engine:      Active replace rules.
+        intercept_filter:  Active intercept rules.
+        playbooks:         All forge playbooks (with frames and run history).
+        captured_sessions: Serialised session + frame data for the Traffic tab.
+        name:              Human-readable project name.
     """
 
-    config:              ProxyConfig
-    rules_engine:        RulesEngine
-    intercept_filter:    InterceptFilter
-    forge_requests:      list[ForgeRequest]
-    sequence_sessions:  list[SequenceSession]
-    captured_sessions:   list[dict]       = field(default_factory=list)
-    name:                str              = "Untitled"
-    db_path:             Optional[Path]   = None
+    config:            ProxyConfig
+    rules_engine:      RulesEngine
+    intercept_filter:  InterceptFilter
+    playbooks:         list[Playbook]
+    captured_sessions: list[dict]     = field(default_factory=list)
+    name:              str            = "Untitled"
 
 
 class ProjectManager:
@@ -99,75 +81,57 @@ class ProjectManager:
     Manages loading and saving of a ProtoPoke project.
 
     Projects are stored as a single ``.pp`` ZIP file containing
-    JSON members for every piece of state.  Older directory-based projects
-    are still readable (backward compat) but always saved in the new format.
+    JSON members for every piece of state.
 
     Attributes:
-        config:             The active :class:`~protopoke.config.ProxyConfig`.
-        rules_engine:       The active :class:`~protopoke.rules.engine.RulesEngine`.
-        intercept_filter: The active :class:`~protopoke.rules.engine.InterceptFilter`.
-        forge_requests:  List of active :class:`~protopoke.forge.models.ForgeRequest`.
-        sequence_sessions: List of active :class:`~protopoke.sequence.models.SequenceSession`.
-        captured_sessions:  Serialised sessions+frames (set by the app before saving).
-        name:               Current project name (shown in the title bar).
-        path:               Path of the on-disk project file, or ``None``
-                            for an unsaved in-memory project.
-        is_dirty:           ``True`` if there are unsaved changes.
+        config:            The active :class:`~protopoke.config.ProxyConfig`.
+        rules_engine:      The active :class:`~protopoke.rules.engine.RulesEngine`.
+        intercept_filter:  The active :class:`~protopoke.rules.engine.InterceptFilter`.
+        playbooks:         List of active :class:`~protopoke.forge.models.Playbook`.
+        captured_sessions: Serialised sessions+frames (set by the app before saving).
+        name:              Current project name (shown in the title bar).
+        path:              Path of the on-disk project file, or ``None``
+                           for an unsaved in-memory project.
+        is_dirty:          ``True`` if there are unsaved changes.
     """
 
     def __init__(self) -> None:
-        self.config:              ProxyConfig            = ProxyConfig()
-        self.rules_engine:        RulesEngine            = RulesEngine()
-        self.intercept_filter: InterceptFilter     = InterceptFilter()
-        self.forge_requests:   list[ForgeRequest]  = []
-        self.sequence_sessions:  list[SequenceSession] = []
-        self.captured_sessions:   list[dict]             = []
-        self.name:                str                    = "Untitled"
-        self.path:                Optional[Path]         = None
-        self.is_dirty:            bool                   = False
+        self.config:            ProxyConfig       = ProxyConfig()
+        self.rules_engine:      RulesEngine       = RulesEngine()
+        self.intercept_filter:  InterceptFilter   = InterceptFilter()
+        self.playbooks:         list[Playbook]    = []
+        self.captured_sessions: list[dict]        = []
+        self.name:              str               = "Untitled"
+        self.path:              Optional[Path]    = None
+        self.is_dirty:          bool              = False
 
-        # Timestamps
-        self._created_at:  float = time.time()
-        self._saved_at:    float = 0.0
+        self._created_at: float = time.time()
+        self._saved_at:   float = 0.0
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def new(self, name: str = "Untitled") -> None:
-        """
-        Reset to a blank in-memory project.
-
-        Clears all state.  Does *not* stop a running proxy — the caller
-        must do that before calling ``new()``.
-        """
-        self.config             = ProxyConfig()
-        self.rules_engine       = RulesEngine()
-        self.intercept_filter = InterceptFilter()
-        self.forge_requests  = []
-        self.sequence_sessions = []
-        self.captured_sessions  = []
-        self.name               = name
-        self.path               = None
-        self.is_dirty           = False
-        self._created_at        = time.time()
-        self._saved_at          = 0.0
+        """Reset to a blank in-memory project."""
+        self.config            = ProxyConfig()
+        self.rules_engine      = RulesEngine()
+        self.intercept_filter  = InterceptFilter()
+        self.playbooks         = []
+        self.captured_sessions = []
+        self.name              = name
+        self.path              = None
+        self.is_dirty          = False
+        self._created_at       = time.time()
+        self._saved_at         = 0.0
 
     def open(self, path: str | Path) -> ProjectState:
         """
-        Load a project from *path*.
-
-        Supports two formats:
-        - **New format** (ZIP file): a single ``.pp`` file produced by
-          :meth:`save` / :meth:`save_as`.
-        - **Legacy format** (directory): the old ``.pp`` directory format.
-
-        Updates ``self.config``, ``self.rules_engine``, etc. in place and
-        returns a :class:`ProjectState` snapshot for the caller to use.
+        Load a project from *path* (ZIP file or legacy directory).
 
         Raises:
             FileNotFoundError: Path does not exist.
-            ValueError:        Project file/directory is invalid or too new.
+            ValueError:        Project file is invalid or too new.
         """
         p = Path(path)
         if not p.exists():
@@ -181,12 +145,7 @@ class ProjectManager:
             raise FileNotFoundError(f"Project path is neither a file nor a directory: {path}")
 
     def save(self) -> Path:
-        """
-        Write the current project to :attr:`path`.
-
-        Raises:
-            RuntimeError: Called on an unsaved project (use ``save_as`` first).
-        """
+        """Write the current project to :attr:`path`."""
         if self.path is None:
             raise RuntimeError(
                 "No project path set. Use save_as(path) to choose a location."
@@ -194,18 +153,7 @@ class ProjectManager:
         return self._write_zip(self.path)
 
     def save_as(self, path: str | Path) -> Path:
-        """
-        Write the current project to a (possibly new) *path* and update
-        :attr:`path` to point there.
-
-        The result is always a single ``.pp`` ZIP file.
-
-        Args:
-            path: Destination file path (should end in ``.pp``).
-
-        Returns:
-            The resolved absolute path that was written.
-        """
+        """Write the current project to *path* and update :attr:`path`."""
         self.path = Path(path)
         return self._write_zip(self.path)
 
@@ -218,7 +166,6 @@ class ProjectManager:
     # ------------------------------------------------------------------
 
     def _write_zip(self, zip_path: Path) -> Path:
-        """Serialise all state into a single ZIP file at *zip_path*."""
         zip_path.parent.mkdir(parents=True, exist_ok=True)
         now = time.time()
 
@@ -234,39 +181,28 @@ class ProjectManager:
             "intercept": self.intercept_filter.to_list(),
         }
 
-        repeater_data = {
-            "requests": [r.to_dict() for r in self.forge_requests],
-        }
-
-        sequencer_data = {
-            "sessions": [s.to_dict() for s in self.sequence_sessions],
+        forge_data = {
+            "playbooks": [p.to_dict() for p in self.playbooks],
         }
 
         logs_data = {
             "sessions": self.captured_sessions,
         }
 
-        # Build config JSON in-memory (ProxyConfig.save() writes to a file,
-        # so we use its to_dict/json method if available, else fallback)
         config_json = self._config_to_json()
 
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("project.json",  json.dumps(meta,           indent=2))
-            zf.writestr("config.json",   config_json)
-            zf.writestr("rules.json",    json.dumps(rules_data,     indent=2))
-            zf.writestr("repeater.json", json.dumps(repeater_data,  indent=2))
-            zf.writestr("sequencer.json",json.dumps(sequencer_data, indent=2))
-            zf.writestr("logs.json",     json.dumps(logs_data,      indent=2))
+            zf.writestr("project.json", json.dumps(meta,        indent=2))
+            zf.writestr("config.json",  config_json)
+            zf.writestr("rules.json",   json.dumps(rules_data,  indent=2))
+            zf.writestr("forge.json",   json.dumps(forge_data,  indent=2))
+            zf.writestr("logs.json",    json.dumps(logs_data,   indent=2))
 
         self._saved_at = now
         self.is_dirty  = False
         return zip_path.resolve()
 
     def _config_to_json(self) -> str:
-        """Serialise ProxyConfig to a JSON string (without writing to disk)."""
-        buf = io.StringIO()
-        # ProxyConfig.save() writes to a Path; we use a tmp file approach via
-        # in-memory buffer by calling the same logic as save() but capturing it.
         import tempfile, os
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".json", delete=False, encoding="utf-8"
@@ -287,7 +223,6 @@ class ProjectManager:
     # ------------------------------------------------------------------
 
     def _open_zip(self, zip_path: Path) -> ProjectState:
-        """Load a project from a ZIP file."""
         try:
             zf = zipfile.ZipFile(zip_path, "r")
         except zipfile.BadZipFile as exc:
@@ -296,8 +231,6 @@ class ProjectManager:
         with zf:
             infos = zf.infolist()
 
-            # Guard against decompression bombs: reject archives with too many
-            # members or any member whose uncompressed size exceeds the limit.
             if len(infos) > _ZIP_MAX_MEMBERS:
                 raise ValueError(
                     f"Project file has too many members ({len(infos)}); "
@@ -355,31 +288,20 @@ class ProjectManager:
                 self.rules_engine     = RulesEngine()
                 self.intercept_filter = InterceptFilter()
 
-            # Forge
-            repeater_raw = _read("repeater.json")
-            if repeater_raw:
-                repeater_data = json.loads(repeater_raw)
-                self.forge_requests = [
-                    ForgeRequest.from_dict(r) for r in repeater_data.get("requests", [])
+            # Forge playbooks
+            forge_raw = _read("forge.json")
+            if forge_raw:
+                forge_data = json.loads(forge_raw)
+                self.playbooks = [
+                    Playbook.from_dict(p) for p in forge_data.get("playbooks", [])
                 ]
             else:
-                self.forge_requests = []
-
-            # Sequence
-            sequencer_raw = _read("sequencer.json")
-            if sequencer_raw:
-                sequencer_data = json.loads(sequencer_raw)
-                self.sequence_sessions = [
-                    SequenceSession.from_dict(s) for s in sequencer_data.get("sessions", [])
-                ]
-            else:
-                self.sequence_sessions = []
+                self.playbooks = []
 
             # Logs
             logs_raw = _read("logs.json")
             if logs_raw:
-                logs_data = json.loads(logs_raw)
-                self.captured_sessions = logs_data.get("sessions", [])
+                self.captured_sessions = json.loads(logs_raw).get("sessions", [])
             else:
                 self.captured_sessions = []
 
@@ -392,14 +314,13 @@ class ProjectManager:
             config=self.config,
             rules_engine=self.rules_engine,
             intercept_filter=self.intercept_filter,
-            forge_requests=self.forge_requests,
-            sequence_sessions=self.sequence_sessions,
+            playbooks=self.playbooks,
             captured_sessions=self.captured_sessions,
             name=self.name,
         )
 
     # ------------------------------------------------------------------
-    # Internal: legacy directory-based open (backward compat)
+    # Internal: legacy directory-based open
     # ------------------------------------------------------------------
 
     def _open_directory(self, project_dir: Path) -> ProjectState:
@@ -417,11 +338,9 @@ class ProjectManager:
                 f"(format_version={meta['format_version']}). Please upgrade."
             )
 
-        # Config
         config_path = project_dir / "config.json"
         self.config = ProxyConfig.load(config_path) if config_path.exists() else ProxyConfig()
 
-        # Rules
         rules_path = project_dir / "rules.json"
         if rules_path.exists():
             rules_data = json.loads(rules_path.read_text(encoding="utf-8"))
@@ -431,31 +350,19 @@ class ProjectManager:
             self.rules_engine     = RulesEngine()
             self.intercept_filter = InterceptFilter()
 
-        # Forge
-        repeater_path = project_dir / "repeater.json"
-        if repeater_path.exists():
-            repeater_data = json.loads(repeater_path.read_text(encoding="utf-8"))
-            self.forge_requests = [
-                ForgeRequest.from_dict(r) for r in repeater_data.get("requests", [])
+        # New forge.json format
+        forge_path = project_dir / "forge.json"
+        if forge_path.exists():
+            forge_data = json.loads(forge_path.read_text(encoding="utf-8"))
+            self.playbooks = [
+                Playbook.from_dict(p) for p in forge_data.get("playbooks", [])
             ]
         else:
-            self.forge_requests = []
+            self.playbooks = []
 
-        # Sequence
-        sequencer_path = project_dir / "sequencer.json"
-        if sequencer_path.exists():
-            sequencer_data = json.loads(sequencer_path.read_text(encoding="utf-8"))
-            self.sequence_sessions = [
-                SequenceSession.from_dict(s) for s in sequencer_data.get("sessions", [])
-            ]
-        else:
-            self.sequence_sessions = []
-
-        # Logs (legacy dirs may not have this)
         logs_path = project_dir / "logs.json"
         if logs_path.exists():
-            logs_data = json.loads(logs_path.read_text(encoding="utf-8"))
-            self.captured_sessions = logs_data.get("sessions", [])
+            self.captured_sessions = json.loads(logs_path.read_text(encoding="utf-8")).get("sessions", [])
         else:
             self.captured_sessions = []
 
@@ -464,32 +371,14 @@ class ProjectManager:
         self.is_dirty  = False
         self._saved_at = meta.get("saved_at", 0.0)
 
-        db_path: Optional[Path] = None
-        sessions_db = project_dir / "sessions.db"
-        if sessions_db.exists():
-            db_path = sessions_db
-
         return ProjectState(
             config=self.config,
             rules_engine=self.rules_engine,
             intercept_filter=self.intercept_filter,
-            forge_requests=self.forge_requests,
-            sequence_sessions=self.sequence_sessions,
+            playbooks=self.playbooks,
             captured_sessions=self.captured_sessions,
             name=self.name,
-            db_path=db_path,
         )
-
-    # ------------------------------------------------------------------
-    # Convenience
-    # ------------------------------------------------------------------
-
-    @property
-    def db_path(self) -> Optional[Path]:
-        """Legacy: path for ``sessions.db`` (only used by directory-format projects)."""
-        if self.path is None or self.path.is_file():
-            return None
-        return self.path / "sessions.db"
 
     # ------------------------------------------------------------------
     # Dunder

@@ -1,179 +1,278 @@
 """
 Data models for the Forge feature.
 
-These are separate from the core models (protopoke.models) because they are
-UI-level constructs, not transport-level ones.
+PlaybookFrame
+-------------
+One packet slot in a playbook. Stores the hex content (with optional
+{{VAR}} placeholders), a human label, and the traffic direction.
 
-ForgeRecord
-----------
-An immutable record of one send+receive cycle in Forge.
+TrafficEntry
+------------
+A single sent or received packet recorded during a playbook run.
 
-ForgeRequest
----------------
-A named "tab" in Forge, holding the current editable bytes, the
-target destination, and the history of all sends made from this tab.
+PlaybookRun
+-----------
+One execution of a Playbook: a timestamp and the flat ordered log of all
+sent/received packets from that run.
+
+Playbook
+--------
+A named playbook: ordered list of frames, connection parameters, variable
+store, and the history of all runs.
 """
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
 
+# ---------------------------------------------------------------------------
+# PlaybookFrame
+# ---------------------------------------------------------------------------
+
 @dataclass
-class ForgeRecord:
+class PlaybookFrame:
     """
-    A single send+response pair recorded in the Forge history.
+    One packet slot in a playbook.
 
     Attributes:
-        id:               Unique ID (UUID4).
-        timestamp:        When the send was initiated (Unix seconds).
-        sent_bytes:       Bytes that were sent to the target.
-        received_bytes:   Raw bytes received back (concatenated; empty on error).
-        response_packets: Individual network chunks received from the server,
-                          in order.  Each entry is one read() chunk — finer
-                          grained than received_bytes (which is their join).
-        host:             Target host.
-        port:             Target port.
-        tls:              Whether TLS was used for the connection.
-        success:          ``False`` if a connection/timeout error occurred.
-        error:            Error message when ``success`` is ``False``.
+        id:        Unique ID (UUID4).
+        label:     Human-readable name shown in the frame list.
+        raw_hex:   Space-separated hex pairs, may contain {{VAR}} placeholders.
+                   Example: ``"01 02 {{SESS_ID}} 0a 0b"``
+        direction: Traffic direction for this frame.
+                   ``"client_to_server"`` — send bytes toward the upstream server.
+                   ``"server_to_client"`` — inject bytes toward the client.
     """
 
-    id:               str
-    timestamp:        float
-    sent_bytes:       bytes
-    received_bytes:   bytes
-    host:             str
-    port:             int
-    tls:              bool        = False
-    success:          bool        = True
-    error:            Optional[str]  = None
-    response_packets: list[bytes] = field(default_factory=list)
-    session_id:       Optional[str]  = None
+    id:        str
+    label:     str
+    raw_hex:   str
+    direction: str = "client_to_server"
 
     @classmethod
     def create(
         cls,
-        sent_bytes:       bytes,
-        received_bytes:   bytes,
-        host:             str,
-        port:             int,
-        tls:              bool        = False,
-        success:          bool        = True,
-        error:            Optional[str]  = None,
-        response_packets: list[bytes] = None,
-        session_id:       Optional[str]  = None,
-    ) -> "ForgeRecord":
+        label:     str = "",
+        raw_hex:   str = "",
+        direction: str = "client_to_server",
+    ) -> "PlaybookFrame":
+        return cls(id=str(uuid.uuid4()), label=label, raw_hex=raw_hex, direction=direction)
+
+    def preview(self, max_bytes: int = 12) -> str:
+        """Hex preview of the first *max_bytes* bytes (placeholders shown as-is)."""
+        tokens = self.raw_hex.split()
+        shown: list[str] = []
+        byte_count = 0
+        for tok in tokens:
+            if tok.startswith("{{") and tok.endswith("}}"):
+                shown.append(tok)
+            elif len(tok) == 2:
+                if byte_count >= max_bytes:
+                    shown.append("…")
+                    break
+                shown.append(tok)
+                byte_count += 1
+        return " ".join(shown)
+
+    def byte_length(self) -> int:
+        """Approximate byte count (placeholders contribute 0)."""
+        cleaned = re.sub(r"\{\{[^{}]+\}\}", "", self.raw_hex)
+        hex_only = cleaned.replace(" ", "").replace("\n", "")
+        return len(hex_only) // 2
+
+    def to_dict(self) -> dict:
+        return {
+            "id":        self.id,
+            "label":     self.label,
+            "raw_hex":   self.raw_hex,
+            "direction": self.direction,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "PlaybookFrame":
+        return cls(
+            id=d["id"],
+            label=d.get("label", ""),
+            raw_hex=d.get("raw_hex", ""),
+            direction=d.get("direction", "client_to_server"),
+        )
+
+
+# ---------------------------------------------------------------------------
+# TrafficEntry
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TrafficEntry:
+    """
+    A single packet in the flat send/receive traffic log for one run.
+
+    Attributes:
+        id:          Unique ID (UUID4).
+        timestamp:   When this packet was sent or received (Unix seconds).
+        direction:   ``"sent"`` or ``"received"``.
+        raw_bytes:   The actual bytes on the wire.
+        frame_label: Label of the playbook frame that triggered this entry.
+    """
+
+    id:          str
+    timestamp:   float
+    direction:   str    # "sent" | "received"
+    raw_bytes:   bytes
+    frame_label: str
+
+    @classmethod
+    def create_sent(cls, raw_bytes: bytes, frame_label: str) -> "TrafficEntry":
         return cls(
             id=str(uuid.uuid4()),
             timestamp=time.time(),
-            sent_bytes=sent_bytes,
-            received_bytes=received_bytes,
-            host=host,
-            port=port,
-            tls=tls,
-            success=success,
-            error=error,
-            response_packets=response_packets or [],
-            session_id=session_id,
+            direction="sent",
+            raw_bytes=raw_bytes,
+            frame_label=frame_label,
+        )
+
+    @classmethod
+    def create_received(cls, raw_bytes: bytes, frame_label: str = "") -> "TrafficEntry":
+        return cls(
+            id=str(uuid.uuid4()),
+            timestamp=time.time(),
+            direction="received",
+            raw_bytes=raw_bytes,
+            frame_label=frame_label,
         )
 
     def to_dict(self) -> dict:
         return {
-            "id":               self.id,
-            "timestamp":        self.timestamp,
-            "sent_bytes":       self.sent_bytes.hex(),
-            "received_bytes":   self.received_bytes.hex(),
-            "response_packets": [p.hex() for p in self.response_packets],
-            "host":             self.host,
-            "port":             self.port,
-            "tls":              self.tls,
-            "success":          self.success,
-            "error":            self.error,
-            "session_id":       self.session_id,
+            "id":          self.id,
+            "timestamp":   self.timestamp,
+            "direction":   self.direction,
+            "raw_bytes":   self.raw_bytes.hex(),
+            "frame_label": self.frame_label,
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "ForgeRecord":
+    def from_dict(cls, d: dict) -> "TrafficEntry":
         return cls(
             id=d["id"],
             timestamp=d["timestamp"],
-            sent_bytes=bytes.fromhex(d["sent_bytes"]),
-            received_bytes=bytes.fromhex(d["received_bytes"]),
-            response_packets=[bytes.fromhex(p) for p in d.get("response_packets", [])],
-            host=d["host"],
-            port=d["port"],
-            tls=d.get("tls", False),
-            success=d.get("success", True),
-            error=d.get("error"),
-            session_id=d.get("session_id"),
+            direction=d["direction"],
+            raw_bytes=bytes.fromhex(d["raw_bytes"]),
+            frame_label=d.get("frame_label", ""),
         )
 
 
-@dataclass
-class ForgeRequest:
-    """
-    One named "tab" in Forge.
+# ---------------------------------------------------------------------------
+# PlaybookRun
+# ---------------------------------------------------------------------------
 
-    Holds the current editable bytes (``current_bytes``), the target
-    destination (``host``, ``port``, ``tls``), and the full send history.
+@dataclass
+class PlaybookRun:
+    """
+    A single execution of a Playbook.
 
     Attributes:
-        id:            Unique ID (UUID4).
-        label:         User-visible name shown in the tab list.
-        host:          Target host.
-        port:          Target port.
-        tls:           Whether to use TLS.
-        current_bytes: Bytes currently in the editor (editable).
-        history:       All ``ForgeRecord`` instances for this tab, newest last.
-        source_session_id: Session ID this request was sent from (optional).
+        id:             Unique ID (UUID4).
+        timestamp:      When the run started (Unix seconds).
+        playbook_label: Name of the playbook at the time of the run.
+        traffic:        Ordered log of all sent/received packets.
     """
 
-    id:                  str
-    label:               str
-    host:                str
-    port:                int
-    tls:                 bool              = False
-    current_bytes:       bytes             = b""
-    history:             list[ForgeRecord]  = field(default_factory=list)
-    source_session_id:   Optional[str]     = None
-    # Seconds to wait for server packets after a send (configurable per-tab).
-    response_window:     float             = 1.0
-    # "to_server" (inject/send toward the server) or "to_client" (inject toward
-    # the client side of an existing proxy session).
-    direction:           str               = "to_server"
-    # ID of the persistent TCP session created for custom host:port sends.
-    # Not persisted to disk — connections don't survive restarts.
-    forge_session_id: Optional[str]     = field(default=None, compare=False)
+    id:             str
+    timestamp:      float
+    playbook_label: str
+    traffic:        list[TrafficEntry] = field(default_factory=list)
+
+    @classmethod
+    def create(cls, playbook_label: str) -> "PlaybookRun":
+        return cls(
+            id=str(uuid.uuid4()),
+            timestamp=time.time(),
+            playbook_label=playbook_label,
+        )
+
+    def sent_bytes_total(self) -> int:
+        return sum(len(e.raw_bytes) for e in self.traffic if e.direction == "sent")
+
+    def received_bytes_total(self) -> int:
+        return sum(len(e.raw_bytes) for e in self.traffic if e.direction == "received")
+
+    def to_dict(self) -> dict:
+        return {
+            "id":             self.id,
+            "timestamp":      self.timestamp,
+            "playbook_label": self.playbook_label,
+            "traffic":        [t.to_dict() for t in self.traffic],
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "PlaybookRun":
+        return cls(
+            id=d["id"],
+            timestamp=d["timestamp"],
+            playbook_label=d.get("playbook_label", ""),
+            traffic=[TrafficEntry.from_dict(t) for t in d.get("traffic", [])],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Playbook
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Playbook:
+    """
+    A named playbook: an ordered sequence of frames to send in one shot.
+
+    Attributes:
+        id:                Unique ID (UUID4).
+        label:             User-visible name shown in the playbook list.
+        host:              Target host for new connections.
+        port:              Target port for new connections.
+        tls:               Whether to use TLS for new connections.
+        source_session_id: If set, inject into this existing proxy session
+                           instead of opening a new TCP connection.
+        response_window:   Seconds to wait for server response after each frame send.
+        variables:         Runtime variable store: name → hex-encoded bytes.
+                           Persisted across saves.
+        frames:            Ordered list of packet frames.
+        runs:              History of all executions (newest last).
+    """
+
+    id:                str
+    label:             str
+    host:              str
+    port:              int
+    tls:               bool               = False
+    source_session_id: Optional[str]      = None
+    response_window:   float              = 1.0
+    variables:         dict[str, str]     = field(default_factory=dict)
+    frames:            list[PlaybookFrame] = field(default_factory=list)
+    runs:              list[PlaybookRun]  = field(default_factory=list)
 
     @classmethod
     def create(
         cls,
-        host:              str,
-        port:              int,
-        label:             str  = "",
-        tls:               bool  = False,
-        current_bytes:     bytes = b"",
+        label:             str,
+        host:              str  = "",
+        port:              int  = 0,
+        tls:               bool = False,
         source_session_id: Optional[str] = None,
-        direction:         str  = "to_server",
-    ) -> "ForgeRequest":
+        response_window:   float = 1.0,
+    ) -> "Playbook":
         return cls(
             id=str(uuid.uuid4()),
             label=label,
             host=host,
             port=port,
             tls=tls,
-            current_bytes=current_bytes,
             source_session_id=source_session_id,
-            direction=direction,
+            response_window=response_window,
         )
-
-    def add_record(self, record: ForgeRecord) -> None:
-        """Append a send record to the history."""
-        self.history.append(record)
 
     def to_dict(self) -> dict:
         return {
@@ -182,24 +281,24 @@ class ForgeRequest:
             "host":              self.host,
             "port":              self.port,
             "tls":               self.tls,
-            "current_bytes":     self.current_bytes.hex(),
-            "history":           [r.to_dict() for r in self.history],
             "source_session_id": self.source_session_id,
             "response_window":   self.response_window,
-            "direction":         self.direction,
+            "variables":         self.variables,
+            "frames":            [f.to_dict() for f in self.frames],
+            "runs":              [r.to_dict() for r in self.runs],
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "ForgeRequest":
+    def from_dict(cls, d: dict) -> "Playbook":
         return cls(
             id=d["id"],
             label=d["label"],
-            host=d["host"],
-            port=d["port"],
+            host=d.get("host", ""),
+            port=d.get("port", 0),
             tls=d.get("tls", False),
-            current_bytes=bytes.fromhex(d.get("current_bytes", "")),
-            history=[ForgeRecord.from_dict(r) for r in d.get("history", [])],
             source_session_id=d.get("source_session_id"),
             response_window=d.get("response_window", 1.0),
-            direction=d.get("direction", "to_server"),
+            variables=d.get("variables", {}),
+            frames=[PlaybookFrame.from_dict(f) for f in d.get("frames", [])],
+            runs=[PlaybookRun.from_dict(r) for r in d.get("runs", [])],
         )

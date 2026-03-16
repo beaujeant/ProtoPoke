@@ -30,10 +30,10 @@ Tools are grouped by concern:
                               reorder_intercept_rule, clear_intercept_rules
     Protocol management     : set_protocol_file, set_protocol_dict,
                               get_protocol_info
-    Forge / send            : send_frame, list_forge_requests,
-                              create_forge_request, get_forge_request,
-                              update_forge_request, delete_forge_request,
-                              send_forge_request, frame_to_forge
+    Forge / send            : send_frame, list_playbooks,
+                              create_playbook, get_playbook,
+                              update_playbook, delete_playbook,
+                              run_playbook, frame_to_forge
     Replay                  : forge_session, replay_with_field_edits
     TLS / CA                : get_ca_cert
     Config                  : get_config, set_config
@@ -71,12 +71,12 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
 
     from protopoke.models import Direction
     from protopoke.rules.rule import ReplaceRule, InterceptRule, RuleAction
-    from protopoke.forge.models import ForgeRequest, ForgeRecord
+    from protopoke.forge.models import Playbook, PlaybookFrame, PlaybookRun, TrafficEntry
 
     mcp = FastMCP(name)
 
-    # In-memory forge request store (MCP-side, mirrors UI forge tabs)
-    _forge_requests: dict[str, ForgeRequest] = {}
+    # In-memory playbook store (MCP-side, mirrors UI Forge tab)
+    _playbooks: dict[str, Playbook] = {}
 
     # ------------------------------------------------------------------ #
     # Proxy lifecycle                                                       #
@@ -892,7 +892,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
                              connect timeout.
 
         Returns:
-            ForgeRecord dict: sent_bytes_hex, received_bytes_hex, success, error.
+            SendResult dict: sent_bytes_hex, received_bytes_hex, success, error.
         """
         try:
             data = bytes.fromhex(data_hex)
@@ -910,162 +910,161 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         return record.to_dict()
 
     # ------------------------------------------------------------------ #
-    # Forge request management                                           #
+    # Playbook management                                                #
     # ------------------------------------------------------------------ #
 
     @mcp.tool()
-    def list_forge_requests() -> list[dict]:
+    def list_playbooks() -> list[dict]:
         """
-        List all forge request tabs.
-
-        Forge requests are named, reusable send configurations — analogous
-        to Burp Suite's Forge tabs. Each has editable bytes, a target, and
-        a history of sends.
+        List all forge playbooks.
 
         Returns:
-            List of forge request dicts (without full history).
+            List of playbook dicts (without full run history).
         """
         result = []
-        for req in _forge_requests.values():
-            d = req.to_dict()
-            d["history_count"] = len(req.history)
-            d.pop("history", None)  # Omit full history from list view
+        for pb in _playbooks.values():
+            d = pb.to_dict()
+            d["run_count"] = len(pb.runs)
+            d.pop("runs", None)
             result.append(d)
         return result
 
     @mcp.tool()
-    def create_forge_request(
+    def create_playbook(
         label:             str,
         host:              str,
         port:              int,
-        data_hex:          str            = "",
-        tls:               bool           = False,
-        source_session_id: Optional[str]  = None,
+        data_hex:          str           = "",
+        tls:               bool          = False,
+        source_session_id: Optional[str] = None,
+        response_window:   float         = 1.0,
     ) -> dict:
         """
-        Create a new forge request tab.
+        Create a new playbook with a single frame.
 
         Args:
-            label:             Human-readable name for this request tab.
+            label:             Human-readable name.
             host:              Target hostname or IP address.
             port:              Target TCP port.
-            data_hex:          Initial bytes to send, as hex string.
+            data_hex:          Frame bytes as hex string.
             tls:               Whether to use TLS.
-            source_session_id: Optional session ID to associate with this request.
+            source_session_id: Optional session ID to inject into.
+            response_window:   Seconds to wait for server response per frame.
 
         Returns:
-            The new forge request dict including its generated ID.
+            The new playbook dict including its generated ID.
         """
         try:
-            current_bytes = bytes.fromhex(data_hex) if data_hex else b""
+            frame_bytes = bytes.fromhex(data_hex) if data_hex else b""
         except ValueError as exc:
             return {"ok": False, "error": f"Invalid data hex: {exc}"}
 
-        req = ForgeRequest.create(
+        pb = Playbook.create(
             label=label,
             host=host,
             port=port,
             tls=tls,
-            current_bytes=current_bytes,
             source_session_id=source_session_id,
+            response_window=response_window,
         )
-        _forge_requests[req.id] = req
-        return {"ok": True, "request": req.to_dict()}
+        if frame_bytes:
+            hex_str = " ".join(frame_bytes.hex()[i:i+2] for i in range(0, len(frame_bytes.hex()), 2))
+            pb.frames.append(PlaybookFrame.create(label="frame-1", raw_hex=hex_str))
+        _playbooks[pb.id] = pb
+        return {"ok": True, "playbook": pb.to_dict()}
 
     @mcp.tool()
-    def get_forge_request(request_id: str) -> Optional[dict]:
+    def get_playbook(playbook_id: str) -> Optional[dict]:
         """
-        Get a forge request tab, including its full send history.
+        Get a playbook including its full run history.
 
         Args:
-            request_id: The forge request UUID from list_forge_requests.
+            playbook_id: The playbook UUID from list_playbooks.
 
         Returns:
-            Full forge request dict with history, or None if not found.
+            Full playbook dict with runs, or None if not found.
         """
-        req = _forge_requests.get(request_id)
-        if req is None:
-            return None
-        return req.to_dict()
+        pb = _playbooks.get(playbook_id)
+        return pb.to_dict() if pb is not None else None
 
     @mcp.tool()
-    def update_forge_request(
-        request_id: str,
-        label:      Optional[str]  = None,
-        host:       Optional[str]  = None,
-        port:       Optional[int]  = None,
-        data_hex:   Optional[str]  = None,
-        tls:        Optional[bool] = None,
+    def update_playbook(
+        playbook_id: str,
+        label:       Optional[str]  = None,
+        host:        Optional[str]  = None,
+        port:        Optional[int]  = None,
+        tls:         Optional[bool] = None,
+        data_hex:    Optional[str]  = None,
     ) -> dict:
         """
-        Update a forge request tab's settings or payload bytes.
+        Update a playbook's connection config and/or the first frame's bytes.
 
         Args:
-            request_id: The forge request UUID.
-            label:      New name (or null to keep current).
-            host:       New target host (or null to keep current).
-            port:       New target port (or null to keep current).
-            data_hex:   New payload bytes as hex (or null to keep current).
-            tls:        New TLS setting (or null to keep current).
+            playbook_id: The playbook UUID.
+            label:       New name (or null to keep current).
+            host:        New target host (or null to keep current).
+            port:        New target port (or null to keep current).
+            tls:         New TLS setting (or null to keep current).
+            data_hex:    New bytes for the first frame as hex (or null to keep current).
 
         Returns:
-            Updated request dict, or {"ok": False} if not found.
+            Updated playbook dict, or {"ok": False} if not found.
         """
-        req = _forge_requests.get(request_id)
-        if req is None:
-            return {"ok": False, "error": f"Request '{request_id}' not found."}
-        if label    is not None: req.label = label
-        if host     is not None: req.host  = host
-        if port     is not None: req.port  = port
-        if tls      is not None: req.tls   = tls
+        pb = _playbooks.get(playbook_id)
+        if pb is None:
+            return {"ok": False, "error": f"Playbook '{playbook_id}' not found."}
+        if label is not None: pb.label = label
+        if host  is not None: pb.host  = host
+        if port  is not None: pb.port  = port
+        if tls   is not None: pb.tls   = tls
         if data_hex is not None:
             try:
-                req.current_bytes = bytes.fromhex(data_hex)
+                frame_bytes = bytes.fromhex(data_hex)
             except ValueError as exc:
                 return {"ok": False, "error": f"Invalid data hex: {exc}"}
-        return {"ok": True, "request": req.to_dict()}
+            hex_str = " ".join(frame_bytes.hex()[i:i+2] for i in range(0, len(frame_bytes.hex()), 2))
+            if pb.frames:
+                pb.frames[0].raw_hex = hex_str
+            else:
+                pb.frames.append(PlaybookFrame.create(label="frame-1", raw_hex=hex_str))
+        return {"ok": True, "playbook": pb.to_dict()}
 
     @mcp.tool()
-    def delete_forge_request(request_id: str) -> dict:
+    def delete_playbook(playbook_id: str) -> dict:
         """
-        Delete a forge request tab and its history.
+        Delete a playbook and its run history.
 
         Args:
-            request_id: The forge request UUID to delete.
+            playbook_id: The playbook UUID to delete.
         """
-        if request_id not in _forge_requests:
-            return {"ok": False, "error": f"Request '{request_id}' not found."}
-        del _forge_requests[request_id]
-        return {"ok": True, "request_id": request_id}
+        if playbook_id not in _playbooks:
+            return {"ok": False, "error": f"Playbook '{playbook_id}' not found."}
+        del _playbooks[playbook_id]
+        return {"ok": True, "playbook_id": playbook_id}
 
     @mcp.tool()
-    async def send_forge_request(request_id: str) -> dict:
+    async def run_playbook(playbook_id: str) -> dict:
         """
-        Send the current bytes of a forge request to its target.
-
-        Records the send+response in the request's history. Retrieve the
-        full history via get_forge_request().
+        Execute all frames in a playbook and record the run.
 
         Args:
-            request_id: The forge request UUID from list_forge_requests.
+            playbook_id: The playbook UUID from list_playbooks.
 
         Returns:
-            The ForgeRecord dict for this send, including received bytes.
+            The PlaybookRun dict including all traffic entries.
         """
-        req = _forge_requests.get(request_id)
-        if req is None:
-            return {"ok": False, "error": f"Request '{request_id}' not found."}
-        if not req.current_bytes:
-            return {"ok": False, "error": "Request has no bytes to send. Update it via update_forge_request()."}
+        pb = _playbooks.get(playbook_id)
+        if pb is None:
+            return {"ok": False, "error": f"Playbook '{playbook_id}' not found."}
+        if not pb.frames:
+            return {"ok": False, "error": "Playbook has no frames."}
 
-        record = await api.send_frame(
-            data=req.current_bytes,
-            host=req.host,
-            port=req.port,
-            tls=req.tls,
-        )
-        req.add_record(record)
-        return {"ok": True, "record": record.to_dict()}
+        try:
+            run = await api.run_playbook(pb)
+            pb.runs.append(run)
+            return {"ok": True, "run": run.to_dict()}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
 
     @mcp.tool()
     def frame_to_forge(
@@ -1074,18 +1073,17 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         label:      Optional[str] = None,
     ) -> dict:
         """
-        Create a forge request tab pre-loaded with a captured frame's bytes.
+        Create a playbook pre-loaded with a captured frame's bytes.
 
-        This is the MCP equivalent of "Send to Forge" in the UI. The new
-        tab targets the same server the session was talking to.
+        This is the MCP equivalent of Ctrl+R "Send to Forge" in the UI.
 
         Args:
             session_id: Session UUID containing the frame.
-            frame_id:   Frame UUID to load into forge.
-            label:      Name for the new tab (default: "From <session_id[:8]>").
+            frame_id:   Frame UUID to load into the playbook.
+            label:      Name for the new playbook (default: "From <session_id[:8]>").
 
         Returns:
-            The new forge request dict.
+            The new playbook dict.
         """
         session = api.get_session(session_id)
         if session is None:
@@ -1095,16 +1093,23 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         if frame is None:
             return {"ok": False, "error": f"Frame '{frame_id}' not found in session."}
 
-        req = ForgeRequest.create(
+        from protopoke.models import Direction as _Dir
+        direction = (
+            "client_to_server"
+            if frame.direction is _Dir.CLIENT_TO_SERVER
+            else "server_to_client"
+        )
+        pb = Playbook.create(
             label=label or f"From {session_id[:8]}",
             host=session.info.server_host,
             port=session.info.server_port,
             tls=api.config.tls_upstream,
-            current_bytes=frame.raw_bytes,
             source_session_id=session_id,
         )
-        _forge_requests[req.id] = req
-        return {"ok": True, "request": req.to_dict()}
+        hex_str = " ".join(frame.raw_bytes.hex()[i:i+2] for i in range(0, len(frame.raw_bytes.hex()), 2))
+        pb.frames.append(PlaybookFrame.create(label=f"frame-{frame.sequence_number}", raw_hex=hex_str, direction=direction))
+        _playbooks[pb.id] = pb
+        return {"ok": True, "playbook": pb.to_dict()}
 
     # ------------------------------------------------------------------ #
     # Replay                                                                #

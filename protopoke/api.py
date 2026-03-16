@@ -67,8 +67,8 @@ from .events.bus import (
     FrameCapturedEvent,
 )
 from .tamper.controller import QueuedTamperController
-from .forge.engine import ForgeEngine, ForgeResult
-from .forge.models import ForgeRecord, ForgeRequest
+from .forge.engine import ForgeEngine, ForgeResult, PlaybookEngine, SendResult
+from .forge.models import Playbook, PlaybookRun, TrafficEntry
 from .rules.engine import RulesEngine, InterceptFilter
 from .rules.rule import ReplaceRule, InterceptRule
 from .storage.base import StorageBackend, NullStorageBackend
@@ -76,8 +76,6 @@ from .protocol.base import ProtocolDecoder, ProtocolEncoder, PassthroughDecoder
 from .fuzzing.models import FuzzCampaign, FuzzResult
 from .fuzzing.engine import FuzzerEngine
 from .fuzzing.mutators.base import FrameMutator
-from .sequence.models import HistoryEntry, SequenceSession
-from .sequence.engine import SequenceEngine
 
 logger = logging.getLogger(__name__)
 
@@ -680,7 +678,7 @@ class ProxyAPI:
         data:             bytes,
         receive_timeout:  Optional[float] = None,
         packet_callback:  Optional[Callable[[bytes], None]] = None,
-    ) -> ForgeRecord:
+    ) -> SendResult:
         """
         Send *data* through an existing persistent forge session.
 
@@ -695,7 +693,7 @@ class ProxyAPI:
                              the proxy's configured connect timeout.
 
         Returns:
-            :class:`~protopoke.forge.models.ForgeRecord` with the response.
+            :class:`~protopoke.forge.engine.SendResult` with the response.
         """
         recv_timeout = receive_timeout if receive_timeout is not None else self.config.connect_timeout
         session_before = self.session_registry.get(session_id)
@@ -817,26 +815,16 @@ class ProxyAPI:
         connect_timeout:  Optional[float] = None,
         receive_timeout:  Optional[float] = None,
         packet_callback:  Optional[Callable[[bytes], None]] = None,
-    ) -> ForgeRecord:
+    ) -> SendResult:
         """
-        Send raw bytes to *host*:*port* and return a :class:`ForgeRecord`.
+        Send raw bytes to *host*:*port* and return a :class:`SendResult`.
 
         Opens a direct TCP connection (bypassing the proxy listener),
         sends *data*, signals EOF, reads all response bytes, then closes
-        the connection.  Suitable for the Forge tab's one-shot send.
-
-        Args:
-            data:             Bytes to send.
-            host:             Target hostname or IP address.
-            port:             Target TCP port.
-            tls:              Wrap the connection in TLS (no cert verification).
-            connect_timeout:  Override the default connect timeout.
-            receive_timeout:  Seconds to wait for the server response.  When
-                              the deadline is reached the bytes received so far
-                              are returned.  Defaults to the connect timeout.
+        the connection.
 
         Returns:
-            :class:`~protopoke.forge.models.ForgeRecord` with sent bytes,
+            :class:`~protopoke.forge.engine.SendResult` with sent bytes,
             response bytes, success flag, and any error message.
         """
         # Create a one-shot session so the sent/received frames appear in the Traffic tab.
@@ -894,143 +882,124 @@ class ProxyAPI:
     # Sequence
     # ------------------------------------------------------------------
 
-    async def run_sequence(
+    async def run_playbook(
         self,
-        seq:               SequenceSession,
-        on_entry:          Optional[Callable[[HistoryEntry], None]] = None,
-    ) -> None:
+        playbook:  Playbook,
+        on_entry:  Optional[Callable[[TrafficEntry], None]] = None,
+    ) -> PlaybookRun:
         """
-        Execute a :class:`~protopoke.sequence.models.SequenceSession`.
+        Execute a Playbook: send each frame in order and record all traffic.
 
-        Resolves ``##VAR##`` placeholders in each step, calls optional script
-        hooks, sends packets, and records the flat history log.
+        Connection mode is determined by ``playbook.source_session_id``:
 
-        Connection mode is determined by ``seq.source_session_id``:
-
-        - **Set**: inject each step's bytes into the named existing proxy
-          session and capture ``SERVER_TO_CLIENT`` frames within the
-          configured ``response_window``.
+        - **Set**: inject bytes into the named existing proxy session and
+          capture response frames within the configured ``response_window``.
         - **Not set**: open (or reuse) a persistent TCP connection to
-          ``seq.host:seq.port`` (with optional TLS) and use the forge
-          session mechanism.
+          ``playbook.host:playbook.port`` and use the forge session mechanism.
+
+        Global replace rules (scope="forge") are applied before each send.
 
         Args:
-            seq:      The sequence to run.  Updated in-place (history, variables).
-            on_entry: Optional callback invoked immediately after each
-                      :class:`~protopoke.sequence.models.HistoryEntry` is
-                      created, allowing live UI updates.
+            playbook:  The playbook to run.
+            on_entry:  Optional callback invoked immediately after each
+                       :class:`~protopoke.forge.models.TrafficEntry` is
+                       created, for live UI updates.
+
+        Returns:
+            The completed :class:`~protopoke.forge.models.PlaybookRun`.
+            The caller is responsible for appending it to ``playbook.runs``.
         """
         import asyncio as _asyncio
         import time as _time
 
-        engine = SequenceEngine()
+        engine = PlaybookEngine()
 
-        # ------------------------------------------------------------------
-        # Build the send_fn based on connection mode
-        # ------------------------------------------------------------------
-
-        if seq.source_session_id:
-            # Session-linked: inject into an existing proxy session.
-            # Direction routes the bytes to the appropriate side:
-            #   client_to_server → inject_to_server (normal client traffic)
-            #   server_to_client → inject_to_client (push data toward the client)
-            _src_id = seq.source_session_id
+        if playbook.source_session_id:
+            _src_id = playbook.source_session_id
 
             async def send_fn(data: bytes, direction: str = "client_to_server") -> list[bytes]:
-                # Apply replace rules with sequence scope before sending
                 _dir = (
                     Direction.CLIENT_TO_SERVER
                     if direction == "client_to_server"
                     else Direction.SERVER_TO_CLIENT
                 )
-                data = self.rules_engine.apply_bytes(data, _dir, scope="sequence")
+                data = self.rules_engine.apply_bytes(data, _dir, scope="forge")
                 send_time = _time.time()
                 if direction == "server_to_client":
                     ok = await self.inject_to_client(_src_id, data)
                     if not ok:
-                        logger.warning(
-                            "Sequence: inject_to_client on %s failed", _src_id[:8]
-                        )
+                        logger.warning("Playbook: inject_to_client on %s failed", _src_id[:8])
                         return []
-                    # Collect client-to-server frames that arrive after injection
-                    await _asyncio.sleep(seq.response_window)
+                    await _asyncio.sleep(playbook.response_window)
                     session = self.get_session(_src_id)
                     if not session:
                         return []
                     return [
-                        f.raw_bytes
-                        for f in session.frames
+                        f.raw_bytes for f in session.frames
                         if f.direction is Direction.CLIENT_TO_SERVER
                         and f.timestamp >= send_time
                     ]
                 else:
                     ok = await self.inject_to_server(_src_id, data)
                     if not ok:
-                        logger.warning(
-                            "Sequence: inject_to_server on %s failed", _src_id[:8]
-                        )
+                        logger.warning("Playbook: inject_to_server on %s failed", _src_id[:8])
                         return []
-                    await _asyncio.sleep(seq.response_window)
+                    await _asyncio.sleep(playbook.response_window)
                     session = self.get_session(_src_id)
                     if not session:
                         return []
                     return [
-                        f.raw_bytes
-                        for f in session.frames
+                        f.raw_bytes for f in session.frames
                         if f.direction is Direction.SERVER_TO_CLIENT
                         and f.timestamp >= send_time
                     ]
 
         else:
-            # New / persistent connection via the forge session pool.
-            # server_to_client direction is not supported without an active proxy
-            # session; log a warning and skip the response wait.
-            _conn_id: list[Optional[str]] = [None]  # mutable cell
+            _conn_id: list[Optional[str]] = [None]
 
             async def send_fn(data: bytes, direction: str = "client_to_server") -> list[bytes]:  # type: ignore[misc]
                 if direction == "server_to_client":
                     logger.warning(
-                        "Sequence: server_to_client step requires a linked proxy "
-                        "session (set Session ID in the run bar); skipping step."
+                        "Playbook: server_to_client frame requires a linked proxy "
+                        "session (set Session ID in the playbook); skipping frame."
                     )
                     return []
 
-                # Apply replace rules with sequence scope before sending
-                _dir = Direction.CLIENT_TO_SERVER
-                data = self.rules_engine.apply_bytes(data, _dir, scope="sequence")
+                data = self.rules_engine.apply_bytes(
+                    data, Direction.CLIENT_TO_SERVER, scope="forge"
+                )
 
-                # Verify the persistent connection is still alive
                 if _conn_id[0]:
                     session = self.get_session(_conn_id[0])
                     if not (session and session.is_active()):
                         _conn_id[0] = None
 
-                # Open a new connection if needed
                 if _conn_id[0] is None:
                     try:
                         _conn_id[0] = await self.open_forge_session(
-                            seq.host, seq.port, seq.tls
+                            playbook.host, playbook.port, playbook.tls
                         )
                     except ConnectionError as exc:
-                        logger.error("Sequence: cannot connect: %s", exc)
+                        logger.error("Playbook: cannot connect: %s", exc)
                         return []
 
-                record = await self.send_on_forge_session(
+                result = await self.send_on_forge_session(
                     session_id=_conn_id[0],
                     data=data,
-                    receive_timeout=seq.response_window,
+                    receive_timeout=playbook.response_window,
                 )
 
-                # If server closed the connection, clear the cell
                 if _conn_id[0]:
                     s = self.get_session(_conn_id[0])
                     if s and not s.is_active():
                         _conn_id[0] = None
 
-                return record.response_packets
+                return result.response_packets
 
-        await engine.run(seq, send_fn=send_fn, on_entry=on_entry,
-                         global_variables=self.variables)
+        return await engine.run(
+            playbook, send_fn=send_fn, on_entry=on_entry,
+            global_variables=self.variables,
+        )
 
     # ------------------------------------------------------------------
     # Replace rules management
