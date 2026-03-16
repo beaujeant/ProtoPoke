@@ -237,7 +237,7 @@ class ConfigTab(Widget):
             yield Static("  Framing", classes="section-header")
             with Horizontal(classes="field-row"):
                 yield Label("Framer:", classes="field-label")
-                yield Button("Edit", id="btn-framer-edit", classes="btn-framer-edit")
+                yield Button("✎ Edit", id="btn-framer-edit", variant="primary", classes="btn-framer-edit")
                 yield Static(
                     _framer_summary(self._framer_name, self._framer_kwargs, self._custom_framer_path),
                     id="framer-summary",
