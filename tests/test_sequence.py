@@ -10,13 +10,12 @@ from typing import List
 
 import pytest
 
-from protopoke.sequence.models import HistoryEntry, SequenceSession, SequenceFrame, SequenceStep
+from protopoke.sequence.models import HistoryEntry, SequenceSession, SequenceFrame
 from protopoke.sequence.variables import resolve_hex
 from protopoke.sequence.engine import SequenceEngine, load_script
 
 
 # ---------------------------------------------------------------------------
-# SequenceFrame (also accessible as SequenceStep for backward compatibility)
 # ---------------------------------------------------------------------------
 
 class TestSequenceFrame:
@@ -52,10 +51,6 @@ class TestSequenceFrame:
         assert restored.label == frame.label
         assert restored.raw_hex == frame.raw_hex
 
-    def test_backward_compat_alias(self):
-        """SequenceStep is an alias for SequenceFrame."""
-        assert SequenceStep is SequenceFrame
-
 
 # ---------------------------------------------------------------------------
 # HistoryEntry
@@ -80,18 +75,6 @@ class TestHistoryEntry:
         assert restored.raw_bytes == entry.raw_bytes
         assert restored.direction == entry.direction
         assert restored.frame_label == entry.frame_label
-
-    def test_backward_compat_step_label(self):
-        """Old serialised data with 'step_label' key should still deserialise correctly."""
-        old_dict = {
-            "id": "test-id",
-            "timestamp": 0.0,
-            "direction": "sent",
-            "raw_bytes": "aabb",
-            "step_label": "old-step",
-        }
-        entry = HistoryEntry.from_dict(old_dict)
-        assert entry.frame_label == "old-step"
 
 
 # ---------------------------------------------------------------------------
@@ -125,17 +108,6 @@ class TestSequenceSession:
         assert restored.frames[0].label == "f1"
         assert restored.variables["X"] == "deadbeef"
         assert len(restored.history) == 1
-
-    def test_backward_compat_steps_key(self):
-        """Old serialised data with 'steps' key should still deserialise correctly."""
-        seq = SequenceSession.create("Old")
-        old_dict = seq.to_dict()
-        # Simulate old format: rename "frames" → "steps"
-        old_dict["steps"] = old_dict.pop("frames")
-        old_dict["steps"].append(SequenceFrame.create("s1", "01 02").to_dict())
-        restored = SequenceSession.from_dict(old_dict)
-        assert len(restored.frames) == 1
-        assert restored.frames[0].label == "s1"
 
 
 # ---------------------------------------------------------------------------

@@ -111,10 +111,6 @@ class SequenceFrame:
         )
 
 
-# Backward-compatibility alias: old code/tests may import SequenceStep.
-SequenceStep = SequenceFrame
-
-
 # ---------------------------------------------------------------------------
 # HistoryEntry
 # ---------------------------------------------------------------------------
@@ -174,8 +170,7 @@ class HistoryEntry:
             timestamp=d["timestamp"],
             direction=d["direction"],
             raw_bytes=bytes.fromhex(d["raw_bytes"]),
-            # Accept both new "frame_label" and old "step_label" for backward compatibility
-            frame_label=d.get("frame_label", d.get("step_label", "")),
+            frame_label=d.get("frame_label", ""),
         )
 
 
@@ -248,8 +243,7 @@ class SequenceSession:
 
     @classmethod
     def from_dict(cls, d: dict) -> "SequenceSession":
-        # Accept both new "frames" key and old "steps" key for backward compatibility
-        raw_frames = d.get("frames", d.get("steps", []))
+        raw_frames = d.get("frames", [])
         return cls(
             id=d["id"],
             label=d["label"],
