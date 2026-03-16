@@ -1,34 +1,14 @@
 """
-SequenceEngine — runs a sequence of packets with variable substitution and
-optional script hooks.
+SequenceEngine — runs a sequence of packets with variable substitution.
 
 The engine is deliberately decoupled from ProxyAPI: it receives the network
 I/O as a single async callable (``send_fn``) so that the caller (ProxyAPI or
 tests) can wire in any transport without introducing import cycles.
-
-Script hooks
-------------
-The script at ``config.sequence_script`` (if configured) may define:
-
-    def on_send(data: bytes, variables: dict, frame_idx: int, frame_label: str) -> bytes:
-        '''Called just before each packet is sent (after {{VAR}} substitution).
-        Return the bytes to actually put on the wire.  If not defined, the
-        substituted bytes are sent as-is.'''
-
-    def on_response(response: bytes, variables: dict, frame_idx: int, frame_label: str) -> None:
-        '''Called after the server's response is collected for one frame.
-        Mutate ``variables`` in-place to capture values for subsequent frames.
-        ``response`` is the concatenation of all received packets for this frame.'''
-
-Both hooks are optional.  A script that only defines ``on_response`` is the
-common case: extract session tokens, increment counters, etc.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import logging
-import types
 from typing import Awaitable, Callable, Dict, List, Optional
 
 from .models import HistoryEntry, SequenceSession
@@ -40,23 +20,6 @@ logger = logging.getLogger(__name__)
 # Receives the bytes to send and the frame direction ("client_to_server" or
 # "server_to_client"), returns the list of received packets (may be empty).
 SendFn = Callable[[bytes, str], Awaitable[List[bytes]]]
-
-
-def load_script(path: str) -> types.ModuleType:
-    """
-    Dynamically load a Python script from *path* and return the module.
-
-    Raises:
-        ValueError:      If the file spec cannot be determined.
-        FileNotFoundError: If the file does not exist.
-        Any exception raised during module execution.
-    """
-    spec = importlib.util.spec_from_file_location("_sequence_script", path)
-    if spec is None or spec.loader is None:
-        raise ValueError(f"Cannot create module spec for: {path}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)  # type: ignore[union-attr]
-    return mod
 
 
 class SequenceEngine:
@@ -71,44 +34,48 @@ class SequenceEngine:
             # open connection, send data, collect + return response packets
             ...
 
-        script = load_script("/path/to/my_protocol.py")
-        await engine.run(seq, send_fn=send_fn, script=script)
+        await engine.run(seq, send_fn=send_fn)
     """
 
     async def run(
         self,
-        seq:      SequenceSession,
-        send_fn:  SendFn,
-        script:   Optional[types.ModuleType] = None,
-        on_entry: Optional[Callable[[HistoryEntry], None]] = None,
+        seq:              SequenceSession,
+        send_fn:          SendFn,
+        on_entry:         Optional[Callable[[HistoryEntry], None]] = None,
+        global_variables: Optional[Dict[str, str]] = None,
     ) -> None:
         """
         Execute all frames in *seq* in order.
 
         For each frame:
           1. Resolve ``{{VAR}}`` placeholders against the current variable store.
-          2. Call ``script.on_send`` (if defined) for advanced pre-send transforms.
-          3. Record a ``HistoryEntry`` (direction=sent).
-          4. Call ``send_fn(data)`` and collect received packets.
-          5. Record a ``HistoryEntry`` per received packet (direction=received).
-          6. Call ``script.on_response`` (if defined) to extract new variable values.
-
-        Variable changes from ``on_response`` are carried forward to all
-        subsequent frames.  At the end, ``seq.variables`` is updated in-place
-        with the final state.
+          2. Record a ``HistoryEntry`` (direction=sent).
+          3. Call ``send_fn(data)`` and collect received packets.
+          4. Record a ``HistoryEntry`` per received packet (direction=received).
 
         Args:
-            seq:      The sequence to run.  ``seq.history`` and
-                      ``seq.variables`` are updated in-place.
-            send_fn:  Async callable that sends bytes and returns the list of
-                      received packet chunks.
-            script:   Optional loaded module with ``on_send`` / ``on_response``
-                      hooks.  Pass ``None`` to skip script execution.
-            on_entry: Optional callback invoked immediately after each
-                      :class:`HistoryEntry` is created.  Useful for live UI
-                      updates without polling.
+            seq:              The sequence to run.  ``seq.history`` and
+                              ``seq.variables`` are updated in-place.
+            send_fn:          Async callable that sends bytes and returns the
+                              list of received packet chunks.
+            on_entry:         Optional callback invoked immediately after each
+                              :class:`HistoryEntry` is created.  Useful for
+                              live UI updates without polling.
+            global_variables: Optional global variable store shared across all
+                              pipelines.  Used as a fallback for ``{{VAR}}``
+                              placeholder resolution: sequence-local variables
+                              take priority; global variables fill in the rest.
+                              This allows a traffic script (e.g. on intercept)
+                              to capture a value and have the sequence use it
+                              via ``{{VAR}}`` without any extra plumbing.
         """
+        # Sequence-local variables take priority over global ones.
         variables: Dict[str, str] = dict(seq.variables)
+        _global = global_variables if global_variables is not None else {}
+
+        def _effective_vars() -> Dict[str, str]:
+            """Merge global (base) + local (override) for placeholder resolution."""
+            return {**_global, **variables}
 
         def _emit(entry: HistoryEntry) -> None:
             seq.history.append(entry)
@@ -120,7 +87,7 @@ class SequenceEngine:
             # 1. Resolve {{VAR}} placeholders
             # ------------------------------------------------------------------
             try:
-                data = resolve_hex(frame.raw_hex, variables)
+                data = resolve_hex(frame.raw_hex, _effective_vars())
             except ValueError as exc:
                 logger.error(
                     "Sequence frame %d (%r): placeholder resolution failed — %s",
@@ -129,28 +96,12 @@ class SequenceEngine:
                 continue
 
             # ------------------------------------------------------------------
-            # 2. on_send hook
-            # ------------------------------------------------------------------
-            if script is not None and hasattr(script, "on_send"):
-                try:
-                    result = script.on_send(data, variables, frame_idx, frame.label)
-                    if isinstance(result, (bytes, bytearray)):
-                        data = bytes(result)
-                    else:
-                        logger.warning(
-                            "on_send at frame %d returned %s (expected bytes); ignoring",
-                            frame_idx, type(result).__name__,
-                        )
-                except Exception as exc:
-                    logger.error("on_send hook raised at frame %d: %s", frame_idx, exc)
-
-            # ------------------------------------------------------------------
-            # 3. Record sent packet
+            # 2. Record sent packet
             # ------------------------------------------------------------------
             _emit(HistoryEntry.create_sent(data, frame.label))
 
             # ------------------------------------------------------------------
-            # 4. Send and collect response
+            # 3. Send and collect response
             # ------------------------------------------------------------------
             received_packets: list[bytes] = []
             try:
@@ -161,20 +112,10 @@ class SequenceEngine:
                 )
 
             # ------------------------------------------------------------------
-            # 5. Record received packets
+            # 4. Record received packets
             # ------------------------------------------------------------------
             for pkt in received_packets:
                 _emit(HistoryEntry.create_received(pkt, frame.label))
-
-            # ------------------------------------------------------------------
-            # 6. on_response hook
-            # ------------------------------------------------------------------
-            if script is not None and hasattr(script, "on_response"):
-                full_response = b"".join(received_packets)
-                try:
-                    script.on_response(full_response, variables, frame_idx, frame.label)
-                except Exception as exc:
-                    logger.error("on_response hook raised at frame %d: %s", frame_idx, exc)
 
         # Persist updated variable state back into the session
         seq.variables = variables

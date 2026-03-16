@@ -252,15 +252,6 @@ class ConfigTab(Widget):
                             placeholder="/path/to/protocol.yaml", classes="field-input")
                 yield Button("Browse", id="browse-proto-def", classes="btn-browse")
 
-            # ---- Sequence ----
-            yield Static("  Sequence", classes="section-header")
-            with Horizontal(classes="field-row"):
-                yield Label("Script path:", classes="field-label")
-                yield Input(value=cfg.sequence_script or "", id="sequence-script",
-                            placeholder="/path/to/my_protocol_script.py",
-                            classes="field-input")
-                yield Button("Browse", id="browse-sequence-script", classes="btn-browse")
-
             # ---- Misc ----
             yield Static("  Miscellaneous", classes="section-header")
             with Horizontal(classes="field-row"):
@@ -346,7 +337,6 @@ class ConfigTab(Widget):
         cfg.framer_kwargs      = dict(self._framer_kwargs)
         cfg.custom_framer_path = self._custom_framer_path
         cfg.protocol_definition_path = _str("proto-def") or None
-        cfg.sequence_script         = _str("sequence-script") or None
         cfg.log_level          = _sel("log-level") or "INFO"
         cfg.max_sessions       = _int("max-sessions", 0)
 
@@ -380,7 +370,6 @@ class ConfigTab(Widget):
             "browse-tls-cert":          "tls-cert",
             "browse-tls-key":           "tls-key",
             "browse-proto-def":         "proto-def",
-            "browse-sequence-script":  "sequence-script",
         }
         if btn_id in _browse_map:
             target_id = _browse_map[btn_id]
@@ -460,7 +449,6 @@ class ConfigTab(Widget):
         self._custom_framer_path = cfg.custom_framer_path
         self._update_framer_summary()
         _set("proto-def",         cfg.protocol_definition_path or "")
-        _set("sequence-script",  cfg.sequence_script or "")
         _sel("log-level",         cfg.log_level)
         _set("max-sessions", str(cfg.max_sessions))
 

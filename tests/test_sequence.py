@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import struct
-import tempfile
-import textwrap
-from pathlib import Path
 from typing import List
 
 import pytest
 
 from protopoke.sequence.models import HistoryEntry, SequenceSession, SequenceFrame
 from protopoke.sequence.variables import resolve_hex
-from protopoke.sequence.engine import SequenceEngine, load_script
+from protopoke.sequence.engine import SequenceEngine
 
 
 # ---------------------------------------------------------------------------
@@ -231,65 +228,6 @@ class TestSequenceEngine:
         assert sent[0] == b"\x01\xaa\xbb\x02"
 
     @pytest.mark.asyncio
-    async def test_run_with_on_response_hook(self):
-        """on_response captures a variable; next frame uses it."""
-        seq = SequenceSession.create("test")
-        seq.frames.append(SequenceFrame.create("handshake", "01"))
-        seq.frames.append(SequenceFrame.create("auth", "02 {{TOKEN}}"))
-
-        responses = [b"\x61\x62\xde\xad\xbe\xef", b""]
-
-        async def send_fn(data: bytes) -> list[bytes]:
-            return [responses.pop(0)] if responses else []
-
-        # Script: on_response extracts bytes 2..6 as TOKEN
-        script_src = textwrap.dedent("""\
-            def on_response(response, variables, frame_idx, frame_label):
-                if frame_idx == 0 and len(response) >= 6:
-                    variables['TOKEN'] = response[2:6].hex()
-        """)
-        script_mod = _load_script_from_source(script_src)
-
-        sent: list[bytes] = []
-        orig_send = send_fn
-
-        async def tracking_send_fn(data: bytes) -> list[bytes]:
-            sent.append(data)
-            return await orig_send(data)
-
-        engine = SequenceEngine()
-        await engine.run(seq, send_fn=tracking_send_fn, script=script_mod)
-
-        assert sent[0] == b"\x01"
-        # Second frame should have TOKEN=deadbeef substituted
-        assert sent[1] == b"\x02\xde\xad\xbe\xef"
-        # Variable persisted back to session
-        assert seq.variables.get("TOKEN") == "deadbeef"
-
-    @pytest.mark.asyncio
-    async def test_run_with_on_send_hook(self):
-        """on_send can modify the bytes before sending."""
-        seq = SequenceSession.create("test")
-        seq.frames.append(SequenceFrame.create("f1", "01 02"))
-
-        script_src = textwrap.dedent("""\
-            def on_send(data, variables, frame_idx, frame_label):
-                return bytes([b ^ 0xff for b in data])
-        """)
-        script_mod = _load_script_from_source(script_src)
-
-        sent: list[bytes] = []
-
-        async def send_fn(data: bytes) -> list[bytes]:
-            sent.append(data)
-            return []
-
-        engine = SequenceEngine()
-        await engine.run(seq, send_fn=send_fn, script=script_mod)
-        # 01 02 XOR ff = fe fd
-        assert sent[0] == b"\xfe\xfd"
-
-    @pytest.mark.asyncio
     async def test_run_skips_frame_on_resolve_error(self):
         """A frame with an undefined variable is skipped, others still run."""
         seq = SequenceSession.create("test")
@@ -307,50 +245,3 @@ class TestSequenceEngine:
         assert len(sent) == 1
         assert sent[0] == b"\x02\x03"
 
-    @pytest.mark.asyncio
-    async def test_variables_persist_after_run(self):
-        seq = SequenceSession.create("test")
-        seq.frames.append(SequenceFrame.create("f1", "01"))
-
-        script_src = textwrap.dedent("""\
-            def on_response(response, variables, frame_idx, frame_label):
-                variables['CAPTURED'] = 'cafebabe'
-        """)
-        script_mod = _load_script_from_source(script_src)
-
-        async def send_fn(data):
-            return [b"\xff"]
-
-        engine = SequenceEngine()
-        await engine.run(seq, send_fn=send_fn, script=script_mod)
-        assert seq.variables.get("CAPTURED") == "cafebabe"
-
-
-# ---------------------------------------------------------------------------
-# load_script
-# ---------------------------------------------------------------------------
-
-class TestLoadScript:
-    def test_load_valid_script(self, tmp_path):
-        script_file = tmp_path / "myscript.py"
-        script_file.write_text("def on_response(r, v, i, l): v['X'] = 'aa'")
-        mod = load_script(str(script_file))
-        variables: dict = {}
-        mod.on_response(b"", variables, 0, "")
-        assert variables["X"] == "aa"
-
-    def test_load_missing_file(self, tmp_path):
-        with pytest.raises(Exception):
-            load_script(str(tmp_path / "nonexistent.py"))
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _load_script_from_source(source: str):
-    """Create a module from a source string (for tests only)."""
-    import types
-    mod = types.ModuleType("_test_script")
-    exec(compile(source, "<test>", "exec"), mod.__dict__)  # noqa: S102
-    return mod

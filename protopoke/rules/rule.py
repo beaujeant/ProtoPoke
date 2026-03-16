@@ -374,7 +374,11 @@ class ReplaceRule:
 
     ``"script"``
         A Python script at ``script_path`` that exports an
-        ``apply(data: bytes) -> bytes`` function.
+        ``apply(data: bytes, variables: dict) -> bytes`` function.
+        ``variables`` is the shared global variable store; scripts can read
+        from or write to it to pass state between pipelines (e.g. save a
+        captured token in traffic, then use it in a sequence via
+        ``{{VAR}}``).
 
     Scope flags control which pipeline stages apply the rule:
 
@@ -461,16 +465,20 @@ class ReplaceRule:
     # Apply
     # ------------------------------------------------------------------
 
-    def apply(self, data: bytes, scope: Optional[str] = None) -> bytes:
+    def apply(self, data: bytes, scope: Optional[str] = None,
+              variables: Optional[dict] = None) -> bytes:
         """
         Apply the substitution to *data*.
 
         Args:
-            data:  The bytes to transform.
-            scope: Optional scope name — ``"intercept"`` (relay pipeline),
-                   ``"forge"``, or ``"sequence"``.  When set and the
-                   corresponding ``apply_to_*`` flag is ``False``, the rule
-                   is skipped.
+            data:      The bytes to transform.
+            scope:     Optional scope name — ``"intercept"`` (relay pipeline),
+                       ``"forge"``, or ``"sequence"``.  When set and the
+                       corresponding ``apply_to_*`` flag is ``False``, the rule
+                       is skipped.
+            variables: Optional shared global variable store.  Passed to
+                       script-type rules so that ``apply(data, variables)``
+                       hooks can read and write cross-pipeline state.
 
         Returns modified bytes, or *data* unchanged if the rule does not
         apply or does not match.
@@ -496,12 +504,24 @@ class ReplaceRule:
             return self.regex_compiled.sub(repl_bytes, data)
 
         elif self.rule_type == "script":
-            return self._apply_script(data)
+            return self._apply_script(data, variables if variables is not None else {})
 
         return data
 
-    def _apply_script(self, data: bytes) -> bytes:
-        """Run the ``apply(data)`` hook in the configured script."""
+    def _apply_script(self, data: bytes, variables: dict) -> bytes:
+        """
+        Run the ``apply(data, variables)`` hook in the configured script.
+
+        ``variables`` is the shared global variable store.  The script may
+        read from it (e.g. to use a previously captured sequence number) or
+        write to it (e.g. to save a value extracted from traffic for use in
+        subsequent frames).  Mutations are visible to all pipelines
+        immediately.
+
+        If loading or execution raises any exception, the error is logged,
+        the cached module is cleared (so a fixed script reloads automatically
+        on the next frame), and the original data is returned unchanged.
+        """
         if not self.script_path:
             return data
         if self._script_module is None:
@@ -516,11 +536,26 @@ class ReplaceRule:
         try:
             fn = getattr(self._script_module, "apply", None)
             if fn is None:
+                logger.warning(
+                    "Replace rule %r: script %s has no apply() function",
+                    self.label, self.script_path,
+                )
                 return data
-            result = fn(data)
-            return bytes(result) if isinstance(result, (bytes, bytearray)) else data
+            result = fn(data, variables)
+            if not isinstance(result, (bytes, bytearray)):
+                logger.error(
+                    "Replace rule %r: apply() returned %s, expected bytes; skipping",
+                    self.label, type(result).__name__,
+                )
+                return data
+            return bytes(result)
         except Exception as exc:
-            logger.error("Replace rule %r: script apply() raised: %s", self.label, exc)
+            logger.error(
+                "Replace rule %r: apply() raised %s: %s; script will reload on next frame",
+                self.label, type(exc).__name__, exc,
+            )
+            # Clear the cache so a fixed script on disk is reloaded automatically.
+            self._script_module = None
             return data
 
     def reset_script_state(self) -> None:
