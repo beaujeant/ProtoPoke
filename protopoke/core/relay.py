@@ -337,33 +337,34 @@ class BidirectionalRelay:
         """
         session_label = self._session.id[:8]
 
+        # Track which direction finishes first.  Using a list as a mutable
+        # one-element container so the inner closures can write to it.
+        # asyncio is single-threaded so no locking is needed.
+        first_done: list[Direction] = []
+
+        async def _run_upstream() -> None:
+            await self._upstream.run()
+            # Only reached on normal completion (CancelledError is re-raised
+            # by DirectionalRelay.run(), so this line is skipped on cancel).
+            if not first_done:
+                first_done.append(Direction.CLIENT_TO_SERVER)
+
+        async def _run_downstream() -> None:
+            await self._downstream.run()
+            if not first_done:
+                first_done.append(Direction.SERVER_TO_CLIENT)
+
         upstream_task = asyncio.create_task(
-            self._upstream.run(),
+            _run_upstream(),
             name=f"relay-up-{session_label}",
         )
         downstream_task = asyncio.create_task(
-            self._downstream.run(),
+            _run_downstream(),
             name=f"relay-down-{session_label}",
         )
 
         try:
-            # Use asyncio.wait(FIRST_COMPLETED) to detect which side
-            # disconnected first, then wait for the remaining task.
-            done, pending = await asyncio.wait(
-                {upstream_task, downstream_task},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            # The first task to finish tells us who disconnected first.
-            if upstream_task in done and downstream_task not in done:
-                self.first_disconnect_direction = Direction.CLIENT_TO_SERVER
-            elif downstream_task in done and upstream_task not in done:
-                self.first_disconnect_direction = Direction.SERVER_TO_CLIENT
-            # If both finished simultaneously, first_disconnect_direction stays None.
-
-            # Wait for the remaining relay to drain and finish.
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
-
+            await asyncio.gather(upstream_task, downstream_task, return_exceptions=True)
         except asyncio.CancelledError:
             upstream_task.cancel()
             downstream_task.cancel()
@@ -373,6 +374,8 @@ class BidirectionalRelay:
             )
             raise
         finally:
+            # Record which side disconnected first (None when cancelled).
+            self.first_disconnect_direction = first_done[0] if first_done else None
             # Both relay directions have finished. Now do the final close
             # of all writers to release socket resources.
             await self._close_all_writers()
