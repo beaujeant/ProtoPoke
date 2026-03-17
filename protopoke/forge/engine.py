@@ -230,6 +230,11 @@ class ForgeEngine:
             tuple[asyncio.StreamWriter, bool, asyncio.Queue, asyncio.Task]
         ] = {}
 
+    def update_framer(self, framer_name: str, framer_kwargs: dict) -> None:
+        """Update the framer used for all future forge and playbook operations."""
+        self._framer_name   = framer_name
+        self._framer_kwargs = framer_kwargs
+
     async def forge_session(
         self,
         session_id:      str,
