@@ -264,9 +264,9 @@ class ProtoPoke(App):
         Changes that are applied immediately:
         - Protocol definition: reloaded via api.set_protocol_file()
         - Log level: applied to the root logger
+        - Framing: hot-swapped on all active sessions via api.set_framer()
         Changes that apply to new connections / next run (no extra action needed,
         they are read from api.config at the relevant time):
-        - Framing (new connections use updated framer_name / framer_kwargs)
         - Sequence script (loaded fresh at the start of each run)
         - Max sessions (checked per new connection)
         """
@@ -292,6 +292,22 @@ class ProtoPoke(App):
             _logging.getLogger().setLevel(cfg.log_level)
         except Exception:
             pass
+
+        # Framing — hot-swap on all active sessions so the next received
+        # chunk uses the new framer without requiring a session restart.
+        try:
+            swapped = self.api.set_framer(
+                framer_name=cfg.framer_name,
+                framer_kwargs=cfg.framer_kwargs,
+                custom_framer_path=cfg.custom_framer_path,
+            )
+            if swapped:
+                self.notify(
+                    f"Framer updated on {swapped} active session(s).",
+                    severity="information",
+                )
+        except Exception as exc:
+            self.notify(f"Framer hot-swap failed: {exc}", severity="warning")
 
     # ------------------------------------------------------------------
     # Tab switching actions

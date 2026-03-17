@@ -108,6 +108,10 @@ class ProxyEngine:
         # server → client traffic from outside the normal relay path).
         self._session_client_writers: dict[str, asyncio.StreamWriter] = {}
 
+        # session_id → BidirectionalRelay (active sessions only).
+        # Used to hot-swap framers on running sessions without restarting.
+        self._session_relays: dict[str, BidirectionalRelay] = {}
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -264,6 +268,7 @@ class ProxyEngine:
         self._session_client_writers[session.id] = client_writer
         await self.event_bus.publish(SessionOpenedEvent(session=session.info))
 
+
         # Create one framer per direction.
         # If a custom framer file is configured, load the factory and
         # instantiate both adapters with a shared state dict so the user
@@ -301,6 +306,9 @@ class ProxyEngine:
             rules_engine=self.rules_engine,
         )
 
+        # Track the relay so we can hot-swap framers on running sessions.
+        self._session_relays[session.id] = relay
+
         # Run the relay as a tracked background task
         task = asyncio.create_task(
             self._run_session(session, relay),
@@ -336,6 +344,7 @@ class ProxyEngine:
         finally:
             self._session_server_writers.pop(session.id, None)
             self._session_client_writers.pop(session.id, None)
+            self._session_relays.pop(session.id, None)
             # Use the most specific closed state based on who disconnected first.
             if relay.first_disconnect_direction is Direction.CLIENT_TO_SERVER:
                 self.session_registry.mark_client_disconnected(session.id)
@@ -345,6 +354,52 @@ class ProxyEngine:
                 self.session_registry.mark_closed(session.id)
             await self.event_bus.publish(SessionClosedEvent(session=session.info))
             logger.info("Session %s done", session.id)
+
+    # ------------------------------------------------------------------
+    # Hot-swap framers
+    # ------------------------------------------------------------------
+
+    def swap_framers_on_all_sessions(self) -> int:
+        """
+        Hot-swap the framer on every active session to match the current config.
+
+        New framer instances are created from ``self.config`` (framer_name /
+        framer_kwargs / custom_framer_path) and installed on each running
+        relay.  Any partially-buffered bytes in the old framer are discarded
+        (the new framer starts clean).
+
+        Returns the number of sessions that were updated.
+        """
+        count = 0
+        for session_id, relay in list(self._session_relays.items()):
+            try:
+                if self.config.custom_framer_path:
+                    framer_factory = load_framer_from_file(self.config.custom_framer_path)
+                    shared_state: dict = {}
+                    client_framer = framer_factory(session_id, Direction.CLIENT_TO_SERVER, shared_state)
+                    server_framer = framer_factory(session_id, Direction.SERVER_TO_CLIENT, shared_state)
+                else:
+                    client_framer = create_framer(
+                        self.config.framer_name,
+                        session_id=session_id,
+                        direction=Direction.CLIENT_TO_SERVER,
+                        **self.config.framer_kwargs,
+                    )
+                    server_framer = create_framer(
+                        self.config.framer_name,
+                        session_id=session_id,
+                        direction=Direction.SERVER_TO_CLIENT,
+                        **self.config.framer_kwargs,
+                    )
+                relay.swap_framers(client_framer, server_framer)
+                count += 1
+            except Exception as exc:
+                logger.warning(
+                    "Failed to swap framer on session %s: %s", session_id[:8], exc
+                )
+        if count:
+            logger.info("Hot-swapped framer on %d active session(s)", count)
+        return count
 
     # ------------------------------------------------------------------
     # Forge injection

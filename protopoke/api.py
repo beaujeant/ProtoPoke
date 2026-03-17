@@ -412,6 +412,41 @@ class ProxyAPI:
         )
 
     # ------------------------------------------------------------------
+    # Framer hot-swap
+    # ------------------------------------------------------------------
+
+    def set_framer(
+        self,
+        framer_name: str,
+        framer_kwargs: Optional[dict] = None,
+        custom_framer_path: Optional[str] = None,
+    ) -> int:
+        """
+        Change the active framer and apply it immediately to all running sessions.
+
+        Updates ``config.framer_name``, ``config.framer_kwargs``, and
+        ``config.custom_framer_path``, then calls
+        ``ProxyEngine.swap_framers_on_all_sessions()`` so every active TCP
+        session switches to the new framing strategy for the next received
+        chunk of data.  No restart required.
+
+        Args:
+            framer_name:        Built-in framer key (``"raw"``, ``"delimiter"``,
+                                ``"length_prefix"``, ``"line"``) or ``"custom"``.
+            framer_kwargs:      Extra keyword arguments for the built-in framer
+                                (e.g. ``{"delimiter": b"\\n"}``).
+            custom_framer_path: Path to a Python file exporting ``on_data`` /
+                                ``on_flush`` when ``framer_name == "custom"``.
+
+        Returns:
+            Number of active sessions whose framer was swapped.
+        """
+        self.config.framer_name = framer_name
+        self.config.framer_kwargs = dict(framer_kwargs or {})
+        self.config.custom_framer_path = custom_framer_path
+        return self.engine.swap_framers_on_all_sessions()
+
+    # ------------------------------------------------------------------
     # Protocol decoder/encoder
     # ------------------------------------------------------------------
 

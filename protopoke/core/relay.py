@@ -243,6 +243,23 @@ class DirectionalRelay:
         except Exception as exc:
             logger.debug("EOF send error: %s", exc)
 
+    def swap_framer(self, new_framer: Framer) -> None:
+        """
+        Replace the active framer with *new_framer*.
+
+        Safe to call at any await point (asyncio is single-threaded).
+        Any data buffered in the old framer is discarded — the new framer
+        starts fresh.  This is intentional: a framer change implies a
+        protocol-boundary reset.
+        """
+        self._framer = new_framer
+        logger.debug(
+            "Framer swapped → %s [%s|%s]",
+            type(new_framer).__name__,
+            self._session.id[:8],
+            self._direction.value,
+        )
+
     def stop(self) -> None:
         """Request the relay to stop after its current read."""
         self._running = False
@@ -359,6 +376,16 @@ class BidirectionalRelay:
             # Both relay directions have finished. Now do the final close
             # of all writers to release socket resources.
             await self._close_all_writers()
+
+    def swap_framers(self, client_framer: Framer, server_framer: Framer) -> None:
+        """
+        Hot-swap the framers on both directions of this session.
+
+        Called while the relay is running to change the framing strategy
+        without interrupting the TCP connection.
+        """
+        self._upstream.swap_framer(client_framer)
+        self._downstream.swap_framer(server_framer)
 
     async def _close_all_writers(self) -> None:
         """Close all writers (best effort, ignore errors)."""
