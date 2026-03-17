@@ -85,7 +85,7 @@ class ProtoPoke(App):
         Binding("f3",           "switch_tab('tamper')",    "Tamper",    show=True),
         Binding("f4",           "switch_tab('forge')",     "Forge",     show=True),
         Binding("f5",           "switch_tab('fuzzer')",    "Fuzzer",    show=True),
-        Binding("ctrl+r",       "send_to_forge",           "→Forge",    show=False, priority=True),
+        Binding("ctrl+f",       "send_to_forge",           "→Forge",    show=False, priority=True),
         Binding("ctrl+n",       "new_project",             "New",       show=False),
         Binding("ctrl+o",       "open_project",            "Open",      show=False),
         Binding("ctrl+s",       "save_project",            "Save",      show=False),
@@ -302,9 +302,16 @@ class ProtoPoke(App):
         tabs.active = tab_id
 
     def action_send_to_forge(self) -> None:
-        """Ctrl+R — send the selected Traffic frame to Forge."""
+        """Ctrl+F — send the selected Traffic frame(s) to Forge."""
         traffic_tab = self.query_one("#traffic-tab", TrafficTab)
-        if traffic_tab._current_frame_id and traffic_tab._current_session_id:
+        if not traffic_tab._current_session_id:
+            self.notify("Select a frame in the Traffic tab first.", severity="warning")
+        elif len(traffic_tab._selected_frame_ids) > 1:
+            self.send_frames_to_forge(
+                traffic_tab._current_session_id,
+                list(traffic_tab._selected_frame_ids),
+            )
+        elif traffic_tab._current_frame_id:
             self.send_frame_to_forge(
                 traffic_tab._current_session_id, traffic_tab._current_frame_id
             )
@@ -424,7 +431,7 @@ class ProtoPoke(App):
             self.notify("Session not found.", severity="warning")
 
     def send_frame_to_forge(self, session_id: str, frame_id: str) -> None:
-        """Called by TrafficTab (Ctrl+R) — create a single-frame playbook in Forge."""
+        """Called by TrafficTab (Ctrl+F) — create a single-frame playbook in Forge."""
         session = self.api.get_session(session_id)
         if not session:
             return
