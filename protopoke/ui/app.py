@@ -224,7 +224,7 @@ class ProtoPoke(App):
     async def _start_proxy(self) -> None:
         try:
             # Rebuild the ProxyAPI so changes to config (especially
-            # tamper_enabled, framer_name) are picked up fresh.
+            # tamper_enabled) are picked up fresh.
             self._rebuild_api()
             await self.api.start()
             self._proxy_running = True
@@ -265,8 +265,7 @@ class ProtoPoke(App):
         - Protocol definition: reloaded via api.set_protocol_file()
         - Log level: applied to the root logger
         - Framing: hot-swapped on all active sessions via api.set_framer()
-        Changes that apply to new connections / next run (no extra action needed,
-        they are read from api.config at the relevant time):
+        Changes that apply on the next proxy run only:
         - Sequence script (loaded fresh at the start of each run)
         - Max sessions (checked per new connection)
         """
