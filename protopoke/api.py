@@ -444,6 +444,7 @@ class ProxyAPI:
         self.config.framer_name = framer_name
         self.config.framer_kwargs = dict(framer_kwargs or {})
         self.config.custom_framer_path = custom_framer_path
+        self.forge_engine.update_framer(framer_name, dict(framer_kwargs or {}))
         return self.engine.swap_framers_on_all_sessions()
 
     # ------------------------------------------------------------------
