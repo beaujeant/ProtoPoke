@@ -302,9 +302,16 @@ class ProtoPoke(App):
         tabs.active = tab_id
 
     def action_send_to_forge(self) -> None:
-        """Ctrl+R — send the selected Traffic frame to Forge."""
+        """Ctrl+R — send the selected Traffic frame(s) to Forge."""
         traffic_tab = self.query_one("#traffic-tab", TrafficTab)
-        if traffic_tab._current_frame_id and traffic_tab._current_session_id:
+        if not traffic_tab._current_session_id:
+            self.notify("Select a frame in the Traffic tab first.", severity="warning")
+        elif len(traffic_tab._selected_frame_ids) > 1:
+            self.send_frames_to_forge(
+                traffic_tab._current_session_id,
+                list(traffic_tab._selected_frame_ids),
+            )
+        elif traffic_tab._current_frame_id:
             self.send_frame_to_forge(
                 traffic_tab._current_session_id, traffic_tab._current_frame_id
             )

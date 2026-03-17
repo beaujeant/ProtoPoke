@@ -449,18 +449,15 @@ class TrafficTab(Widget):
 
         elif event.button.id == "btn-to-forge":
             event.stop()
-            if self._current_frame_id and self._current_session_id:
-                self.app.send_frame_to_forge(
-                    self._current_session_id, self._current_frame_id
-                )
-            else:
+            if not self._current_session_id:
                 self.notify("Select a frame first.", severity="warning")
-
-        elif event.button.id == "btn-to-forge":
-            event.stop()
-            if self._selected_frame_ids and self._current_session_id:
+            elif len(self._selected_frame_ids) > 1:
                 self.app.send_frames_to_forge(
                     self._current_session_id, list(self._selected_frame_ids)
+                )
+            elif self._current_frame_id:
+                self.app.send_frame_to_forge(
+                    self._current_session_id, self._current_frame_id
                 )
             else:
                 self.notify("Select a frame first.", severity="warning")
