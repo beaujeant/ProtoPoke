@@ -208,10 +208,7 @@ class ProtoPoke(App):
     def on_config_tab_applied(self, _event: ConfigTab.Applied) -> None:
         self._project.mark_dirty()
         self._update_title()
-        # If the proxy is already running, apply the changes that can take
-        # effect without a restart (protocol definition, log level, etc.)
-        if self._proxy_running:
-            self._apply_dynamic_config()
+        self._apply_dynamic_config()
 
     def on_config_tab_start_proxy(self, _event: ConfigTab.StartProxy) -> None:
         if not self._proxy_running:
@@ -257,9 +254,10 @@ class ProtoPoke(App):
 
     def _apply_dynamic_config(self) -> None:
         """
-        Apply config changes that can take effect while the proxy is running.
+        Apply config changes that take effect immediately without a proxy restart.
 
-        Called automatically by on_config_tab_applied() when _proxy_running is True.
+        Called automatically by on_config_tab_applied() every time the user
+        clicks Apply, regardless of whether the proxy is running.
 
         Changes that are applied immediately:
         - Protocol definition: reloaded via api.set_protocol_file()
