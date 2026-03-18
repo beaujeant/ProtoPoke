@@ -34,9 +34,15 @@ Why a separate API class:
 
 Usage example:
 
-    config = ProxyConfig(listen_port=8080, upstream_host="10.0.0.1",
-                         upstream_port=9090, tamper_enabled=True)
-    api = ProxyAPI(config)
+    from protopoke.config import ForwarderConfig, ProxyConfig
+
+    forwarders = [
+        ForwarderConfig(name="Default", config=ProxyConfig(
+            listen_port=8080, upstream_host="10.0.0.1", upstream_port=9090,
+            tamper_enabled=True,
+        )),
+    ]
+    api = ProxyAPI(forwarders)
     await api.start()
 
     # In another task:
@@ -166,12 +172,7 @@ class ProxyAPI:
 
     @property
     def config(self) -> ProxyConfig:
-        """
-        The first enabled forwarder's ProxyConfig, or a fallback default.
-
-        Provided for backward compatibility with code that references
-        ``api.config`` (e.g. forge timeout, legacy MCP tooling).
-        """
+        """The first enabled forwarder's ProxyConfig, or a fallback default."""
         for fwd in self.forwarders:
             if fwd.enabled:
                 return fwd.config
@@ -194,12 +195,7 @@ class ProxyAPI:
 
     @property
     def tls_handler(self) -> Optional[TLSHandler]:
-        """
-        TLSHandler from the first running engine, or the first engine overall.
-
-        Provided for backward compatibility with code that calls
-        ``api.tls_handler`` to export the CA certificate.
-        """
+        """TLSHandler from the first running engine, or the first engine overall."""
         for engine in self._engines.values():
             if engine._server is not None:
                 return engine.tls_handler
@@ -225,20 +221,6 @@ class ProxyAPI:
 
     async def start(self) -> None:
         """Start all enabled forwarders (non-blocking)."""
-        await self.start_all()
-
-    async def serve_forever(self) -> None:
-        """Start all enabled forwarders and block until stop() is called."""
-        await self.start_all()
-        self._serve_event = asyncio.Event()
-        await self._serve_event.wait()
-
-    async def stop(self) -> None:
-        """Stop all forwarders and release all resources."""
-        await self.stop_all()
-
-    async def start_all(self) -> None:
-        """Start all *enabled* forwarders concurrently."""
         for fwd in self.forwarders:
             if fwd.enabled:
                 await self.start_forwarder(fwd.name)
@@ -247,8 +229,14 @@ class ProxyAPI:
             sum(1 for f in self.forwarders if f.enabled),
         )
 
-    async def stop_all(self) -> None:
-        """Stop all running forwarders and release resources."""
+    async def serve_forever(self) -> None:
+        """Start all enabled forwarders and block until stop() is called."""
+        await self.start()
+        self._serve_event = asyncio.Event()
+        await self._serve_event.wait()
+
+    async def stop(self) -> None:
+        """Stop all forwarders and release all resources."""
         for name, engine in list(self._engines.items()):
             if engine._server is not None:
                 await engine.stop()
@@ -875,7 +863,7 @@ class ProxyAPI:
         Returns:
             :class:`~protopoke.forge.engine.SendResult` with the response.
         """
-        recv_timeout = receive_timeout if receive_timeout is not None else self.config.connect_timeout  # uses first forwarder's config
+        recv_timeout = receive_timeout if receive_timeout is not None else self.config.connect_timeout
         session_before = self.session_registry.get(session_id)
         was_active     = session_before is not None and session_before.is_active()
 

@@ -12,7 +12,7 @@ from textual.message import Message
 from textual.widgets import Footer, Header, Switch, TabbedContent, TabPane
 
 from ..api import ProxyAPI
-from ..config import ForwarderConfig, ProxyConfig
+from ..config import ForwarderConfig
 from ..models import Direction
 from ..events.bus import FrameCapturedEvent, SessionClosedEvent, SessionOpenedEvent, SessionUpdatedEvent
 from ..project.manager import ProjectManager, ProjectState
@@ -110,15 +110,10 @@ class ProtoPoke(App):
 
     def __init__(
         self,
-        config: Optional[ProxyConfig] = None,
         project: Optional[ProjectManager] = None,
     ) -> None:
         super().__init__()
         self._project = project or ProjectManager()
-        if config is not None:
-            # Legacy single-config entrypoint: wrap in the first forwarder
-            self._project.forwarders[0].config = config
-
         self.api = ProxyAPI(
             forwarders=self._project.forwarders,
             rules_engine=self._project.rules_engine,
@@ -505,7 +500,7 @@ class ProtoPoke(App):
             )
             if fwd:
                 return fwd.config.tls_upstream
-        return self.api.config.tls_upstream
+        return False
 
     def send_frame_to_forge(self, session_id: str, frame_id: str) -> None:
         """Called by TrafficTab (Ctrl+F) — create a single-frame playbook in Forge."""
