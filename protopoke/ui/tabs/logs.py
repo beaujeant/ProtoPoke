@@ -9,7 +9,7 @@ from typing import Deque
 from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import DataTable, Select, Static
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal
 
 import time as _time
 
@@ -30,23 +30,14 @@ _LEVEL_COLORS = {
 
 
 class _UILogHandler(logging.Handler):
-    """Stores log records in a deque and optionally notifies a callback."""
+    """Buffers log records in a deque; the tab polls this on an interval."""
 
     def __init__(self) -> None:
         super().__init__(level=logging.DEBUG)
         self._records: Deque[logging.LogRecord] = deque(maxlen=_MAX_RECORDS)
-        self._tab: "LogsTab | None" = None
 
     def emit(self, record: logging.LogRecord) -> None:
         self._records.append(record)
-        if self._tab is not None:
-            self._tab.call_from_thread(self._tab._append_record, record)
-
-    def attach(self, tab: "LogsTab") -> None:
-        self._tab = tab
-
-    def detach(self) -> None:
-        self._tab = None
 
     @property
     def records(self) -> list[logging.LogRecord]:
@@ -56,7 +47,6 @@ class _UILogHandler(logging.Handler):
 # Singleton handler — installed once at module import time so no records are
 # missed regardless of when the tab is first mounted.
 _handler = _UILogHandler()
-_handler.setFormatter(logging.Formatter("%(message)s"))
 logging.getLogger().addHandler(_handler)
 
 
@@ -120,6 +110,7 @@ class LogsTab(Widget):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._level_filter: int | None = None   # None = show all
+        self._seen_count: int = 0               # records already rendered
 
     def compose(self) -> ComposeResult:
         with Horizontal(classes="toolbar"):
@@ -139,14 +130,30 @@ class LogsTab(Widget):
         dt.add_column("Logger",  key="logger",  width=22)
         dt.add_column("Message", key="message")
 
-        # Attach this tab to the singleton handler so future records arrive
-        # via _append_record, then replay all buffered records.
-        _handler.attach(self)
-        for record in _handler.records:
-            self._insert_record(record)
+        # Render records already buffered before the tab was opened.
+        self._reload_table()
 
-    def on_unmount(self) -> None:
-        _handler.detach()
+        # Poll for new records every 200 ms (same cadence as intercept queue).
+        self.set_interval(0.2, self._poll_new_records)
+
+    # ------------------------------------------------------------------
+    # Polling — runs on the main Textual event-loop thread, no threading issues
+    # ------------------------------------------------------------------
+
+    def _poll_new_records(self) -> None:
+        records = _handler.records
+        new_records = records[self._seen_count:]
+        if not new_records:
+            return
+        self._seen_count = len(records)
+        dt = self.query_one("#logs-table", DataTable)
+        appended = False
+        for record in new_records:
+            if self._passes_filter(record):
+                self._insert_record_into(dt, record)
+                appended = True
+        if appended:
+            dt.scroll_end(animate=False)
 
     # ------------------------------------------------------------------
     # Level filter
@@ -156,17 +163,17 @@ class LogsTab(Widget):
         if event.select.id != "level-filter":
             return
         val = str(event.value)
-        if val == "ALL":
-            self._level_filter = None
-        else:
-            self._level_filter = getattr(logging, val, None)
+        self._level_filter = None if val == "ALL" else getattr(logging, val, None)
         self._reload_table()
 
     def _reload_table(self) -> None:
         dt = self.query_one("#logs-table", DataTable)
         dt.clear()
-        for record in _handler.records:
-            self._insert_record(record)
+        records = _handler.records
+        self._seen_count = len(records)
+        for record in records:
+            self._insert_record_into(dt, record)
+        dt.scroll_end(animate=False)
 
     # ------------------------------------------------------------------
     # Record display helpers
@@ -175,7 +182,7 @@ class LogsTab(Widget):
     def _passes_filter(self, record: logging.LogRecord) -> bool:
         return self._level_filter is None or record.levelno >= self._level_filter
 
-    def _insert_record(self, record: logging.LogRecord) -> None:
+    def _insert_record_into(self, dt: DataTable, record: logging.LogRecord) -> None:
         if not self._passes_filter(record):
             return
 
@@ -192,12 +199,4 @@ class LogsTab(Widget):
         color = _LEVEL_COLORS.get(record.levelno, "")
         level_cell = Text(level, style=color) if color else Text(level)
 
-        dt = self.query_one("#logs-table", DataTable)
         dt.add_row(ts, level_cell, logger, message)
-
-    def _append_record(self, record: logging.LogRecord) -> None:
-        """Called from the handler (on the main thread via call_from_thread)."""
-        self._insert_record(record)
-        # Scroll to keep the newest record visible
-        dt = self.query_one("#logs-table", DataTable)
-        dt.scroll_end(animate=False)
