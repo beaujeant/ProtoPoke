@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional, TYPE_CHECKING
+from typing import Awaitable, Callable, Optional, TYPE_CHECKING
 
 from ..models import Direction, Frame, InterceptAction
 from ..framing.base import Framer
@@ -290,16 +290,12 @@ class BidirectionalRelay:
         event_bus:            EventBus,
         read_buffer_size:     int = 4096,
         rules_engine:         "Optional[RulesEngine]" = None,
+        on_first_disconnect:  "Optional[Callable[[Direction], Awaitable[None]]]" = None,
     ) -> None:
-        self._session       = session
-        self._client_writer = client_writer
-        self._server_writer = server_writer
-
-        # Set by run() to identify who disconnected first.
-        # CLIENT_TO_SERVER → client closed connection first.
-        # SERVER_TO_CLIENT → server closed connection first.
-        # None → session was cancelled or both closed simultaneously.
-        self.first_disconnect_direction: Optional[Direction] = None
+        self._session              = session
+        self._client_writer        = client_writer
+        self._server_writer        = server_writer
+        self._on_first_disconnect  = on_first_disconnect
 
         self._upstream = DirectionalRelay(
             session=session,
@@ -348,11 +344,15 @@ class BidirectionalRelay:
             # by DirectionalRelay.run(), so this line is skipped on cancel).
             if not first_done:
                 first_done.append(Direction.CLIENT_TO_SERVER)
+                if self._on_first_disconnect:
+                    await self._on_first_disconnect(Direction.CLIENT_TO_SERVER)
 
         async def _run_downstream() -> None:
             await self._downstream.run()
             if not first_done:
                 first_done.append(Direction.SERVER_TO_CLIENT)
+                if self._on_first_disconnect:
+                    await self._on_first_disconnect(Direction.SERVER_TO_CLIENT)
 
         upstream_task = asyncio.create_task(
             _run_upstream(),
@@ -374,8 +374,6 @@ class BidirectionalRelay:
             )
             raise
         finally:
-            # Record which side disconnected first (None when cancelled).
-            self.first_disconnect_direction = first_done[0] if first_done else None
             # Both relay directions have finished. Now do the final close
             # of all writers to release socket resources.
             await self._close_all_writers()

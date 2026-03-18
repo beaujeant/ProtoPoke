@@ -14,7 +14,7 @@ from textual.widgets import Footer, Header, Switch, TabbedContent, TabPane
 from ..api import ProxyAPI
 from ..config import ProxyConfig
 from ..models import Direction
-from ..events.bus import FrameCapturedEvent, SessionClosedEvent, SessionOpenedEvent
+from ..events.bus import FrameCapturedEvent, SessionClosedEvent, SessionOpenedEvent, SessionUpdatedEvent
 from ..project.manager import ProjectManager, ProjectState
 from .modals.project import NewProjectModal, OpenProjectModal, SaveAsModal
 from .tabs.config import ConfigTab
@@ -166,11 +166,15 @@ class ProtoPoke(App):
         async def on_session_closed(event: SessionClosedEvent) -> None:
             self.post_message(_SessionClosed(event.session.id))
 
+        async def on_session_updated(event: SessionUpdatedEvent) -> None:
+            self.post_message(_SessionClosed(event.session.id))
+
         async def on_frame_captured(event: FrameCapturedEvent) -> None:
             self.post_message(_FrameCaptured(event.session.id, event.frame.id))
 
         self.api.on_session_opened(on_session_opened)
         self.api.on_session_closed(on_session_closed)
+        self.api.on_session_updated(on_session_updated)
         self.api.on_frame_captured(on_frame_captured)
 
     def on__session_opened(self, msg: _SessionOpened) -> None:

@@ -64,6 +64,7 @@ from .events.bus import (
     EventBus,
     SessionOpenedEvent,
     SessionClosedEvent,
+    SessionUpdatedEvent,
     FrameCapturedEvent,
 )
 from .tamper.controller import QueuedTamperController
@@ -1100,6 +1101,10 @@ class ProxyAPI:
     def on_session_closed(self, handler: Callable) -> None:
         """Register a handler for SessionClosedEvent."""
         self.event_bus.subscribe(SessionClosedEvent, handler)
+
+    def on_session_updated(self, handler: Callable) -> None:
+        """Register a handler for SessionUpdatedEvent (one side disconnected)."""
+        self.event_bus.subscribe(SessionUpdatedEvent, handler)
 
     def on_frame_captured(self, handler: Callable) -> None:
         """

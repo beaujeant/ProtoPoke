@@ -37,7 +37,7 @@ from typing import Optional, TYPE_CHECKING
 
 from ..config import ProxyConfig
 from ..models import Direction
-from ..events.bus import EventBus, SessionOpenedEvent, SessionClosedEvent
+from ..events.bus import EventBus, SessionOpenedEvent, SessionClosedEvent, SessionUpdatedEvent
 from ..framing import create_framer, load_framer_from_file
 from ..tamper.controller import TamperController, PassthroughController
 from ..tls.handler import TLSHandler
@@ -298,6 +298,13 @@ class ProxyEngine:
                 **self.config.framer_kwargs,
             )
 
+        async def _on_first_disconnect(direction: Direction) -> None:
+            if direction is Direction.CLIENT_TO_SERVER:
+                self.session_registry.mark_only_server(session.id)
+            else:
+                self.session_registry.mark_only_client(session.id)
+            await self.event_bus.publish(SessionUpdatedEvent(session=session.info))
+
         relay = BidirectionalRelay(
             session=session,
             client_reader=client_reader,
@@ -310,6 +317,7 @@ class ProxyEngine:
             event_bus=self.event_bus,
             read_buffer_size=self.config.read_buffer_size,
             rules_engine=self.rules_engine,
+            on_first_disconnect=_on_first_disconnect,
         )
 
         # Track the relay so we can hot-swap framers on running sessions.
@@ -335,11 +343,9 @@ class ProxyEngine:
         Run a session's relay and handle final cleanup.
 
         This is the Task body for each proxied connection.
-        After the relay finishes, the session is transitioned to the most
-        specific closed state available:
-          - CLIENT_DISCONNECTED if the client closed the connection first.
-          - SERVER_DISCONNECTED if the server closed the connection first.
-          - CLOSED for all other cases (cancelled, both sides simultaneously, etc.)
+        While the relay is running, partial-disconnect state updates (ONLY_SERVER /
+        ONLY_CLIENT) are fired via the on_first_disconnect callback as soon as the
+        first side closes.  After both sides fully close, the session is marked CLOSED.
         """
         try:
             await relay.run()
@@ -351,13 +357,7 @@ class ProxyEngine:
             self._session_server_writers.pop(session.id, None)
             self._session_client_writers.pop(session.id, None)
             self._session_relays.pop(session.id, None)
-            # Use the most specific closed state based on who disconnected first.
-            if relay.first_disconnect_direction is Direction.CLIENT_TO_SERVER:
-                self.session_registry.mark_client_disconnected(session.id)
-            elif relay.first_disconnect_direction is Direction.SERVER_TO_CLIENT:
-                self.session_registry.mark_server_disconnected(session.id)
-            else:
-                self.session_registry.mark_closed(session.id)
+            self.session_registry.mark_closed(session.id)
             await self.event_bus.publish(SessionClosedEvent(session=session.info))
             logger.info("Session %s done", session.id)
 
