@@ -189,7 +189,7 @@ class ForgeTab(Widget):
                             markup=False,
                         )
                         yield Button("HEX", id="btn-frame-mode", compact=True)
-                    yield TextArea("", id="frame-editor", theme="monokai")
+                    yield TextArea("", id="frame-editor")
 
             with Vertical(id="right-col"):
                 with Vertical(id="traffic-pane"):
@@ -225,11 +225,12 @@ class ForgeTab(Widget):
         ft.add_column("Preview", key="preview")
 
         tt = self.query_one("#traffic-table", DataTable)
-        tt.add_column("#",     key="num")
-        tt.add_column("Dir",   key="dir")
-        tt.add_column("Label", key="label")
-        tt.add_column("Len",   key="len")
-        tt.add_column("Time",  key="time")
+        tt.add_column("#",       key="num")
+        tt.add_column("Dir",     key="dir")
+        tt.add_column("Label",   key="label")
+        tt.add_column("Len",     key="len")
+        tt.add_column("Time",    key="time")
+        tt.add_column("Preview", key="preview")
 
         ht = self.query_one("#history-table", DataTable)
         ht.add_column("#",      key="num")
@@ -440,12 +441,16 @@ class ForgeTab(Widget):
         t = _time.strftime("%H:%M:%S", _time.localtime(entry.timestamp))
         # Count existing rows to get sequential number
         num = len(tt.rows) + 1
+        _preview = entry.raw_bytes[:16].hex()
+        if len(entry.raw_bytes) > 16:
+            _preview += "…"
         tt.add_row(
             str(num),
             direction,
             entry.frame_label,
             str(len(entry.raw_bytes)),
             t,
+            _preview,
             key=entry.id,
         )
 
@@ -456,12 +461,16 @@ class ForgeTab(Widget):
         for i, entry in enumerate(run.traffic):
             direction = "→" if entry.direction == "sent" else "←"
             t = _time.strftime("%H:%M:%S", _time.localtime(entry.timestamp))
+            _preview = entry.raw_bytes[:16].hex()
+            if len(entry.raw_bytes) > 16:
+                _preview += "…"
             tt.add_row(
                 str(i + 1),
                 direction,
                 entry.frame_label,
                 str(len(entry.raw_bytes)),
                 t,
+                _preview,
                 key=entry.id,
             )
 
@@ -636,7 +645,7 @@ class ForgeTab(Widget):
             return
 
         try:
-            all_sessions = self.app.api.list_sessions()
+            all_sessions = self.app.api.list_active_sessions()
         except Exception:
             all_sessions = []
 
@@ -786,6 +795,18 @@ class ForgeTab(Widget):
         if not pb.frames:
             self.notify("No frames in the playbook.", severity="warning")
             return
+        if pb.source_session_id:
+            try:
+                session = self.app.api.get_session(pb.source_session_id)
+            except Exception:
+                session = None
+            if session is None or not session.is_active():
+                self.notify(
+                    "Session is closed — cannot run playbook. "
+                    "Edit the playbook to select an active session or use a custom destination.",
+                    severity="error",
+                )
+                return
         self._history_view_mode = False
         self._running = True
         self._clear_traffic()
