@@ -119,6 +119,15 @@ class ConfigTab(Widget):
         padding: 0 1;
         align: left middle;
     }
+    ConfigTab #proxy-status {
+        width: 1fr;
+        content-align: left middle;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    ConfigTab #proxy-status.running {
+        color: $success;
+    }
     ConfigTab Switch {
         margin: 0;
     }
@@ -268,6 +277,7 @@ class ConfigTab(Widget):
 
         # ---- Action bar ----
         with Horizontal(classes="action-row"):
+            yield Static("", id="proxy-status")
             yield Button(
                 "Apply",
                 variant="primary",
@@ -479,13 +489,14 @@ class ConfigTab(Widget):
     # Proxy running state
     # ------------------------------------------------------------------
 
-    def notify_proxy_running(self, running: bool) -> None:
+    def notify_proxy_running(self, running: bool, address: str = "") -> None:
         """
         Called by the app when the proxy starts or stops.
 
         - Locks/unlocks fields that cannot be changed at runtime (networking,
           TLS) to make it clear they require a proxy restart.
         - Flips the Start/Stop button enabled states.
+        - Updates the inline status label in the action bar.
         """
         for wid_id in self._LOCKED_WHEN_RUNNING:
             try:
@@ -494,3 +505,10 @@ class ConfigTab(Widget):
                 pass
         self.query_one("#btn-start", Button).disabled = running
         self.query_one("#btn-stop", Button).disabled = not running
+        status = self.query_one("#proxy-status", Static)
+        if running:
+            status.update(f"● Proxy running on {address}")
+            status.add_class("running")
+        else:
+            status.update("● Proxy stopped")
+            status.remove_class("running")
