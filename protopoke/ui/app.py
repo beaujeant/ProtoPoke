@@ -22,6 +22,7 @@ from .tabs.tamper import TamperTab
 from .tabs.traffic import TrafficTab
 from .tabs.forge import ForgeTab
 from .tabs.fuzzer import FuzzerTab
+from .tabs.logs import LogsTab
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,7 @@ class ProtoPoke(App):
         Binding("f3",           "switch_tab('tamper')",    "Tamper",    show=True),
         Binding("f4",           "switch_tab('forge')",     "Forge",     show=True),
         Binding("f5",           "switch_tab('fuzzer')",    "Fuzzer",    show=True),
+        Binding("f6",           "switch_tab('logs')",      "Logs",      show=True),
         Binding("ctrl+f",       "send_to_forge",           "→Forge",    show=False, priority=True),
         Binding("ctrl+n",       "new_project",             "New",       show=False),
         Binding("ctrl+o",       "open_project",            "Open",      show=False),
@@ -141,6 +143,8 @@ class ProtoPoke(App):
                 yield ForgeTab(id="forge-tab")
             with TabPane("Fuzzer [F5]", id="fuzzer"):
                 yield FuzzerTab(id="fuzzer-tab")
+            with TabPane("Logs [F6]", id="logs"):
+                yield LogsTab(id="logs-tab")
         yield Footer()
 
     def on_mount(self) -> None:
