@@ -50,6 +50,12 @@ class SessionClosedEvent:
 
 
 @dataclass
+class SessionUpdatedEvent:
+    """Emitted when a session state changes mid-session (one side disconnects)."""
+    session: SessionInfo
+
+
+@dataclass
 class FrameCapturedEvent:
     """Emitted for every frame captured by the relay (before interception)."""
     frame:   Frame

@@ -70,22 +70,17 @@ class Session:
     def mark_active(self) -> None:
         self.info.state = SessionState.ACTIVE
 
-    def mark_closing(self) -> None:
-        self.info.state = SessionState.CLOSING
-
     def mark_closed(self) -> None:
         self.info.state = SessionState.CLOSED
         self.info.closed_at = time.time()
 
-    def mark_client_disconnected(self) -> None:
-        """The client sent EOF / closed the connection first."""
-        self.info.state = SessionState.CLIENT_DISCONNECTED
-        self.info.closed_at = time.time()
+    def mark_only_server(self) -> None:
+        """Client disconnected; server side still up."""
+        self.info.state = SessionState.ONLY_SERVER
 
-    def mark_server_disconnected(self) -> None:
-        """The server sent EOF / closed the connection first."""
-        self.info.state = SessionState.SERVER_DISCONNECTED
-        self.info.closed_at = time.time()
+    def mark_only_client(self) -> None:
+        """Server disconnected; client side still up."""
+        self.info.state = SessionState.ONLY_CLIENT
 
     # ------------------------------------------------------------------
     # Queries
@@ -96,11 +91,11 @@ class Session:
         return [f for f in self.frames if f.direction == direction]
 
     def is_active(self) -> bool:
-        # CLIENT_DISCONNECTED and SERVER_DISCONNECTED are terminal states
         return self.info.state in (
             SessionState.CONNECTING,
             SessionState.ACTIVE,
-            SessionState.CLOSING,
+            SessionState.ONLY_SERVER,
+            SessionState.ONLY_CLIENT,
         )
 
     # ------------------------------------------------------------------
@@ -174,25 +169,19 @@ class SessionRegistry:
                 session_id, len(session.frames),
             )
 
-    def mark_client_disconnected(self, session_id: str) -> None:
-        """Transition session to CLIENT_DISCONNECTED state (client closed first)."""
+    def mark_only_server(self, session_id: str) -> None:
+        """Client disconnected; server side still up."""
         session = self._sessions.get(session_id)
         if session:
-            session.mark_client_disconnected()
-            logger.info(
-                "Session client-disconnected: %s (frames captured: %d)",
-                session_id, len(session.frames),
-            )
+            session.mark_only_server()
+            logger.info("Session only-server: %s", session_id)
 
-    def mark_server_disconnected(self, session_id: str) -> None:
-        """Transition session to SERVER_DISCONNECTED state (server closed first)."""
+    def mark_only_client(self, session_id: str) -> None:
+        """Server disconnected; client side still up."""
         session = self._sessions.get(session_id)
         if session:
-            session.mark_server_disconnected()
-            logger.info(
-                "Session server-disconnected: %s (frames captured: %d)",
-                session_id, len(session.frames),
-            )
+            session.mark_only_client()
+            logger.info("Session only-client: %s", session_id)
 
     def delete(self, session_id: str) -> bool:
         """

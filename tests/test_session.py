@@ -50,31 +50,44 @@ class TestSession:
         assert sess.info.state is SessionState.CLOSED
         assert sess.info.closed_at is not None
 
-    def test_client_disconnected_state(self):
+    def test_only_server_state(self):
+        """Client disconnected → ONLY_SERVER: session still active, no closed_at."""
         reg = make_registry()
         sess = reg.create("127.0.0.1", 1, "10.0.0.1", 80)
         reg.mark_active(sess.id)
-        reg.mark_client_disconnected(sess.id)
-        assert sess.info.state is SessionState.CLIENT_DISCONNECTED
-        assert sess.info.closed_at is not None
-        assert not sess.is_active()
+        reg.mark_only_server(sess.id)
+        assert sess.info.state is SessionState.ONLY_SERVER
+        assert sess.info.closed_at is None
+        assert sess.is_active()
 
-    def test_server_disconnected_state(self):
+    def test_only_client_state(self):
+        """Server disconnected → ONLY_CLIENT: session still active, no closed_at."""
         reg = make_registry()
         sess = reg.create("127.0.0.1", 1, "10.0.0.1", 80)
         reg.mark_active(sess.id)
-        reg.mark_server_disconnected(sess.id)
-        assert sess.info.state is SessionState.SERVER_DISCONNECTED
-        assert sess.info.closed_at is not None
+        reg.mark_only_client(sess.id)
+        assert sess.info.state is SessionState.ONLY_CLIENT
+        assert sess.info.closed_at is None
+        assert sess.is_active()
+
+    def test_only_server_then_closed(self):
+        """ONLY_SERVER → CLOSED is a valid lifecycle (both sides eventually close)."""
+        reg = make_registry()
+        sess = reg.create("127.0.0.1", 1, "10.0.0.1", 80)
+        reg.mark_active(sess.id)
+        reg.mark_only_server(sess.id)
+        assert sess.is_active()
+        reg.mark_closed(sess.id)
+        assert sess.info.state is SessionState.CLOSED
         assert not sess.is_active()
 
-    def test_client_disconnected_unknown_id_does_not_raise(self):
+    def test_only_server_unknown_id_does_not_raise(self):
         reg = make_registry()
-        reg.mark_client_disconnected("nonexistent")
+        reg.mark_only_server("nonexistent")
 
-    def test_server_disconnected_unknown_id_does_not_raise(self):
+    def test_only_client_unknown_id_does_not_raise(self):
         reg = make_registry()
-        reg.mark_server_disconnected("nonexistent")
+        reg.mark_only_client("nonexistent")
 
 
 class TestSessionRegistry:
@@ -111,13 +124,21 @@ class TestSessionRegistry:
         reg = make_registry()
         s1 = reg.create("127.0.0.1", 1, "10.0.0.1", 80)
         s2 = reg.create("127.0.0.1", 2, "10.0.0.1", 80)
+        s3 = reg.create("127.0.0.1", 3, "10.0.0.1", 80)
+        s4 = reg.create("127.0.0.1", 4, "10.0.0.1", 80)
         reg.mark_active(s1.id)
         reg.mark_active(s2.id)
+        reg.mark_active(s3.id)
+        reg.mark_active(s4.id)
         reg.mark_closed(s1.id)
+        reg.mark_only_server(s3.id)  # client gone, server still up → still active
+        reg.mark_only_client(s4.id)  # server gone, client still up → still active
 
         active_ids = {s.id for s in reg.active_sessions()}
-        assert s1.id not in active_ids
-        assert s2.id in active_ids
+        assert s1.id not in active_ids   # CLOSED → not active
+        assert s2.id in active_ids       # ACTIVE → active
+        assert s3.id in active_ids       # ONLY_SERVER → still active
+        assert s4.id in active_ids       # ONLY_CLIENT → still active
 
     def test_all_sessions_includes_closed(self):
         reg = make_registry()
