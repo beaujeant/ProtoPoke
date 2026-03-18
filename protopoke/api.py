@@ -50,11 +50,12 @@ Usage example:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from .config import ProxyConfig
+from .config import ForwarderConfig, ProxyConfig
 from .models import Direction, Frame, TamperedUnit, ParsedMessage
 from .core.proxy import ProxyEngine
 from .core.session import Session, SessionRegistry
@@ -85,18 +86,21 @@ class ProxyAPI:
     """
     High-level control interface for the TCP proxy.
 
-    Instantiate with a ProxyConfig, then call start()/stop() or
-    serve_forever() to run the proxy.
+    Instantiate with a list of ForwarderConfig, then call start()/stop() or
+    serve_forever() to run the proxy.  Multiple forwarders can be started and
+    stopped independently; all share a single session registry, event bus,
+    tamper controller and rules engine so that the Traffic / Tamper tabs see
+    traffic from every forwarder in one unified view.
     """
 
     def __init__(
         self,
-        config:           ProxyConfig,
+        forwarders:       list[ForwarderConfig],
         storage:          Optional[StorageBackend] = None,
         rules_engine:      Optional[RulesEngine]     = None,
         intercept_filter:  Optional[InterceptFilter] = None,
     ) -> None:
-        self.config = config
+        self.forwarders = forwarders
 
         # Shared infrastructure
         self.event_bus        = EventBus()
@@ -115,29 +119,35 @@ class ProxyAPI:
         self.rules_engine     = rules_engine      or RulesEngine(variables=self.variables)
         self.intercept_filter = intercept_filter  or InterceptFilter()
 
-        # Always use QueuedTamperController; config.tamper_enabled sets
-        # the initial on/off state so it can be toggled at any time.
+        # Shared tamper controller — enabled if any forwarder has tamper on.
+        # The on/off state can be toggled at runtime via api.tamper_enabled.
+        any_tamper = any(f.config.tamper_enabled for f in forwarders) if forwarders else False
         self._tamper_controller: QueuedTamperController
         self._tamper_controller = QueuedTamperController(
-            tamper_enabled=config.tamper_enabled,
+            tamper_enabled=any_tamper,
             intercept_filter=self.intercept_filter,
         )
 
-        # Core engine (passes rules_engine to relay)
-        self.engine = ProxyEngine(
-            config=config,
-            tamper_controller=self._tamper_controller,
-            event_bus=self.event_bus,
-            session_registry=self.session_registry,
-            rules_engine=self.rules_engine,
-        )
+        # One ProxyEngine per forwarder (not started yet; start() does that).
+        self._engines: dict[str, ProxyEngine] = {
+            fwd.name: ProxyEngine(
+                config=fwd.config,
+                tamper_controller=self._tamper_controller,
+                event_bus=self.event_bus,
+                session_registry=self.session_registry,
+                rules_engine=self.rules_engine,
+                forwarder_name=fwd.name,
+            )
+            for fwd in forwarders
+        }
 
-        # Replay engine
+        # Replay engine — uses the first forwarder's connection settings.
+        _first_cfg = forwarders[0].config if forwarders else ProxyConfig()
         self.forge_engine = ForgeEngine(
             session_registry=self.session_registry,
-            connect_timeout=config.connect_timeout,
-            framer_name=config.framer_name,
-            framer_kwargs=config.framer_kwargs,
+            connect_timeout=_first_cfg.connect_timeout,
+            framer_name=_first_cfg.framer_name,
+            framer_kwargs=_first_cfg.framer_kwargs,
         )
 
         # Protocol decoder/encoder (lazy-loaded)
@@ -147,14 +157,53 @@ class ProxyAPI:
         # Fuzzer engine (lazy-constructed on first use)
         self._fuzzer_engine: Optional[FuzzerEngine] = None
 
+        # Event set when serve_forever() should unblock (set by stop_all())
+        self._serve_event: Optional[asyncio.Event] = None
+
+    # ------------------------------------------------------------------
+    # Convenience helpers
+    # ------------------------------------------------------------------
+
+    @property
+    def config(self) -> ProxyConfig:
+        """
+        The first enabled forwarder's ProxyConfig, or a fallback default.
+
+        Provided for backward compatibility with code that references
+        ``api.config`` (e.g. forge timeout, legacy MCP tooling).
+        """
+        for fwd in self.forwarders:
+            if fwd.enabled:
+                return fwd.config
+        return self.forwarders[0].config if self.forwarders else ProxyConfig()
+
+    def _engine_for_session(self, session_id: str) -> "Optional[ProxyEngine]":
+        """Return the engine that owns *session_id*, or None."""
+        session = self.session_registry.get(session_id)
+        if session and session.info.forwarder_name:
+            return self._engines.get(session.info.forwarder_name)
+        # Fallback: scan all engines for the session task
+        for engine in self._engines.values():
+            if session_id in engine._session_tasks:
+                return engine
+        return None
+
     # ------------------------------------------------------------------
     # TLS helpers
     # ------------------------------------------------------------------
 
     @property
-    def tls_handler(self) -> TLSHandler:
-        """The TLSHandler owned by the engine (CA, SSL contexts, etc.)."""
-        return self.engine.tls_handler
+    def tls_handler(self) -> Optional[TLSHandler]:
+        """
+        TLSHandler from the first running engine, or the first engine overall.
+
+        Provided for backward compatibility with code that calls
+        ``api.tls_handler`` to export the CA certificate.
+        """
+        for engine in self._engines.values():
+            if engine._server is not None:
+                return engine.tls_handler
+        return next(iter(self._engines.values())).tls_handler if self._engines else None
 
     @property
     def ca(self) -> Optional[CertificateAuthority]:
@@ -167,34 +216,114 @@ class ProxyAPI:
             with open("protopoke-ca.crt", "wb") as f:
                 f.write(api.ca.cert_pem)
         """
-        return self.engine.tls_handler.ca
+        handler = self.tls_handler
+        return handler.ca if handler else None
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        """Start listening for connections (non-blocking)."""
-        # Auto-load protocol definition if configured
-        if self.config.protocol_definition_path:
-            self.set_protocol_file(self.config.protocol_definition_path)
-
-        await self.engine.start()
-        logger.info(
-            "ProxyAPI started: %s:%d → %s:%d",
-            self.config.listen_host, self.config.listen_port,
-            self.config.upstream_host, self.config.upstream_port,
-        )
+        """Start all enabled forwarders (non-blocking)."""
+        await self.start_all()
 
     async def serve_forever(self) -> None:
-        """Start and block until stop() is called."""
-        await self.engine.serve_forever()
+        """Start all enabled forwarders and block until stop() is called."""
+        await self.start_all()
+        self._serve_event = asyncio.Event()
+        await self._serve_event.wait()
 
     async def stop(self) -> None:
-        """Stop the proxy and release all resources."""
-        await self.engine.stop()
+        """Stop all forwarders and release all resources."""
+        await self.stop_all()
+
+    async def start_all(self) -> None:
+        """Start all *enabled* forwarders concurrently."""
+        for fwd in self.forwarders:
+            if fwd.enabled:
+                await self.start_forwarder(fwd.name)
+        logger.info(
+            "ProxyAPI: started %d forwarder(s)",
+            sum(1 for f in self.forwarders if f.enabled),
+        )
+
+    async def stop_all(self) -> None:
+        """Stop all running forwarders and release resources."""
+        for name, engine in list(self._engines.items()):
+            if engine._server is not None:
+                await engine.stop()
         await self.storage.close()
+        if self._serve_event is not None:
+            self._serve_event.set()
         logger.info("ProxyAPI stopped")
+
+    async def start_forwarder(self, name: str) -> None:
+        """Start a single forwarder by name (non-blocking)."""
+        engine = self._engines.get(name)
+        if engine is None:
+            raise ValueError(f"No forwarder named {name!r}")
+        fwd = next((f for f in self.forwarders if f.name == name), None)
+        if fwd is None:
+            raise ValueError(f"No forwarder named {name!r}")
+        # Auto-load protocol definition if configured
+        if fwd.config.protocol_definition_path:
+            self.set_protocol_file(fwd.config.protocol_definition_path)
+        await engine.start()
+        logger.info(
+            "Forwarder %r started: %s:%d → %s:%d",
+            name,
+            fwd.config.listen_host, fwd.config.listen_port,
+            fwd.config.upstream_host, fwd.config.upstream_port,
+        )
+
+    async def stop_forwarder(self, name: str) -> None:
+        """Stop a single forwarder by name."""
+        engine = self._engines.get(name)
+        if engine is None:
+            return
+        if engine._server is not None:
+            await engine.stop()
+        logger.info("Forwarder %r stopped", name)
+
+    def is_running(self, name: str) -> bool:
+        """Return True if the named forwarder is currently listening."""
+        engine = self._engines.get(name)
+        return engine is not None and engine._server is not None
+
+    def list_running(self) -> list[str]:
+        """Return names of all currently running forwarders."""
+        return [
+            name for name, engine in self._engines.items()
+            if engine._server is not None
+        ]
+
+    def update_forwarders(self, forwarders: list[ForwarderConfig]) -> None:
+        """
+        Replace the forwarder list and rebuild engines for any new/changed
+        forwarders.  Engines for forwarders that still exist are preserved.
+
+        Engines for removed forwarders that are currently running are NOT
+        stopped automatically — call stop_forwarder() first if needed.
+        """
+        # Keep existing engines for names that survive
+        new_engines: dict[str, ProxyEngine] = {}
+        for fwd in forwarders:
+            if fwd.name in self._engines:
+                # Update the engine's config reference in-place
+                self._engines[fwd.name].config = fwd.config
+                self._engines[fwd.name].forwarder_name = fwd.name
+                new_engines[fwd.name] = self._engines[fwd.name]
+            else:
+                new_engines[fwd.name] = ProxyEngine(
+                    config=fwd.config,
+                    tamper_controller=self._tamper_controller,
+                    event_bus=self.event_bus,
+                    session_registry=self.session_registry,
+                    rules_engine=self.rules_engine,
+                    forwarder_name=fwd.name,
+                )
+        self.forwarders = forwarders
+        self._engines = new_engines
 
     # ------------------------------------------------------------------
     # Session management
@@ -224,7 +353,10 @@ class ProxyAPI:
             ``True``  if the session was active and has been cancelled.
             ``False`` if the session is already closed or does not exist.
         """
-        return await self.engine.terminate_session(session_id)
+        engine = self._engine_for_session(session_id)
+        if engine is None:
+            return False
+        return await engine.terminate_session(session_id)
 
     def delete_session(self, session_id: str) -> bool:
         """
@@ -262,6 +394,7 @@ class ProxyAPI:
                 state=SessionState(sd.get("state", "closed")),
                 created_at=sd.get("created_at", 0.0),
                 closed_at=sd.get("closed_at"),
+                forwarder_name=sd.get("forwarder_name", ""),
             )
             session = Session(info)
             for fd in sd.get("frames", []):
@@ -421,15 +554,13 @@ class ProxyAPI:
         framer_name: str,
         framer_kwargs: Optional[dict] = None,
         custom_framer_path: Optional[str] = None,
+        forwarder_name: Optional[str] = None,
     ) -> int:
         """
-        Change the active framer and apply it immediately to all running sessions.
+        Change the active framer and apply it immediately to running sessions.
 
-        Updates ``config.framer_name``, ``config.framer_kwargs``, and
-        ``config.custom_framer_path``, then calls
-        ``ProxyEngine.swap_framers_on_all_sessions()`` so every active TCP
-        session switches to the new framing strategy for the next received
-        chunk of data.  No restart required.
+        Updates the forwarder config(s) and hot-swaps framers on all active
+        sessions so the new framing strategy takes effect without a restart.
 
         Args:
             framer_name:        Built-in framer key (``"raw"``, ``"delimiter"``,
@@ -438,15 +569,27 @@ class ProxyAPI:
                                 (e.g. ``{"delimiter": b"\\n"}``).
             custom_framer_path: Path to a Python file exporting ``on_data`` /
                                 ``on_flush`` when ``framer_name == "custom"``.
+            forwarder_name:     If given, only update this forwarder's sessions.
+                                If None, update all forwarders.
 
         Returns:
             Number of active sessions whose framer was swapped.
         """
-        self.config.framer_name = framer_name
-        self.config.framer_kwargs = dict(framer_kwargs or {})
-        self.config.custom_framer_path = custom_framer_path
+        target_fwds = (
+            [f for f in self.forwarders if f.name == forwarder_name]
+            if forwarder_name
+            else self.forwarders
+        )
+        total = 0
+        for fwd in target_fwds:
+            fwd.config.framer_name = framer_name
+            fwd.config.framer_kwargs = dict(framer_kwargs or {})
+            fwd.config.custom_framer_path = custom_framer_path
+            engine = self._engines.get(fwd.name)
+            if engine:
+                total += engine.swap_framers_on_all_sessions()
         self.forge_engine.update_framer(framer_name, dict(framer_kwargs or {}))
-        return self.engine.swap_framers_on_all_sessions()
+        return total
 
     # ------------------------------------------------------------------
     # Protocol decoder/encoder
@@ -732,7 +875,7 @@ class ProxyAPI:
         Returns:
             :class:`~protopoke.forge.engine.SendResult` with the response.
         """
-        recv_timeout = receive_timeout if receive_timeout is not None else self.config.connect_timeout
+        recv_timeout = receive_timeout if receive_timeout is not None else self.config.connect_timeout  # uses first forwarder's config
         session_before = self.session_registry.get(session_id)
         was_active     = session_before is not None and session_before.is_active()
 
@@ -794,7 +937,10 @@ class ProxyAPI:
             ``False`` if the session has no active client writer (closed or
                       not found).
         """
-        ok = await self.engine.inject_to_client(session_id, data)
+        engine = self._engine_for_session(session_id)
+        if engine is None:
+            return False
+        ok = await engine.inject_to_client(session_id, data)
         if ok:
             session = self.session_registry.get(session_id)
             if session and data:
@@ -826,7 +972,10 @@ class ProxyAPI:
                       not found) — callers should fall back to
                       :meth:`send_frame` in this case.
         """
-        ok = await self.engine.inject_to_server(session_id, data)
+        engine = self._engine_for_session(session_id)
+        if engine is None:
+            return False
+        ok = await engine.inject_to_server(session_id, data)
         if ok:
             session = self.session_registry.get(session_id)
             if session and data:

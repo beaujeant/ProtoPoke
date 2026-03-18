@@ -53,7 +53,7 @@ import sys
 from typing import Optional
 
 from ..api import ProxyAPI
-from ..config import ProxyConfig
+from ..config import ForwarderConfig, ProxyConfig
 from .server import build_mcp_server
 
 
@@ -127,7 +127,7 @@ def _make_config(args: argparse.Namespace) -> ProxyConfig:
 
 async def _run(config: ProxyConfig, mcp_name: str) -> None:
     """Start the proxy and serve the MCP server until EOF on stdin."""
-    api = ProxyAPI(config)
+    api = ProxyAPI(forwarders=[ForwarderConfig(name="Default", enabled=True, config=config)])
 
     logging.info(
         "ProtoPoke MCP: starting proxy %s:%d → %s:%d",

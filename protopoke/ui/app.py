@@ -12,7 +12,7 @@ from textual.message import Message
 from textual.widgets import Footer, Header, Switch, TabbedContent, TabPane
 
 from ..api import ProxyAPI
-from ..config import ProxyConfig
+from ..config import ForwarderConfig, ProxyConfig
 from ..models import Direction
 from ..events.bus import FrameCapturedEvent, SessionClosedEvent, SessionOpenedEvent, SessionUpdatedEvent
 from ..project.manager import ProjectManager, ProjectState
@@ -116,15 +116,17 @@ class ProtoPoke(App):
         super().__init__()
         self._project = project or ProjectManager()
         if config is not None:
-            self._project.config = config
+            # Legacy single-config entrypoint: wrap in the first forwarder
+            self._project.forwarders[0].config = config
 
         self.api = ProxyAPI(
-            config=self._project.config,
+            forwarders=self._project.forwarders,
             rules_engine=self._project.rules_engine,
             intercept_filter=self._project.intercept_filter,
         )
 
-        self._proxy_running = False
+        # Track which forwarder names are currently running
+        self._running_forwarders: set[str] = set()
 
     # ------------------------------------------------------------------
     # Compose
@@ -134,7 +136,7 @@ class ProtoPoke(App):
         yield Header()
         with TabbedContent(id="tabs"):
             with TabPane("Config [F1]", id="config"):
-                yield ConfigTab(self._project.config, id="config-tab")
+                yield ConfigTab(self._project.forwarders, id="config-tab")
             with TabPane("Traffic [F2]", id="traffic"):
                 yield TrafficTab(id="traffic-tab")
             with TabPane("Tamper [F3]", id="tamper"):
@@ -213,68 +215,118 @@ class ProtoPoke(App):
     # Config tab events
     # ------------------------------------------------------------------
 
-    def on_config_tab_applied(self, _event: ConfigTab.Applied) -> None:
+    def on_config_tab_forwarder_applied(self, event: ConfigTab.ForwarderApplied) -> None:
+        """User applied settings for a specific forwarder."""
         self._project.mark_dirty()
         self._update_title()
-        self._apply_dynamic_config()
+        self._apply_dynamic_config_for(event.old_name, event.forwarder)
 
-    def on_config_tab_start_proxy(self, _event: ConfigTab.StartProxy) -> None:
-        if not self._proxy_running:
-            self.run_worker(self._start_proxy(), exclusive=False, thread=False)
+    def on_config_tab_forwarder_added(self, event: ConfigTab.ForwarderAdded) -> None:
+        """User added a new forwarder — keep project in sync."""
+        if event.forwarder not in self._project.forwarders:
+            self._project.forwarders.append(event.forwarder)
+        self.api.update_forwarders(self._project.forwarders)
+        self._project.mark_dirty()
+        self._update_title()
 
-    def on_config_tab_stop_proxy(self, _event: ConfigTab.StopProxy) -> None:
-        if self._proxy_running:
-            self.run_worker(self._stop_proxy(), exclusive=False, thread=False)
+    def on_config_tab_forwarder_removed(self, event: ConfigTab.ForwarderRemoved) -> None:
+        """User removed a forwarder."""
+        self._project.forwarders = [
+            f for f in self._project.forwarders if f.name != event.forwarder_name
+        ]
+        self._running_forwarders.discard(event.forwarder_name)
+        self.api.update_forwarders(self._project.forwarders)
+        self._project.mark_dirty()
+        self._update_title()
 
-    async def _start_proxy(self) -> None:
+    def on_config_tab_forwarder_enabled(self, event: ConfigTab.ForwarderEnabled) -> None:
+        """User toggled a forwarder's enabled state."""
+        self._project.mark_dirty()
+
+    def on_config_tab_start_forwarder(self, event: ConfigTab.StartForwarder) -> None:
+        name = event.forwarder_name
+        if name not in self._running_forwarders:
+            self.run_worker(self._start_forwarder(name), exclusive=False, thread=False)
+
+    def on_config_tab_stop_forwarder(self, event: ConfigTab.StopForwarder) -> None:
+        name = event.forwarder_name
+        if name in self._running_forwarders:
+            self.run_worker(self._stop_forwarder(name), exclusive=False, thread=False)
+
+    def on_config_tab_start_all(self, _event: ConfigTab.StartAll) -> None:
+        self.run_worker(self._start_all_forwarders(), exclusive=False, thread=False)
+
+    def on_config_tab_stop_all(self, _event: ConfigTab.StopAll) -> None:
+        self.run_worker(self._stop_all_forwarders(), exclusive=False, thread=False)
+
+    async def _start_forwarder(self, name: str) -> None:
         try:
-            # Rebuild the ProxyAPI so changes to config (especially
-            # tamper_enabled) are picked up fresh.
-            self._rebuild_api()
-            await self.api.start()
-            self._proxy_running = True
+            # Sync the API's forwarder list (config may have changed since last start)
+            self.api.update_forwarders(self._project.forwarders)
+            await self.api.start_forwarder(name)
+            self._running_forwarders.add(name)
             self._update_title()
-            address = f"{self.api.config.listen_host}:{self.api.config.listen_port}"
-            self.query_one("#config-tab", ConfigTab).notify_proxy_running(True, address)
-            # Sync the tamper toggle in the Tamper tab to reflect config
+            fwd = next((f for f in self._project.forwarders if f.name == name), None)
+            address = (
+                f"{fwd.config.listen_host}:{fwd.config.listen_port}"
+                if fwd else ""
+            )
+            self.query_one("#config-tab", ConfigTab).notify_forwarder_running(name, True, address)
+            # Sync the tamper toggle in the Tamper tab
             try:
+                any_tamper = any(f.config.tamper_enabled for f in self._project.forwarders)
                 self.query_one("#tamper-tab", TamperTab).query_one(
                     "#tamper-toggle", Switch
-                ).value = self.api.config.tamper_enabled
+                ).value = any_tamper
             except Exception:
                 pass
         except Exception as exc:
-            self.notify(f"Failed to start proxy: {exc}", severity="error")
+            self.notify(f"Failed to start forwarder '{name}': {exc}", severity="error")
 
-    async def _stop_proxy(self) -> None:
+    async def _stop_forwarder(self, name: str) -> None:
         try:
-            await self.api.stop()
-            self._proxy_running = False
+            await self.api.stop_forwarder(name)
+            self._running_forwarders.discard(name)
             self._update_title()
-            self.query_one("#config-tab", ConfigTab).notify_proxy_running(False)
+            self.query_one("#config-tab", ConfigTab).notify_forwarder_running(name, False)
         except Exception as exc:
-            self.notify(f"Failed to stop proxy: {exc}", severity="error")
+            self.notify(f"Failed to stop forwarder '{name}': {exc}", severity="error")
 
-    def _apply_dynamic_config(self) -> None:
+    async def _start_all_forwarders(self) -> None:
+        # Rebuild the API fresh so latest config is used
+        self._rebuild_api()
+        for fwd in self._project.forwarders:
+            if fwd.enabled and fwd.name not in self._running_forwarders:
+                await self._start_forwarder(fwd.name)
+
+    async def _stop_all_forwarders(self) -> None:
+        for name in list(self._running_forwarders):
+            await self._stop_forwarder(name)
+
+    def _apply_dynamic_config_for(
+        self, old_name: str, forwarder: ForwarderConfig
+    ) -> None:
         """
-        Apply config changes that take effect immediately without a proxy restart.
+        Apply config changes for a specific forwarder immediately.
 
-        Called automatically by on_config_tab_applied() every time the user
-        clicks Apply, regardless of whether the proxy is running.
-
-        Changes that are applied immediately:
-        - Protocol definition: reloaded via api.set_protocol_file()
+        - Protocol definition: reloaded globally (shared decoder)
         - Log level: applied to the root logger
-        - Framing: hot-swapped on all active sessions via api.set_framer()
-        Changes that apply on the next proxy run only:
-        - Sequence script (loaded fresh at the start of each run)
-        - Max sessions (checked per new connection)
+        - Framing: hot-swapped on the forwarder's active sessions
+        - Forwarder name change: update API engine mapping
         """
         import logging as _logging
 
-        cfg = self.api.config
+        new_name = forwarder.name
+        cfg = forwarder.config
 
-        # Protocol definition — reload immediately so new frames are decoded
+        # If name changed, update the API's engine registry
+        if old_name != new_name:
+            self.api.update_forwarders(self._project.forwarders)
+            if old_name in self._running_forwarders:
+                self._running_forwarders.discard(old_name)
+                self._running_forwarders.add(new_name)
+
+        # Protocol definition — reload so new frames are decoded
         if cfg.protocol_definition_path:
             try:
                 self.api.set_protocol_file(cfg.protocol_definition_path)
@@ -283,23 +335,22 @@ class ProtoPoke(App):
                     f"Protocol definition reload failed: {exc}", severity="warning"
                 )
         else:
-            # Path cleared — reset to passthrough decoder
             from ..protocol.base import PassthroughDecoder
             self.api.set_protocol(PassthroughDecoder())
 
-        # Log level — apply to the root logger immediately
+        # Log level — apply immediately
         try:
             _logging.getLogger().setLevel(cfg.log_level)
         except Exception:
             pass
 
-        # Framing — hot-swap on all active sessions so the next received
-        # chunk uses the new framer without requiring a session restart.
+        # Framing — hot-swap on this forwarder's active sessions
         try:
             swapped = self.api.set_framer(
                 framer_name=cfg.framer_name,
                 framer_kwargs=cfg.framer_kwargs,
                 custom_framer_path=cfg.custom_framer_path,
+                forwarder_name=new_name,
             )
             if swapped:
                 self.notify(
@@ -348,8 +399,7 @@ class ProtoPoke(App):
         # Rebuild API with fresh state
         self._rebuild_api()
         config_tab = self.query_one("#config-tab", ConfigTab)
-        config_tab.load_config(self._project.config)
-        config_tab.notify_proxy_running(False)
+        config_tab.load_forwarders(self._project.forwarders)
         self.query_one("#traffic-tab", TrafficTab).clear_all()
         self.query_one("#forge-tab", ForgeTab).load_playbooks([])
         self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions([])
@@ -366,8 +416,7 @@ class ProtoPoke(App):
             state = self._project.open(path)
             self._rebuild_api_from_state(state)
             config_tab = self.query_one("#config-tab", ConfigTab)
-            config_tab.load_config(state.config)
-            config_tab.notify_proxy_running(False)
+            config_tab.load_forwarders(state.forwarders)
             self.query_one("#forge-tab", ForgeTab).load_playbooks(state.playbooks)
             # Restore logs: load sessions+frames into registry, then populate UI
             traffic_tab = self.query_one("#traffic-tab", TrafficTab)
@@ -446,6 +495,18 @@ class ProtoPoke(App):
         else:
             self.notify("Session not found.", severity="warning")
 
+    def _tls_upstream_for_session(self, session_id: str) -> bool:
+        """Look up tls_upstream from the forwarder that owns this session."""
+        session = self.api.get_session(session_id)
+        if session and session.info.forwarder_name:
+            fwd = next(
+                (f for f in self._project.forwarders if f.name == session.info.forwarder_name),
+                None,
+            )
+            if fwd:
+                return fwd.config.tls_upstream
+        return self.api.config.tls_upstream
+
     def send_frame_to_forge(self, session_id: str, frame_id: str) -> None:
         """Called by TrafficTab (Ctrl+F) — create a single-frame playbook in Forge."""
         session = self.api.get_session(session_id)
@@ -465,7 +526,7 @@ class ProtoPoke(App):
             label=f"Playbook {len(forge_tab._playbooks)+1}",
             host=session.info.server_host,
             port=session.info.server_port,
-            tls=self.api.config.tls_upstream,
+            tls=self._tls_upstream_for_session(session_id),
             source_session_id=session_id,
             direction=direction,
         )
@@ -514,7 +575,7 @@ class ProtoPoke(App):
             frames_data=frames_data,
             host=session.info.server_host,
             port=session.info.server_port,
-            tls=self.api.config.tls_upstream,
+            tls=self._tls_upstream_for_session(session_id),
             source_session_id=session_id,
             playbook_label=f"Playbook {len(forge_tab._playbooks)+1}",
         )
@@ -538,28 +599,29 @@ class ProtoPoke(App):
         name  = self._project.name
         dirty = " *" if self._project.is_dirty else ""
         path  = f" [{self._project.path}]" if self._project.path else " [unsaved]"
-        running = "  ▶ RUNNING" if self._proxy_running else ""
+        n = len(self._running_forwarders)
+        running = f"  ▶ {n} RUNNING" if n else ""
         self.sub_title = f"{name}{dirty}{path}{running}"
 
     def _rebuild_api(self) -> None:
         """Replace the ProxyAPI with a fresh instance from current project state."""
         self.api = ProxyAPI(
-            config=self._project.config,
+            forwarders=self._project.forwarders,
             rules_engine=self._project.rules_engine,
             intercept_filter=self._project.intercept_filter,
         )
         self._register_event_handlers()
-        self._proxy_running = False
+        self._running_forwarders.clear()
 
     def _rebuild_api_from_state(self, state: ProjectState) -> None:
         """Replace the ProxyAPI from a loaded ProjectState."""
         self.api = ProxyAPI(
-            config=state.config,
+            forwarders=state.forwarders,
             rules_engine=state.rules_engine,
             intercept_filter=state.intercept_filter,
         )
         self._register_event_handlers()
-        self._proxy_running = False
+        self._running_forwarders.clear()
 
 
 # ---------------------------------------------------------------------------

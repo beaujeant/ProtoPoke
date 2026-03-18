@@ -133,17 +133,18 @@ class SessionRegistry:
 
     def create(
         self,
-        client_host: str,
-        client_port: int,
-        server_host: str,
-        server_port: int,
+        client_host:    str,
+        client_port:    int,
+        server_host:    str,
+        server_port:    int,
+        forwarder_name: str = "",
     ) -> Session:
         """
         Create and register a new session.
 
         Returns the new Session in CONNECTING state.
         """
-        info    = SessionInfo.create(client_host, client_port, server_host, server_port)
+        info    = SessionInfo.create(client_host, client_port, server_host, server_port, forwarder_name)
         session = Session(info)
         self._sessions[session.id] = session
         logger.info(

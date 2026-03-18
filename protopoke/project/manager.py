@@ -3,11 +3,14 @@ ProjectManager — save/load a named ProtoPoke project.
 
 A *project* is a single ``.pp`` ZIP file that bundles:
 
-    project.json    — metadata (name, version, timestamps)
-    config.json     — ProxyConfig serialised to JSON
-    rules.json      — replace rules + intercept rules
-    forge.json      — playbooks (frames, runs/history, connection config)
-    logs.json       — captured sessions and frames (the traffic tab content)
+    project.json      — metadata (name, version, timestamps)
+    forwarders.json   — list of ForwarderConfig objects (format v4+)
+    rules.json        — replace rules + intercept rules
+    forge.json        — playbooks (frames, runs/history, connection config)
+    logs.json         — captured sessions and frames (the traffic tab content)
+
+Legacy format v3 projects store a single ``config.json``; these are
+automatically migrated to a single "Default" forwarder on open.
 
 The file is a standard ZIP archive (no extra dependencies needed — Python's
 built-in ``zipfile`` module is used).
@@ -20,12 +23,12 @@ Usage::
 
     pm = ProjectManager()
     pm.new("My Capture")
-    pm.config.listen_port = 9000
+    pm.forwarders[0].config.listen_port = 9000
     pm.save_as("/tmp/capture.pp")
 
     pm2 = ProjectManager()
     state = pm2.open("/tmp/capture.pp")
-    # state.config, state.rules_engine, state.intercept_filter,
+    # state.forwarders, state.rules_engine, state.intercept_filter,
     # state.playbooks, state.captured_sessions
 """
 
@@ -39,12 +42,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from ..config import ProxyConfig
+from ..config import ForwarderConfig, ProxyConfig
 from ..rules.engine import RulesEngine, InterceptFilter
 from ..forge.models import Playbook
 
 # Project format version — bump when the schema changes incompatibly.
-_FORMAT_VERSION = 3
+# v3 → v4: config.json (single ProxyConfig) replaced by forwarders.json (list of ForwarderConfig).
+_FORMAT_VERSION = 4
 
 # Safety limits for ZIP loading.
 _ZIP_MAX_MEMBERS      = 32
@@ -60,7 +64,7 @@ class ProjectState:
     and wire it into the running ProxyAPI.
 
     Attributes:
-        config:            Proxy configuration.
+        forwarders:        List of named forwarder configurations.
         rules_engine:      Active replace rules.
         intercept_filter:  Active intercept rules.
         playbooks:         All forge playbooks (with frames and run history).
@@ -68,12 +72,12 @@ class ProjectState:
         name:              Human-readable project name.
     """
 
-    config:            ProxyConfig
+    forwarders:        list[ForwarderConfig]
     rules_engine:      RulesEngine
     intercept_filter:  InterceptFilter
     playbooks:         list[Playbook]
-    captured_sessions: list[dict]     = field(default_factory=list)
-    name:              str            = "Untitled"
+    captured_sessions: list[dict]            = field(default_factory=list)
+    name:              str                   = "Untitled"
 
 
 class ProjectManager:
@@ -84,7 +88,7 @@ class ProjectManager:
     JSON members for every piece of state.
 
     Attributes:
-        config:            The active :class:`~protopoke.config.ProxyConfig`.
+        forwarders:        List of active :class:`~protopoke.config.ForwarderConfig` objects.
         rules_engine:      The active :class:`~protopoke.rules.engine.RulesEngine`.
         intercept_filter:  The active :class:`~protopoke.rules.engine.InterceptFilter`.
         playbooks:         List of active :class:`~protopoke.forge.models.Playbook`.
@@ -96,14 +100,16 @@ class ProjectManager:
     """
 
     def __init__(self) -> None:
-        self.config:            ProxyConfig       = ProxyConfig()
-        self.rules_engine:      RulesEngine       = RulesEngine()
-        self.intercept_filter:  InterceptFilter   = InterceptFilter()
-        self.playbooks:         list[Playbook]    = []
-        self.captured_sessions: list[dict]        = []
-        self.name:              str               = "Untitled"
-        self.path:              Optional[Path]    = None
-        self.is_dirty:          bool              = False
+        self.forwarders:        list[ForwarderConfig] = [
+            ForwarderConfig(name="Default", enabled=True, config=ProxyConfig())
+        ]
+        self.rules_engine:      RulesEngine           = RulesEngine()
+        self.intercept_filter:  InterceptFilter       = InterceptFilter()
+        self.playbooks:         list[Playbook]        = []
+        self.captured_sessions: list[dict]            = []
+        self.name:              str                   = "Untitled"
+        self.path:              Optional[Path]        = None
+        self.is_dirty:          bool                  = False
 
         self._created_at: float = time.time()
         self._saved_at:   float = 0.0
@@ -114,7 +120,7 @@ class ProjectManager:
 
     def new(self, name: str = "Untitled") -> None:
         """Reset to a blank in-memory project."""
-        self.config            = ProxyConfig()
+        self.forwarders        = [ForwarderConfig(name="Default", enabled=True, config=ProxyConfig())]
         self.rules_engine      = RulesEngine()
         self.intercept_filter  = InterceptFilter()
         self.playbooks         = []
@@ -189,34 +195,18 @@ class ProjectManager:
             "sessions": self.captured_sessions,
         }
 
-        config_json = self._config_to_json()
+        forwarders_data = {"forwarders": [f.to_dict() for f in self.forwarders]}
 
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("project.json", json.dumps(meta,        indent=2))
-            zf.writestr("config.json",  config_json)
-            zf.writestr("rules.json",   json.dumps(rules_data,  indent=2))
-            zf.writestr("forge.json",   json.dumps(forge_data,  indent=2))
-            zf.writestr("logs.json",    json.dumps(logs_data,   indent=2))
+            zf.writestr("project.json",    json.dumps(meta,             indent=2))
+            zf.writestr("forwarders.json", json.dumps(forwarders_data,  indent=2))
+            zf.writestr("rules.json",      json.dumps(rules_data,       indent=2))
+            zf.writestr("forge.json",      json.dumps(forge_data,       indent=2))
+            zf.writestr("logs.json",       json.dumps(logs_data,        indent=2))
 
         self._saved_at = now
         self.is_dirty  = False
         return zip_path.resolve()
-
-    def _config_to_json(self) -> str:
-        import tempfile, os
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False, encoding="utf-8"
-        ) as tmp:
-            tmp_path = tmp.name
-        try:
-            self.config.save(Path(tmp_path))
-            with open(tmp_path, encoding="utf-8") as f:
-                return f.read()
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
 
     # ------------------------------------------------------------------
     # Internal: ZIP-based open
@@ -259,24 +249,36 @@ class ProjectManager:
                     f"(format_version={meta['format_version']}). Please upgrade."
                 )
 
-            # Config
-            config_raw = _read("config.json")
-            if config_raw:
-                import tempfile, os
-                with tempfile.NamedTemporaryFile(
-                    mode="w", suffix=".json", delete=False, encoding="utf-8"
-                ) as tmp:
-                    tmp.write(config_raw)
-                    tmp_path = tmp.name
-                try:
-                    self.config = ProxyConfig.load(Path(tmp_path))
-                finally:
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
+            # Forwarders (v4+) — or migrate from legacy config.json (v3)
+            forwarders_raw = _read("forwarders.json")
+            if forwarders_raw:
+                fdata = json.loads(forwarders_raw)
+                self.forwarders = [
+                    ForwarderConfig.from_dict(fd)
+                    for fd in fdata.get("forwarders", [])
+                ]
+                if not self.forwarders:
+                    self.forwarders = [ForwarderConfig(name="Default", enabled=True, config=ProxyConfig())]
             else:
-                self.config = ProxyConfig()
+                # v3 migration: wrap the single config.json as a "Default" forwarder
+                config_raw = _read("config.json")
+                if config_raw:
+                    import tempfile, os
+                    with tempfile.NamedTemporaryFile(
+                        mode="w", suffix=".json", delete=False, encoding="utf-8"
+                    ) as tmp:
+                        tmp.write(config_raw)
+                        tmp_path = tmp.name
+                    try:
+                        legacy_config = ProxyConfig.load(Path(tmp_path))
+                    finally:
+                        try:
+                            os.unlink(tmp_path)
+                        except OSError:
+                            pass
+                else:
+                    legacy_config = ProxyConfig()
+                self.forwarders = [ForwarderConfig(name="Default", enabled=True, config=legacy_config)]
 
             # Rules
             rules_raw = _read("rules.json")
@@ -311,7 +313,7 @@ class ProjectManager:
         self._saved_at = meta.get("saved_at", 0.0)
 
         return ProjectState(
-            config=self.config,
+            forwarders=self.forwarders,
             rules_engine=self.rules_engine,
             intercept_filter=self.intercept_filter,
             playbooks=self.playbooks,
@@ -338,8 +340,20 @@ class ProjectManager:
                 f"(format_version={meta['format_version']}). Please upgrade."
             )
 
-        config_path = project_dir / "config.json"
-        self.config = ProxyConfig.load(config_path) if config_path.exists() else ProxyConfig()
+        # Forwarders (v4+) or migrate legacy config.json (v3)
+        forwarders_path = project_dir / "forwarders.json"
+        if forwarders_path.exists():
+            fdata = json.loads(forwarders_path.read_text(encoding="utf-8"))
+            self.forwarders = [
+                ForwarderConfig.from_dict(fd) for fd in fdata.get("forwarders", [])
+            ]
+            if not self.forwarders:
+                self.forwarders = [ForwarderConfig(name="Default", enabled=True, config=ProxyConfig())]
+        else:
+            # v3 migration
+            config_path = project_dir / "config.json"
+            legacy_config = ProxyConfig.load(config_path) if config_path.exists() else ProxyConfig()
+            self.forwarders = [ForwarderConfig(name="Default", enabled=True, config=legacy_config)]
 
         rules_path = project_dir / "rules.json"
         if rules_path.exists():
@@ -372,7 +386,7 @@ class ProjectManager:
         self._saved_at = meta.get("saved_at", 0.0)
 
         return ProjectState(
-            config=self.config,
+            forwarders=self.forwarders,
             rules_engine=self.rules_engine,
             intercept_filter=self.intercept_filter,
             playbooks=self.playbooks,

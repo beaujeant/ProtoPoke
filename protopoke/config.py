@@ -183,3 +183,40 @@ class ProxyConfig:
         """Load config from a JSON file written by save()."""
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls.from_dict(data)
+
+
+@dataclass
+class ForwarderConfig:
+    """
+    Configuration for one named forwarder instance.
+
+    Wraps a :class:`ProxyConfig` with a user-visible name and an
+    enabled/disabled flag so that multiple forwarders can coexist in a
+    project and be started/stopped independently.
+
+    Attributes:
+        name:    Human-readable label shown in the Config tab.
+        enabled: When False the forwarder is excluded from "Start All".
+        config:  The underlying network/framing/TLS configuration.
+    """
+
+    name:    str         = "Forwarder"
+    enabled: bool        = True
+    config:  ProxyConfig = field(default_factory=ProxyConfig)
+
+    def to_dict(self) -> dict:
+        """Serialise to a JSON-compatible dict."""
+        return {
+            "name":    self.name,
+            "enabled": self.enabled,
+            "config":  self.config.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ForwarderConfig":
+        """Deserialise from a dict (as produced by to_dict())."""
+        return cls(
+            name    = d.get("name", "Forwarder"),
+            enabled = d.get("enabled", True),
+            config  = ProxyConfig.from_dict(d.get("config", {})),
+        )
