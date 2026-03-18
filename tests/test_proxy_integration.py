@@ -387,3 +387,48 @@ class TestUpstreamFailure:
             writer.close()
         finally:
             await api.stop()
+
+
+# ---------------------------------------------------------------------------
+# Shutdown with active session (regression: stop() deadlock)
+# ---------------------------------------------------------------------------
+
+class TestShutdownWithActiveSession:
+    @pytest.mark.asyncio
+    async def test_stop_while_session_active(self):
+        """
+        stop() must complete even when a client is still connected.
+
+        Regression test for the bug where wait_closed() was called before
+        cancelling session tasks, causing a deadlock: the open connections
+        were never closed because the tasks that own them were never cancelled.
+        """
+        async with echo_server_ctx() as (upstream_host, upstream_port):
+            listen_port = free_port()
+            config = ProxyConfig(
+                listen_host="127.0.0.1", listen_port=listen_port,
+                upstream_host=upstream_host, upstream_port=upstream_port,
+            )
+            api = ProxyAPI(config)
+            await api.start()
+
+            # Open a connection but intentionally do NOT close it — the session
+            # stays active while we ask the proxy to stop.
+            reader, writer = await asyncio.open_connection("127.0.0.1", listen_port)
+            writer.write(b"hello")
+            await writer.drain()
+            await asyncio.sleep(0.05)  # Let the session become ACTIVE
+
+            assert len(api.list_sessions()) == 1
+
+            # stop() must return within a short timeout; if it deadlocks the
+            # wait_for will raise asyncio.TimeoutError and fail the test.
+            await asyncio.wait_for(api.stop(), timeout=3.0)
+
+            # Clean up the dangling client connection (proxy has already closed
+            # its side, so we may get EOF or a connection-reset here).
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass

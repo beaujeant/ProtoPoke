@@ -158,11 +158,12 @@ class ProxyEngine:
         """
         if self._server is not None:
             self._server.close()
-            await self._server.wait_closed()
-            self._server = None
             logger.info("Proxy server stopped accepting connections")
 
-        # Cancel all active sessions
+        # Cancel all active sessions BEFORE calling wait_closed().
+        # wait_closed() blocks until every open connection is gone — but those
+        # connections are owned by the session tasks, so we must cancel the
+        # tasks first; otherwise the two sides wait for each other forever.
         tasks = list(self._session_tasks.values())
         for task in tasks:
             task.cancel()
@@ -170,6 +171,11 @@ class ProxyEngine:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
             logger.info("All %d session tasks cancelled", len(tasks))
+
+        # All connections are now closed; wait_closed() returns immediately.
+        if self._server is not None:
+            await self._server.wait_closed()
+            self._server = None
 
         await self.tamper_controller.shutdown()
 
