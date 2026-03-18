@@ -75,8 +75,10 @@ class ProxyEngine:
         event_bus:            Optional[EventBus]            = None,
         session_registry:     Optional[SessionRegistry]     = None,
         rules_engine:         "Optional[RulesEngine]"       = None,
+        forwarder_name:       str                           = "",
     ) -> None:
         self.config               = config
+        self.forwarder_name       = forwarder_name
         # Use explicit is-None checks rather than truthiness (`or`) because
         # an empty SessionRegistry has __len__==0 which is falsy — using `or`
         # would silently create a second registry and break session tracking.
@@ -228,6 +230,7 @@ class ProxyEngine:
             client_port=client_port,
             server_host=effective_server_name,
             server_port=self.config.upstream_port,
+            forwarder_name=self.forwarder_name,
         )
 
         # Connect to upstream (always the configured IP/host for the TCP

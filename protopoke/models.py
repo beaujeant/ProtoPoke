@@ -180,22 +180,24 @@ class SessionInfo:
     holding live references. The SessionRegistry owns the live Session objects;
     this is the serializable view.
     """
-    id:          str
-    client_host: str
-    client_port: int
-    server_host: str
-    server_port: int
-    state:       SessionState
-    created_at:  float
-    closed_at:   Optional[float] = None
+    id:             str
+    client_host:    str
+    client_port:    int
+    server_host:    str
+    server_port:    int
+    state:          SessionState
+    created_at:     float
+    closed_at:      Optional[float] = None
+    forwarder_name: str             = ""
 
     @classmethod
     def create(
         cls,
-        client_host: str,
-        client_port: int,
-        server_host: str,
-        server_port: int,
+        client_host:    str,
+        client_port:    int,
+        server_host:    str,
+        server_port:    int,
+        forwarder_name: str = "",
     ) -> "SessionInfo":
         return cls(
             id=new_id(),
@@ -205,19 +207,21 @@ class SessionInfo:
             server_port=server_port,
             state=SessionState.CONNECTING,
             created_at=time.time(),
+            forwarder_name=forwarder_name,
         )
 
     def to_dict(self) -> dict:
         """Serialise to a JSON-compatible dict."""
         return {
-            "id":          self.id,
-            "client_host": self.client_host,
-            "client_port": self.client_port,
-            "server_host": self.server_host,
-            "server_port": self.server_port,
-            "state":       self.state.value,
-            "created_at":  self.created_at,
-            "closed_at":   self.closed_at,
+            "id":             self.id,
+            "client_host":    self.client_host,
+            "client_port":    self.client_port,
+            "server_host":    self.server_host,
+            "server_port":    self.server_port,
+            "state":          self.state.value,
+            "created_at":     self.created_at,
+            "closed_at":      self.closed_at,
+            "forwarder_name": self.forwarder_name,
         }
 
     def __repr__(self) -> str:

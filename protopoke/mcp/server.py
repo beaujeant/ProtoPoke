@@ -87,17 +87,20 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         """Return current proxy status: running state, config summary, counts."""
         sessions = api.list_sessions()
         active = api.list_active_sessions()
+        running = api.list_running()
+        cfg = api.config
         return {
-            "running": api.engine.is_running if hasattr(api.engine, "is_running") else None,
+            "running": bool(running),
+            "running_forwarders": running,
             "tamper_enabled": api.tamper_enabled,
             "pending_tamper_count": api.pending_count(),
             "total_sessions": len(sessions),
             "active_sessions": len(active),
-            "listen": f"{api.config.listen_host}:{api.config.listen_port}",
-            "upstream": f"{api.config.upstream_host}:{api.config.upstream_port}",
-            "framer": api.config.framer_name,
-            "tls_listen": api.config.tls_listen,
-            "tls_upstream": api.config.tls_upstream,
+            "listen": f"{cfg.listen_host}:{cfg.listen_port}",
+            "upstream": f"{cfg.upstream_host}:{cfg.upstream_port}",
+            "framer": cfg.framer_name,
+            "tls_listen": cfg.tls_listen,
+            "tls_upstream": cfg.tls_upstream,
         }
 
     @mcp.tool()
@@ -1099,11 +1102,14 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
             if frame.direction is _Dir.CLIENT_TO_SERVER
             else "server_to_client"
         )
+        fwd_name = session.info.forwarder_name
+        fwd = next((f for f in api.forwarders if f.name == fwd_name), None) if fwd_name else None
+        tls_upstream = fwd.config.tls_upstream if fwd else api.config.tls_upstream
         pb = Playbook.create(
             label=label or f"From {session_id[:8]}",
             host=session.info.server_host,
             port=session.info.server_port,
-            tls=api.config.tls_upstream,
+            tls=tls_upstream,
             source_session_id=session_id,
         )
         hex_str = " ".join(frame.raw_bytes.hex()[i:i+2] for i in range(0, len(frame.raw_bytes.hex()), 2))
