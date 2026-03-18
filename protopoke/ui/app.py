@@ -230,7 +230,8 @@ class ProtoPoke(App):
             await self.api.start()
             self._proxy_running = True
             self._update_title()
-            self.query_one("#config-tab", ConfigTab).notify_proxy_running(True)
+            address = f"{self.api.config.listen_host}:{self.api.config.listen_port}"
+            self.query_one("#config-tab", ConfigTab).notify_proxy_running(True, address)
             # Sync the tamper toggle in the Tamper tab to reflect config
             try:
                 self.query_one("#tamper-tab", TamperTab).query_one(
@@ -238,11 +239,6 @@ class ProtoPoke(App):
                 ).value = self.api.config.tamper_enabled
             except Exception:
                 pass
-            self.notify(
-                f"Proxy started on "
-                f"{self.api.config.listen_host}:{self.api.config.listen_port}",
-                severity="information",
-            )
         except Exception as exc:
             self.notify(f"Failed to start proxy: {exc}", severity="error")
 
@@ -252,7 +248,6 @@ class ProtoPoke(App):
             self._proxy_running = False
             self._update_title()
             self.query_one("#config-tab", ConfigTab).notify_proxy_running(False)
-            self.notify("Proxy stopped.", severity="information")
         except Exception as exc:
             self.notify(f"Failed to stop proxy: {exc}", severity="error")
 
