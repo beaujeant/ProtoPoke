@@ -122,7 +122,7 @@ class ConfigTab(Widget):
         super().__init__(name=name, id=id, classes=classes)
         self._forwarders: list[ForwarderConfig] = list(forwarders)
         # Track running state per forwarder name → address string
-        self._running: dict[str, str] = {}
+        self._running_fwds: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -164,8 +164,8 @@ class ConfigTab(Widget):
     def _row_values(self, fwd: ForwarderConfig) -> tuple:
         cfg = fwd.config
         status = "stopped"
-        if fwd.name in self._running:
-            addr = self._running[fwd.name]
+        if fwd.name in self._running_fwds:
+            addr = self._running_fwds[fwd.name]
             status = f"listening on {addr}" if addr else "running"
         return (
             "✓" if fwd.enabled else "✗",
@@ -263,7 +263,7 @@ class ConfigTab(Widget):
         fwd = self._selected_forwarder()
         if fwd is None:
             return
-        if fwd.name in self._running:
+        if fwd.name in self._running_fwds:
             self.app.notify("Stop the forwarder before editing.", severity="warning")
             return
         # Remember the old name so we can find the entry after the modal returns
@@ -299,7 +299,7 @@ class ConfigTab(Widget):
             return
         name = fwd.name
         self._forwarders = [f for f in self._forwarders if f.name != name]
-        self._running.pop(name, None)
+        self._running_fwds.pop(name, None)
         self._refresh_table()
         self.post_message(self.ForwarderRemoved(name))
 
@@ -323,7 +323,7 @@ class ConfigTab(Widget):
     def load_forwarders(self, forwarders: list[ForwarderConfig]) -> None:
         """Replace the entire forwarder list (e.g. after project open/new)."""
         self._forwarders = list(forwarders)
-        self._running.clear()
+        self._running_fwds.clear()
         self.call_after_refresh(self._refresh_table)
 
     def notify_forwarder_running(
@@ -331,9 +331,9 @@ class ConfigTab(Widget):
     ) -> None:
         """Update the running state for a forwarder."""
         if running:
-            self._running[name] = address
+            self._running_fwds[name] = address
         else:
-            self._running.pop(name, None)
+            self._running_fwds.pop(name, None)
         try:
             self._refresh_table()
         except Exception:
