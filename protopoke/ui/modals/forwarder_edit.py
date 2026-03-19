@@ -1,0 +1,453 @@
+"""ForwarderEditModal — modal dialog for adding/editing a forwarder."""
+
+from __future__ import annotations
+
+import socket
+from copy import deepcopy
+
+from textual.app import ComposeResult
+from textual.screen import ModalScreen
+from textual.widgets import Button, Input, Label, Select, Switch, Static
+from textual.containers import Horizontal, Vertical, ScrollableContainer
+
+from ...config import ForwarderConfig, ProxyConfig
+from .file_picker import FilePickerModal
+from .framer_edit import FramerEditModal, FramerSettings
+
+
+_LOG_LEVEL_OPTIONS = [
+    ("DEBUG", "DEBUG"),
+    ("INFO", "INFO"),
+    ("WARNING", "WARNING"),
+    ("ERROR", "ERROR"),
+]
+
+
+def _get_listen_interfaces() -> list[tuple[str, str]]:
+    """Return a list of (label, value) tuples for available listen interfaces."""
+    interfaces: dict[str, str] = {}
+    interfaces["0.0.0.0"] = "0.0.0.0 (all interfaces)"
+    interfaces["127.0.0.1"] = "127.0.0.1 (loopback)"
+    interfaces["::"] = ":: (all interfaces IPv6)"
+    interfaces["::1"] = "::1 (loopback IPv6)"
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            addr = info[4][0]
+            if addr not in interfaces:
+                interfaces[addr] = addr
+    except Exception:
+        pass
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.1)
+        s.connect(("8.8.8.8", 80))
+        addr = s.getsockname()[0]
+        if addr not in interfaces:
+            interfaces[addr] = addr
+        s.close()
+    except Exception:
+        pass
+    return [(label, val) for val, label in interfaces.items()]
+
+
+def _framer_summary(
+    framer_name: str,
+    framer_kwargs: dict,
+    custom_path: str | None = None,
+) -> str:
+    """Return a one-line human-readable description of the current framer settings."""
+    if framer_name == "raw":
+        return "raw — pass raw read() chunks"
+    if framer_name == "delimiter":
+        delim = framer_kwargs.get("delimiter", b"\n")
+        hex_str = delim.hex() if isinstance(delim, (bytes, bytearray)) else str(delim)
+        return f"delimiter on 0x{hex_str}"
+    if framer_name == "length_prefix":
+        pl = framer_kwargs.get("prefix_length", 4)
+        bo = framer_kwargs.get("byte_order", "big")
+        offset = framer_kwargs.get("prefix_offset", 0)
+        add = framer_kwargs.get("length_add", 0)
+        parts = [f"{pl}-byte {bo}-endian length prefix"]
+        if offset:
+            parts.append(f"offset +{offset}")
+        if add:
+            parts.append(f"length {add:+d}")
+        return "  ".join(parts)
+    if framer_name == "line":
+        return "line — split on \\r\\n or \\n"
+    if framer_name == "custom":
+        return f"custom: {custom_path}" if custom_path else "custom — path not set"
+    return framer_name
+
+
+class ForwarderEditModal(ModalScreen):
+    """
+    Modal dialog for adding or editing a forwarder configuration.
+
+    Dismisses with a :class:`ForwarderConfig` on Save, or ``None`` on Cancel/Escape.
+    """
+
+    DEFAULT_CSS = """
+    ForwarderEditModal {
+        align: center middle;
+    }
+    ForwarderEditModal > Vertical {
+        width: 80;
+        max-height: 90%;
+        border: thick $primary;
+        padding: 1 2;
+        background: $surface;
+    }
+    ForwarderEditModal .modal-title {
+        text-style: bold;
+        margin-bottom: 1;
+        color: $text;
+    }
+    ForwarderEditModal ScrollableContainer {
+        height: 1fr;
+        min-height: 10;
+    }
+    ForwarderEditModal .section-header {
+        background: $primary-darken-2;
+        color: $text;
+        padding: 0;
+        text-style: bold;
+        margin-top: 1;
+    }
+    ForwarderEditModal .field-row {
+        height: 3;
+        margin-bottom: 0;
+        align: left middle;
+    }
+    ForwarderEditModal .field-label {
+        width: 26;
+        padding: 0 1;
+    }
+    ForwarderEditModal .field-input {
+        width: 1fr;
+    }
+    ForwarderEditModal Switch {
+        margin: 0;
+    }
+    ForwarderEditModal .btn-browse {
+        width: 10;
+        min-width: 10;
+        margin-left: 1;
+    }
+    ForwarderEditModal .btn-framer-edit {
+        width: 8;
+        min-width: 8;
+        margin: 0 1;
+    }
+    ForwarderEditModal .framer-summary {
+        width: 1fr;
+        padding: 0 1;
+        color: $text-muted;
+        content-align: left middle;
+        height: 3;
+    }
+    ForwarderEditModal .buttons {
+        height: 3;
+        margin-top: 1;
+        align: right middle;
+    }
+    ForwarderEditModal .buttons Button {
+        margin-left: 1;
+    }
+    """
+
+    def __init__(
+        self,
+        forwarder: ForwarderConfig | None = None,
+        *,
+        existing_names: set[str] | None = None,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        forwarder:
+            The forwarder to edit, or ``None`` to create a new one.
+        existing_names:
+            Names already in use (for duplicate-name validation).
+        """
+        super().__init__()
+        if forwarder is not None:
+            self._forwarder = deepcopy(forwarder)
+            self._original_name = forwarder.name
+            self._is_new = False
+        else:
+            self._forwarder = ForwarderConfig(name="Forwarder", enabled=True, config=ProxyConfig())
+            self._original_name = ""
+            self._is_new = True
+
+        self._existing_names = existing_names or set()
+        cfg = self._forwarder.config
+        self._framer_name = cfg.framer_name
+        self._framer_kwargs = dict(cfg.framer_kwargs)
+        self._custom_framer_path = cfg.custom_framer_path
+
+    def compose(self) -> ComposeResult:
+        cfg = self._forwarder.config
+        title = "Add Forwarder" if self._is_new else "Edit Forwarder"
+        ifaces = _get_listen_interfaces()
+
+        # Determine which interface option to pre-select
+        listen_val = cfg.listen_host
+        iface_values = {v for _, v in ifaces}
+        if listen_val not in iface_values:
+            # Add the current value as a custom entry
+            ifaces.append((listen_val, listen_val))
+
+        with Vertical():
+            yield Label(title, classes="modal-title")
+
+            with ScrollableContainer():
+                # ---- Name ----
+                with Horizontal(classes="field-row"):
+                    yield Label("Name:", classes="field-label")
+                    yield Input(value=self._forwarder.name, id="fm-name", classes="field-input")
+
+                # ---- Listener ----
+                yield Static("  Listener", classes="section-header")
+                with Horizontal(classes="field-row"):
+                    yield Label("Listen host:", classes="field-label")
+                    yield Select(
+                        ifaces,
+                        value=listen_val,
+                        id="fm-listen-host",
+                        classes="field-input",
+                        allow_blank=False,
+                    )
+                with Horizontal(classes="field-row"):
+                    yield Label("Listen port:", classes="field-label")
+                    yield Input(
+                        value=str(cfg.listen_port),
+                        id="fm-listen-port",
+                        restrict=r"\d*",
+                        classes="field-input",
+                    )
+
+                # ---- Upstream ----
+                yield Static("  Upstream", classes="section-header")
+                with Horizontal(classes="field-row"):
+                    yield Label("Upstream host:", classes="field-label")
+                    yield Input(value=cfg.upstream_host, id="fm-upstream-host", classes="field-input")
+                with Horizontal(classes="field-row"):
+                    yield Label("Upstream port:", classes="field-label")
+                    yield Input(
+                        value=str(cfg.upstream_port),
+                        id="fm-upstream-port",
+                        restrict=r"\d*",
+                        classes="field-input",
+                    )
+
+                # ---- Sessions / buffer ----
+                yield Static("  Sessions", classes="section-header")
+                with Horizontal(classes="field-row"):
+                    yield Label("Max sessions (0=∞):", classes="field-label")
+                    yield Input(
+                        value=str(cfg.max_sessions),
+                        id="fm-max-sessions",
+                        restrict=r"\d*",
+                        classes="field-input",
+                    )
+                with Horizontal(classes="field-row"):
+                    yield Label("Buffer size (bytes):", classes="field-label")
+                    yield Input(
+                        value=str(cfg.read_buffer_size),
+                        id="fm-read-buffer",
+                        restrict=r"\d*",
+                        classes="field-input",
+                    )
+
+                # ---- TLS client side ----
+                yield Static("  SSL/TLS", classes="section-header")
+                with Horizontal(classes="field-row"):
+                    yield Label("SSL/TLS client side:", classes="field-label")
+                    yield Switch(value=cfg.tls_listen, id="fm-tls-listen")
+                with Horizontal(classes="field-row"):
+                    yield Label("SSL/TLS upstream:", classes="field-label")
+                    yield Switch(value=cfg.tls_upstream, id="fm-tls-upstream")
+                with Vertical(id="fm-tls-paths"):
+                    with Horizontal(classes="field-row"):
+                        yield Label("CA cert path:", classes="field-label")
+                        yield Input(
+                            value=cfg.ca_cert_path or "",
+                            id="fm-ca-cert",
+                            placeholder="~/.protopoke/ca.crt",
+                            classes="field-input",
+                        )
+                        yield Button("Browse", id="fm-browse-ca-cert", classes="btn-browse")
+                    with Horizontal(classes="field-row"):
+                        yield Label("CA key path:", classes="field-label")
+                        yield Input(
+                            value=cfg.ca_key_path or "",
+                            id="fm-ca-key",
+                            placeholder="~/.protopoke/ca.key",
+                            classes="field-input",
+                        )
+                        yield Button("Browse", id="fm-browse-ca-key", classes="btn-browse")
+                    with Horizontal(classes="field-row"):
+                        yield Label("Manual cert path:", classes="field-label")
+                        yield Input(
+                            value=cfg.tls_cert_path or "",
+                            id="fm-tls-cert",
+                            placeholder="(optional override)",
+                            classes="field-input",
+                        )
+                        yield Button("Browse", id="fm-browse-tls-cert", classes="btn-browse")
+                    with Horizontal(classes="field-row"):
+                        yield Label("Manual key path:", classes="field-label")
+                        yield Input(
+                            value=cfg.tls_key_path or "",
+                            id="fm-tls-key",
+                            placeholder="(optional override)",
+                            classes="field-input",
+                        )
+                        yield Button("Browse", id="fm-browse-tls-key", classes="btn-browse")
+
+                # ---- Framing ----
+                yield Static("  Framing", classes="section-header")
+                with Horizontal(classes="field-row"):
+                    yield Label("Framer:", classes="field-label")
+                    yield Button("Edit", id="fm-btn-framer-edit", classes="btn-framer-edit")
+                    yield Static(
+                        _framer_summary(self._framer_name, self._framer_kwargs, self._custom_framer_path),
+                        id="fm-framer-summary",
+                        classes="framer-summary",
+                    )
+
+                # ---- Protocol ----
+                yield Static("  Protocol Definition", classes="section-header")
+                with Horizontal(classes="field-row"):
+                    yield Label("Definition file:", classes="field-label")
+                    yield Input(
+                        value=cfg.protocol_definition_path or "",
+                        id="fm-proto-def",
+                        placeholder="/path/to/protocol.yaml",
+                        classes="field-input",
+                    )
+                    yield Button("Browse", id="fm-browse-proto-def", classes="btn-browse")
+
+            # ---- Action buttons ----
+            with Horizontal(classes="buttons"):
+                yield Button("Cancel", variant="default", id="fm-btn-cancel")
+                yield Button("Save", variant="primary", id="fm-btn-save")
+
+    def on_mount(self) -> None:
+        # Show/hide TLS paths based on the client-side TLS toggle
+        self.query_one("#fm-tls-paths").display = self._forwarder.config.tls_listen
+
+    # ------------------------------------------------------------------
+    # Event handlers
+    # ------------------------------------------------------------------
+
+    def on_switch_changed(self, event: Switch.Changed) -> None:
+        if event.switch.id == "fm-tls-listen":
+            try:
+                self.query_one("#fm-tls-paths").display = event.value
+            except Exception:
+                pass
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        btn_id = event.button.id
+
+        _browse_map = {
+            "fm-browse-ca-cert":   "fm-ca-cert",
+            "fm-browse-ca-key":    "fm-ca-key",
+            "fm-browse-tls-cert":  "fm-tls-cert",
+            "fm-browse-tls-key":   "fm-tls-key",
+            "fm-browse-proto-def": "fm-proto-def",
+        }
+        if btn_id in _browse_map:
+            target_id = _browse_map[btn_id]
+            current = self.query_one(f"#{target_id}", Input).value.strip() or None
+
+            def _on_pick(path: str | None, _tid: str = target_id) -> None:
+                if path is not None:
+                    self.query_one(f"#{_tid}", Input).value = path
+            self.app.push_screen(FilePickerModal(current), _on_pick)
+            return
+
+        if btn_id == "fm-btn-framer-edit":
+            settings: FramerSettings = {
+                "framer_name": self._framer_name,
+                "framer_kwargs": dict(self._framer_kwargs),
+                "custom_framer_path": self._custom_framer_path,
+            }
+            self.app.push_screen(FramerEditModal(settings), self._on_framer_edit_result)
+        elif btn_id == "fm-btn-save":
+            self._save()
+        elif btn_id == "fm-btn-cancel":
+            self.dismiss(None)
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.dismiss(None)
+
+    def _on_framer_edit_result(self, result: FramerSettings | None) -> None:
+        if result is None:
+            return
+        self._framer_name = result["framer_name"]
+        self._framer_kwargs = dict(result["framer_kwargs"])
+        self._custom_framer_path = result.get("custom_framer_path")
+        try:
+            self.query_one("#fm-framer-summary", Static).update(
+                _framer_summary(self._framer_name, self._framer_kwargs, self._custom_framer_path)
+            )
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Save
+    # ------------------------------------------------------------------
+
+    def _save(self) -> None:
+        """Read form values, build a ForwarderConfig, and dismiss."""
+
+        def _str(wid: str) -> str:
+            return self.query_one(f"#{wid}", Input).value.strip()
+
+        def _int(wid: str, default: int = 0) -> int:
+            try:
+                return int(_str(wid))
+            except ValueError:
+                return default
+
+        def _sw(wid: str) -> bool:
+            return self.query_one(f"#{wid}", Switch).value
+
+        def _sel(wid: str) -> str:
+            val = self.query_one(f"#{wid}", Select).value
+            return str(val) if val and val is not Select.BLANK else ""
+
+        name = _str("fm-name") or "Forwarder"
+
+        # Duplicate name check (allow keeping the same name when editing)
+        if name != self._original_name and name in self._existing_names:
+            self.app.notify(f"A forwarder named '{name}' already exists.", severity="error")
+            return
+
+        fwd = self._forwarder
+        fwd.name = name
+
+        cfg = fwd.config
+        cfg.listen_host = _sel("fm-listen-host") or "127.0.0.1"
+        cfg.listen_port = _int("fm-listen-port", 8080)
+        cfg.upstream_host = _str("fm-upstream-host") or "127.0.0.1"
+        cfg.upstream_port = _int("fm-upstream-port", 9090)
+        cfg.max_sessions = _int("fm-max-sessions", 0)
+        cfg.read_buffer_size = _int("fm-read-buffer", 4096)
+        cfg.tls_listen = _sw("fm-tls-listen")
+        cfg.tls_upstream = _sw("fm-tls-upstream")
+        cfg.ca_cert_path = _str("fm-ca-cert") or None
+        cfg.ca_key_path = _str("fm-ca-key") or None
+        cfg.tls_cert_path = _str("fm-tls-cert") or None
+        cfg.tls_key_path = _str("fm-tls-key") or None
+        cfg.framer_name = self._framer_name
+        cfg.framer_kwargs = dict(self._framer_kwargs)
+        cfg.custom_framer_path = self._custom_framer_path
+        cfg.protocol_definition_path = _str("fm-proto-def") or None
+
+        self.dismiss(fwd)
