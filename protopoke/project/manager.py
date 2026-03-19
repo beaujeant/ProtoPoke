@@ -100,9 +100,7 @@ class ProjectManager:
     """
 
     def __init__(self) -> None:
-        self.forwarders:        list[ForwarderConfig] = [
-            ForwarderConfig(name="Default", enabled=True, config=ProxyConfig())
-        ]
+        self.forwarders:        list[ForwarderConfig] = []
         self.rules_engine:      RulesEngine           = RulesEngine()
         self.intercept_filter:  InterceptFilter       = InterceptFilter()
         self.playbooks:         list[Playbook]        = []
@@ -120,7 +118,7 @@ class ProjectManager:
 
     def new(self, name: str = "Untitled") -> None:
         """Reset to a blank in-memory project."""
-        self.forwarders        = [ForwarderConfig(name="Default", enabled=True, config=ProxyConfig())]
+        self.forwarders        = []
         self.rules_engine      = RulesEngine()
         self.intercept_filter  = InterceptFilter()
         self.playbooks         = []

@@ -235,24 +235,13 @@ class ProtoPoke(App):
         self._update_title()
 
     def on_config_tab_forwarder_enabled(self, event: ConfigTab.ForwarderEnabled) -> None:
-        """User toggled a forwarder's enabled state."""
+        """User toggled a forwarder's enabled state — start or stop it."""
         self._project.mark_dirty()
-
-    def on_config_tab_start_forwarder(self, event: ConfigTab.StartForwarder) -> None:
         name = event.forwarder_name
-        if name not in self._running_forwarders:
+        if event.enabled and name not in self._running_forwarders:
             self.run_worker(self._start_forwarder(name), exclusive=False, thread=False)
-
-    def on_config_tab_stop_forwarder(self, event: ConfigTab.StopForwarder) -> None:
-        name = event.forwarder_name
-        if name in self._running_forwarders:
+        elif not event.enabled and name in self._running_forwarders:
             self.run_worker(self._stop_forwarder(name), exclusive=False, thread=False)
-
-    def on_config_tab_start_all(self, _event: ConfigTab.StartAll) -> None:
-        self.run_worker(self._start_all_forwarders(), exclusive=False, thread=False)
-
-    def on_config_tab_stop_all(self, _event: ConfigTab.StopAll) -> None:
-        self.run_worker(self._stop_all_forwarders(), exclusive=False, thread=False)
 
     async def _start_forwarder(self, name: str) -> None:
         try:
@@ -287,16 +276,6 @@ class ProtoPoke(App):
         except Exception as exc:
             self.notify(f"Failed to stop forwarder '{name}': {exc}", severity="error")
 
-    async def _start_all_forwarders(self) -> None:
-        # Rebuild the API fresh so latest config is used
-        self._rebuild_api()
-        for fwd in self._project.forwarders:
-            if fwd.enabled and fwd.name not in self._running_forwarders:
-                await self._start_forwarder(fwd.name)
-
-    async def _stop_all_forwarders(self) -> None:
-        for name in list(self._running_forwarders):
-            await self._stop_forwarder(name)
 
     def _apply_dynamic_config_for(
         self, old_name: str, forwarder: ForwarderConfig

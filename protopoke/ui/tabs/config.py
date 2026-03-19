@@ -25,8 +25,8 @@ class ConfigTab(Widget):
     Tab 1 — Forwarder configuration.
 
     A DataTable lists all configured forwarders.  Below the table are
-    Add / Edit / Enable-Disable / Start / Stop buttons, and beneath those
-    the global log-level selector.
+    Add / Edit / Delete / On-Off buttons, and beneath those the global
+    log-level selector.
 
     Posts messages for all user actions so the app can react (start/stop
     forwarders, rebuild the API, persist project state, etc.).
@@ -60,23 +60,6 @@ class ConfigTab(Widget):
             self.forwarder_name = forwarder_name
             self.enabled = enabled
 
-    class StartForwarder(Message):
-        """User wants to start a specific forwarder."""
-        def __init__(self, forwarder_name: str) -> None:
-            super().__init__()
-            self.forwarder_name = forwarder_name
-
-    class StopForwarder(Message):
-        """User wants to stop a specific forwarder."""
-        def __init__(self, forwarder_name: str) -> None:
-            super().__init__()
-            self.forwarder_name = forwarder_name
-
-    class StartAll(Message):
-        """User clicked 'Start All'."""
-
-    class StopAll(Message):
-        """User clicked 'Stop All'."""
 
     # -- CSS ----------------------------------------------------------------
 
@@ -131,12 +114,8 @@ class ConfigTab(Widget):
             with Horizontal(classes="cfg-buttons"):
                 yield Button("+ Add", variant="success", id="btn-cfg-add")
                 yield Button("✎ Edit", variant="primary", id="btn-cfg-edit")
-                yield Button("⏻ Enable/Disable", id="btn-cfg-toggle")
-                yield Button("✕ Remove", variant="error", id="btn-cfg-remove")
-                yield Button("▶ Start", variant="success", id="btn-cfg-start")
-                yield Button("■ Stop", variant="error", id="btn-cfg-stop")
-                yield Button("▶ All", variant="success", id="btn-cfg-start-all")
-                yield Button("■ All", variant="error", id="btn-cfg-stop-all")
+                yield Button("✕ Delete", variant="error", id="btn-cfg-remove")
+                yield Button("⏻ On/Off", id="btn-cfg-toggle")
 
             with Horizontal(classes="cfg-global"):
                 yield Label("Log level:")
@@ -168,7 +147,7 @@ class ConfigTab(Widget):
             addr = self._running_fwds[fwd.name]
             status = f"listening on {addr}" if addr else "running"
         return (
-            "✓" if fwd.enabled else "✗",
+            "On" if fwd.enabled else "Off",
             fwd.name,
             f"{cfg.listen_host}:{cfg.listen_port}",
             f"{cfg.upstream_host}:{cfg.upstream_port}",
@@ -213,18 +192,6 @@ class ConfigTab(Widget):
             self._toggle_selected()
         elif btn_id == "btn-cfg-remove":
             self._remove_selected()
-        elif btn_id == "btn-cfg-start":
-            fwd = self._selected_forwarder()
-            if fwd:
-                self.post_message(self.StartForwarder(fwd.name))
-        elif btn_id == "btn-cfg-stop":
-            fwd = self._selected_forwarder()
-            if fwd:
-                self.post_message(self.StopForwarder(fwd.name))
-        elif btn_id == "btn-cfg-start-all":
-            self.post_message(self.StartAll())
-        elif btn_id == "btn-cfg-stop-all":
-            self.post_message(self.StopAll())
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Double-click or Enter on a row → open edit modal."""
