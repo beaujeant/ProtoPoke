@@ -433,6 +433,22 @@ class ProxyEngine:
         logger.info("terminate_session: cancelled task for session %s", session_id[:8])
         return True
 
+    def next_sequence_number(self, session_id: str, direction: Direction) -> int:
+        """
+        Allocate the next sequence number for *direction* in *session_id*.
+
+        Delegates to the live framer so the counter stays in sync with
+        normal relay-captured frames.  Falls back to the session frame count
+        for that direction when no relay is active (e.g. forge sessions).
+        """
+        relay = self._session_relays.get(session_id)
+        if relay is not None:
+            return relay.framer_for(direction).next_sequence()
+        session = self.session_registry.get(session_id)
+        if session is not None:
+            return len(session.frames_for_direction(direction))
+        return 0
+
     async def inject_to_client(self, session_id: str, data: bytes) -> bool:
         """
         Write *data* directly into an active session's client TCP connection.

@@ -212,7 +212,7 @@ class DirectionalRelay:
                 session_id=frame.session_id,
                 direction=frame.direction,
                 raw_bytes=data_to_send,
-                sequence_number=len(self._session.frames_for_direction(frame.direction)),
+                sequence_number=self._framer.next_sequence(),
                 framer_name="tamper",
             )
             self._session.add_frame(modified_frame)
@@ -320,6 +320,12 @@ class BidirectionalRelay:
             read_buffer_size=read_buffer_size,
             rules_engine=rules_engine,
         )
+
+    def framer_for(self, direction: Direction) -> Framer:
+        """Return the Framer for the given direction."""
+        if direction is Direction.CLIENT_TO_SERVER:
+            return self._upstream._framer
+        return self._downstream._framer
 
     async def run(self) -> None:
         """
