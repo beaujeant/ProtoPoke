@@ -875,13 +875,14 @@ class ProxyAPI:
         )
 
         # Add sent and received frames to the session so they appear in the Traffic tab.
+        forge_engine = self._engine_for_session(session_id)
         session = self.session_registry.get(session_id)
         if session and record.sent_bytes:
             sent_frame = Frame.create(
                 session_id=session_id,
                 direction=Direction.CLIENT_TO_SERVER,
                 raw_bytes=record.sent_bytes,
-                sequence_number=len(session.frames_for_direction(Direction.CLIENT_TO_SERVER)),
+                sequence_number=forge_engine.next_sequence_number(session_id, Direction.CLIENT_TO_SERVER) if forge_engine else len(session.frames_for_direction(Direction.CLIENT_TO_SERVER)),
                 framer_name="forge",
             )
             session.add_frame(sent_frame)
@@ -895,7 +896,7 @@ class ProxyAPI:
                     session_id=session_id,
                     direction=Direction.SERVER_TO_CLIENT,
                     raw_bytes=pkt,
-                    sequence_number=len(session.frames_for_direction(Direction.SERVER_TO_CLIENT)),
+                    sequence_number=forge_engine.next_sequence_number(session_id, Direction.SERVER_TO_CLIENT) if forge_engine else len(session.frames_for_direction(Direction.SERVER_TO_CLIENT)),
                     framer_name="forge",
                 )
                 session.add_frame(recv_frame)
@@ -936,7 +937,7 @@ class ProxyAPI:
                     session_id=session_id,
                     direction=Direction.SERVER_TO_CLIENT,
                     raw_bytes=data,
-                    sequence_number=len(session.frames_for_direction(Direction.SERVER_TO_CLIENT)),
+                    sequence_number=engine.next_sequence_number(session_id, Direction.SERVER_TO_CLIENT),
                     framer_name="injected",
                 )
                 session.add_frame(frame)
@@ -971,7 +972,7 @@ class ProxyAPI:
                     session_id=session_id,
                     direction=Direction.CLIENT_TO_SERVER,
                     raw_bytes=data,
-                    sequence_number=len(session.frames_for_direction(Direction.CLIENT_TO_SERVER)),
+                    sequence_number=engine.next_sequence_number(session_id, Direction.CLIENT_TO_SERVER),
                     framer_name="injected",
                 )
                 session.add_frame(frame)

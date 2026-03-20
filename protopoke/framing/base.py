@@ -169,6 +169,16 @@ class Framer(ABC):
         self._sequence += 1
         return seq
 
+    def next_sequence(self) -> int:
+        """
+        Consume and return the next sequence number for this direction.
+
+        Called by external code (relay tamper path, injection helpers) that
+        needs to allocate a sequence number on behalf of this framer so the
+        counter stays in sync with normal captured frames.
+        """
+        return self._next_sequence()
+
     def _make_frame(self, raw_bytes: bytes) -> Frame:
         """
         Create a properly attributed Frame from raw bytes.
