@@ -233,6 +233,13 @@ class TamperTab(Widget):
             preview,
             key=unit.id,
         )
+        # Auto-select the newly arrived frame and load it into the editor
+        self._selected_unit_id = unit.id
+        self._load_bytes_into_editor(data)
+        try:
+            dt.move_cursor(row=dt.row_count - 1)
+        except Exception:
+            pass
         self._refresh_pending_label()
 
     def remove_unit(self, unit_id: str) -> None:
