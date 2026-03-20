@@ -881,7 +881,7 @@ class ProxyAPI:
                 session_id=session_id,
                 direction=Direction.CLIENT_TO_SERVER,
                 raw_bytes=record.sent_bytes,
-                sequence_number=len(session.frames),
+                sequence_number=len(session.frames_for_direction(Direction.CLIENT_TO_SERVER)),
                 framer_name="forge",
             )
             session.add_frame(sent_frame)
@@ -895,7 +895,7 @@ class ProxyAPI:
                     session_id=session_id,
                     direction=Direction.SERVER_TO_CLIENT,
                     raw_bytes=pkt,
-                    sequence_number=len(session.frames),
+                    sequence_number=len(session.frames_for_direction(Direction.SERVER_TO_CLIENT)),
                     framer_name="forge",
                 )
                 session.add_frame(recv_frame)
@@ -936,7 +936,7 @@ class ProxyAPI:
                     session_id=session_id,
                     direction=Direction.SERVER_TO_CLIENT,
                     raw_bytes=data,
-                    sequence_number=len(session.frames),
+                    sequence_number=len(session.frames_for_direction(Direction.SERVER_TO_CLIENT)),
                     framer_name="injected",
                 )
                 session.add_frame(frame)
@@ -971,7 +971,7 @@ class ProxyAPI:
                     session_id=session_id,
                     direction=Direction.CLIENT_TO_SERVER,
                     raw_bytes=data,
-                    sequence_number=len(session.frames),
+                    sequence_number=len(session.frames_for_direction(Direction.CLIENT_TO_SERVER)),
                     framer_name="injected",
                 )
                 session.add_frame(frame)

@@ -212,7 +212,7 @@ class DirectionalRelay:
                 session_id=frame.session_id,
                 direction=frame.direction,
                 raw_bytes=data_to_send,
-                sequence_number=len(self._session.frames),
+                sequence_number=len(self._session.frames_for_direction(frame.direction)),
                 framer_name="tamper",
             )
             self._session.add_frame(modified_frame)

@@ -217,12 +217,16 @@ class ProtoPoke(App):
         self._apply_dynamic_config_for(event.old_name, event.forwarder)
 
     def on_config_tab_forwarder_added(self, event: ConfigTab.ForwarderAdded) -> None:
-        """User added a new forwarder — keep project in sync."""
+        """User added a new forwarder — keep project in sync and auto-start if enabled."""
         if event.forwarder not in self._project.forwarders:
             self._project.forwarders.append(event.forwarder)
         self.api.update_forwarders(self._project.forwarders)
         self._project.mark_dirty()
         self._update_title()
+        if event.forwarder.enabled:
+            self.run_worker(
+                self._start_forwarder(event.forwarder.name), exclusive=False, thread=False
+            )
 
     def on_config_tab_forwarder_removed(self, event: ConfigTab.ForwarderRemoved) -> None:
         """User removed a forwarder."""
