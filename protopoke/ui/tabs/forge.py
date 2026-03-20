@@ -13,6 +13,7 @@ from textual.containers import Horizontal, Vertical
 from ...forge.models import Playbook, PlaybookFrame, PlaybookRun, TrafficEntry
 from ..modals.playbook_modal import PlaybookModal, PlaybookResult
 from ..modals.frame_edit import FrameEditModal
+from ..modals.copy_frame_modal import CopyFrameModal
 from ..utils.frame_codec import hex_template_to_str, str_to_hex_template
 
 
@@ -182,6 +183,7 @@ class ForgeTab(Widget):
                         yield Button("+ Add",    id="btn-frame-add",    variant="success", flat=True)
                         yield Button("✖ Remove", id="btn-frame-remove", variant="error",   flat=True)
                         yield Button("✎ Edit",   id="btn-frame-edit",   variant="primary", flat=True)
+                        yield Button("⧉ Copy to", id="btn-frame-copy",   flat=True)
                 with Vertical(id="frame-editor-pane"):
                     with Horizontal(classes="pane-header"):
                         yield Static(
@@ -603,6 +605,47 @@ class ForgeTab(Widget):
             self.app.mark_dirty()
 
     # ------------------------------------------------------------------
+    # Copy frame to another playbook
+    # ------------------------------------------------------------------
+
+    def _open_copy_frame_modal(self) -> None:
+        if self._current_idx < 0 or self._selected_frame_idx < 0:
+            self.notify("Select a frame to copy.", severity="warning")
+            return
+        self._save_frame_editor()
+        targets = [
+            (pb.id, pb.label, pb.host or "", pb.port or 0, len(pb.frames))
+            for i, pb in enumerate(self._playbooks)
+            if i != self._current_idx
+        ]
+        if not targets:
+            self.notify("No other playbook to copy to.", severity="warning")
+            return
+        self.app.push_screen(CopyFrameModal(targets), self._on_copy_frame_result)
+
+    def _on_copy_frame_result(self, target_id: str | None) -> None:
+        if target_id is None or self._current_idx < 0 or self._selected_frame_idx < 0:
+            return
+        src_pb = self._playbooks[self._current_idx]
+        if self._selected_frame_idx >= len(src_pb.frames):
+            return
+        src_frame = src_pb.frames[self._selected_frame_idx]
+        target_pb = next((pb for pb in self._playbooks if pb.id == target_id), None)
+        if target_pb is None:
+            return
+        new_frame = PlaybookFrame.create(
+            label=src_frame.label,
+            raw_hex=src_frame.raw_hex,
+            direction=src_frame.direction,
+        )
+        target_pb.frames.append(new_frame)
+        target_idx = next(i for i, pb in enumerate(self._playbooks) if pb.id == target_id)
+        self._update_playbook_list_row(target_idx)
+        if hasattr(self.app, "mark_dirty"):
+            self.app.mark_dirty()
+        self.notify(f"Frame copied to '{target_pb.label}'.")
+
+    # ------------------------------------------------------------------
     # Playbook delete
     # ------------------------------------------------------------------
 
@@ -879,6 +922,10 @@ class ForgeTab(Widget):
         elif bid == "btn-frame-edit":
             event.stop()
             self._open_frame_edit_modal()
+
+        elif bid == "btn-frame-copy":
+            event.stop()
+            self._open_copy_frame_modal()
 
         elif bid == "btn-frame-mode":
             event.stop()
