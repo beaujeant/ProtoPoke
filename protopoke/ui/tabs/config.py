@@ -240,14 +240,12 @@ class ConfigTab(Widget):
         fwd = self._selected_forwarder()
         if fwd is None:
             return
-        if fwd.name in self._running_fwds:
-            logger.warning("Stop the forwarder '%s' before editing", fwd.name)
-            return
         # Remember the old name so we can find the entry after the modal returns
         self._edit_old_name = fwd.name
         existing_names = {f.name for f in self._forwarders}
+        is_running = fwd.name in self._running_fwds
         self.app.push_screen(
-            ForwarderEditModal(fwd, existing_names=existing_names),
+            ForwarderEditModal(fwd, existing_names=existing_names, is_running=is_running),
             self._on_edit_result,
         )
 
