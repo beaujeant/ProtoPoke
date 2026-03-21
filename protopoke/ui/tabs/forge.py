@@ -11,13 +11,47 @@ from textual.widget import Widget
 from textual.widgets import Button, DataTable, Static, TextArea
 from textual.containers import Horizontal, Vertical
 
+from rich.text import Text
+from textual.binding import Binding
+
 from ...forge.models import Playbook, PlaybookFrame, PlaybookRun, TrafficEntry
 from ..modals.playbook_modal import PlaybookModal, PlaybookResult
 from ..modals.frame_edit import FrameEditModal
 from ..modals.copy_frame_modal import CopyFrameModal
-from ..utils.frame_codec import hex_template_to_str, str_to_hex_template
+from ..utils.frame_codec import (
+    hex_template_to_str, str_to_hex_template, hex_pairs_to_str,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class _ForgeFramesTable(DataTable):
+    """DataTable with shift+arrow range selection (mirrors traffic tab)."""
+
+    BINDINGS = [
+        Binding("shift+up", "shift_up", show=False),
+        Binding("shift+down", "shift_down", show=False),
+        Binding("escape", "cancel_selection", show=False),
+    ]
+
+    def _forge_tab(self) -> "ForgeTab":
+        node = self.parent
+        while node is not None:
+            if isinstance(node, ForgeTab):
+                return node
+            node = node.parent
+        raise RuntimeError("_ForgeFramesTable must be a descendant of ForgeTab")
+
+    def action_shift_up(self) -> None:
+        self._forge_tab()._extending_selection = True
+        self.action_cursor_up()
+
+    def action_shift_down(self) -> None:
+        self._forge_tab()._extending_selection = True
+        self.action_cursor_down()
+
+    def action_cancel_selection(self) -> None:
+        self._forge_tab()._cancel_frame_selection()
 
 
 class ForgeTab(Widget):
@@ -122,6 +156,25 @@ class ForgeTab(Widget):
         background: $primary;
         color: $text-muted;
     }
+    ForgeTab #frame-view-pane .pane-header {
+        height: 1;
+        align: left middle;
+    }
+    ForgeTab #frame-view-pane .pane-header Static {
+        width: 1fr;
+    }
+    ForgeTab #frame-view-pane .pane-header Button {
+        width: 5;
+        margin: 0;
+    }
+    ForgeTab #frame-view-pane .pane-header Button.mode-active {
+        background: $surface;
+        color: $text;
+    }
+    ForgeTab #frame-view-pane .pane-header Button.mode-inactive {
+        background: $primary;
+        color: $text-muted;
+    }
     ForgeTab #frame-editor {
         height: 1fr;
     }
@@ -165,7 +218,20 @@ class ForgeTab(Widget):
         self._selected_frame_idx: int  = -1
         self._history_view_mode:  bool = False
         self._frame_editor_mode:  str  = "hex"   # "hex" | "str"
+        self._frame_view_mode:    str  = "hex"   # "hex" | "str"
         self._running:            bool = False
+
+        # Multi-select state for the frames table (mirrors TrafficTab)
+        self._frame_rows: list[str] = []              # frame IDs in table order
+        self._anchor_frame_idx: int = -1              # anchor for shift-range
+        self._selected_frame_ids: list[str] = []      # ordered selected IDs
+        self._extending_selection: bool = False        # set by shift+key
+        self._frames_label: Static | None = None      # toolbar label widget
+        self._row_data: dict[str, tuple[str, ...]] = {}   # plain cell values
+        self._prev_highlighted: set[str] = set()      # currently styled rows
+
+        # Currently displayed traffic entry (for frame-view hex/str toggle)
+        self._current_traffic_entry: TrafficEntry | None = None
 
     # ------------------------------------------------------------------
     # Compose
@@ -186,8 +252,10 @@ class ForgeTab(Widget):
         with Horizontal(id="middle-pane"):
             with Vertical(id="left-col"):
                 with Vertical(id="frames-list-pane"):
-                    yield Static("  Frames", classes="pane-header")
-                    yield DataTable(id="frames-table", cursor_type="row")
+                    lbl = Static("  Frames  [Shift+↑↓ to multi-select]", classes="pane-header")
+                    self._frames_label = lbl
+                    yield lbl
+                    yield _ForgeFramesTable(id="frames-table", cursor_type="row")
                     with Horizontal(classes="frame-controls"):
                         yield Button("↑", id="btn-frame-up", classes="btn-tiny", flat=True)
                         yield Button("↓", id="btn-frame-down", classes="btn-tiny", flat=True)
@@ -210,7 +278,10 @@ class ForgeTab(Widget):
                     yield Static("  Playbook Traffic", classes="pane-header")
                     yield DataTable(id="traffic-table", cursor_type="row")
                 with Vertical(id="frame-view-pane"):
-                    yield Static("  Frame View (hex)", classes="pane-header")
+                    with Horizontal(classes="pane-header"):
+                        yield Static("  Frame View")
+                        yield Button("HEX", id="btn-view-hex", classes="mode-active",   compact=True)
+                        yield Button("STR", id="btn-view-str", classes="mode-inactive", compact=True)
                     yield TextArea("", id="frame-view", read_only=True)
 
         with Horizontal(classes="run-bar"):
@@ -356,18 +427,26 @@ class ForgeTab(Widget):
     def _refresh_frames_list(self) -> None:
         dt = self.query_one("#frames-table", DataTable)
         dt.clear()
+        self._frame_rows = []
+        self._row_data = {}
+        self._prev_highlighted = set()
+        self._anchor_frame_idx = -1
+        self._selected_frame_ids = []
+        self._update_frames_label()
         if self._current_idx < 0:
             return
         pb = self._playbooks[self._current_idx]
         for i, frame in enumerate(pb.frames):
-            dt.add_row(
+            values = (
                 str(i + 1),
                 self._dir_symbol(frame.direction),
                 frame.label or f"Frame {i+1}",
                 str(frame.byte_length()),
                 frame.preview(),
-                key=frame.id,
             )
+            self._row_data[frame.id] = values
+            dt.add_row(*values, key=frame.id)
+            self._frame_rows.append(frame.id)
 
     def _update_frame_list_row(self, frame_idx: int) -> None:
         if self._current_idx < 0:
@@ -376,12 +455,18 @@ class ForgeTab(Widget):
         if frame_idx < 0 or frame_idx >= len(pb.frames):
             return
         frame = pb.frames[frame_idx]
+        values = (
+            str(frame_idx + 1),
+            self._dir_symbol(frame.direction),
+            frame.label or f"Frame {frame_idx+1}",
+            str(frame.byte_length()),
+            frame.preview(),
+        )
+        self._row_data[frame.id] = values
         try:
             dt = self.query_one("#frames-table", DataTable)
-            dt.update_cell(frame.id, "dir",     self._dir_symbol(frame.direction),                  update_width=False)
-            dt.update_cell(frame.id, "label",   frame.label or f"Frame {frame_idx+1}",              update_width=False)
-            dt.update_cell(frame.id, "len",     str(frame.byte_length()),                           update_width=False)
-            dt.update_cell(frame.id, "preview", frame.preview(),                                    update_width=False)
+            for col_key, val in zip(self._FRAME_COL_KEYS, values):
+                dt.update_cell(frame.id, col_key, val, update_width=False)
         except Exception:
             pass
 
@@ -449,6 +534,98 @@ class ForgeTab(Widget):
             btn.set_class(not is_active, "mode-inactive")
 
     # ------------------------------------------------------------------
+    # Frame multi-select
+    # ------------------------------------------------------------------
+
+    _FRAME_COL_KEYS = ("num", "dir", "label", "len", "preview")
+    _SELECTED_STYLE = "bold underline"
+
+    def _highlight_selection(self) -> None:
+        """Apply / remove bold styling on multi-selected rows."""
+        dt = self.query_one("#frames-table", DataTable)
+        new_sel = set(self._selected_frame_ids) if len(self._selected_frame_ids) > 1 else set()
+        to_style   = new_sel - self._prev_highlighted
+        to_unstyle = self._prev_highlighted - new_sel
+
+        for fid in to_style | to_unstyle:
+            data = self._row_data.get(fid)
+            if data is None:
+                continue
+            is_sel = fid in new_sel
+            for col_key, val in zip(self._FRAME_COL_KEYS, data):
+                cell = Text(val, style=self._SELECTED_STYLE) if is_sel else val
+                try:
+                    dt.update_cell(fid, col_key, cell, update_width=False)
+                except Exception:
+                    pass
+
+        self._prev_highlighted = new_sel
+
+    def _update_frames_label(self) -> None:
+        if self._frames_label is None:
+            return
+        n = len(self._selected_frame_ids)
+        if n > 1:
+            self._frames_label.update(f"  Frames  [{n} selected — Esc to cancel]")
+        else:
+            self._frames_label.update("  Frames  [Shift+↑↓ to multi-select]")
+
+    def _cancel_frame_selection(self) -> None:
+        """Collapse multi-frame selection back to single frame."""
+        if len(self._selected_frame_ids) <= 1:
+            return
+        if self._anchor_frame_idx >= 0 and self._anchor_frame_idx < len(self._frame_rows):
+            single_id = self._frame_rows[self._anchor_frame_idx]
+        elif self._selected_frame_idx >= 0 and self._current_idx >= 0:
+            pb = self._playbooks[self._current_idx]
+            if self._selected_frame_idx < len(pb.frames):
+                single_id = pb.frames[self._selected_frame_idx].id
+            else:
+                return
+        else:
+            return
+        self._selected_frame_ids = [single_id]
+        self._highlight_selection()
+        self._update_frames_label()
+
+    # ------------------------------------------------------------------
+    # Frame View mode (hex / str)
+    # ------------------------------------------------------------------
+
+    def _set_frame_view_mode(self, mode: str) -> None:
+        """Switch frame view between 'hex' and 'str'."""
+        if mode == self._frame_view_mode:
+            return
+        self._frame_view_mode = mode
+        self._update_frame_view_mode_buttons()
+        # Re-render the current traffic entry if any
+        if self._current_traffic_entry is not None:
+            self._render_frame_view(self._current_traffic_entry)
+
+    def _update_frame_view_mode_buttons(self) -> None:
+        btn_hex = self.query_one("#btn-view-hex", Button)
+        btn_str = self.query_one("#btn-view-str", Button)
+        for btn, is_active in [(btn_hex, self._frame_view_mode == "hex"),
+                               (btn_str, self._frame_view_mode == "str")]:
+            btn.set_class(is_active,  "mode-active")
+            btn.set_class(not is_active, "mode-inactive")
+
+    def _render_frame_view(self, entry: TrafficEntry) -> None:
+        """Display a traffic entry in the frame view using current mode."""
+        pairs = " ".join(
+            entry.raw_bytes.hex()[i:i+2]
+            for i in range(0, len(entry.raw_bytes.hex()), 2)
+        )
+        if self._frame_view_mode == "str":
+            try:
+                text = hex_pairs_to_str(pairs)
+            except Exception:
+                text = pairs
+        else:
+            text = pairs
+        self.query_one("#frame-view", TextArea).load_text(text)
+
+    # ------------------------------------------------------------------
     # Traffic table
     # ------------------------------------------------------------------
 
@@ -456,6 +633,7 @@ class ForgeTab(Widget):
         self.query_one("#traffic-table", DataTable).clear()
 
     def _clear_frame_view(self) -> None:
+        self._current_traffic_entry = None
         self.query_one("#frame-view", TextArea).load_text("")
 
     def _append_traffic_row(self, entry: TrafficEntry) -> None:
@@ -502,9 +680,7 @@ class ForgeTab(Widget):
         if self._current_idx < 0:
             return
         pb = self._playbooks[self._current_idx]
-        # Search in active traffic (history mode) or last run
         entry = None
-        # Check all runs
         for run in pb.runs:
             for e in run.traffic:
                 if e.id == entry_id:
@@ -514,8 +690,8 @@ class ForgeTab(Widget):
                 break
         if entry is None:
             return
-        pairs = " ".join(entry.raw_bytes.hex()[i:i+2] for i in range(0, len(entry.raw_bytes.hex()), 2))
-        self.query_one("#frame-view", TextArea).load_text(pairs)
+        self._current_traffic_entry = entry
+        self._render_frame_view(entry)
 
     # ------------------------------------------------------------------
     # History table
@@ -630,7 +806,7 @@ class ForgeTab(Widget):
     # ------------------------------------------------------------------
 
     def _open_copy_frame_modal(self) -> None:
-        if self._current_idx < 0 or self._selected_frame_idx < 0:
+        if self._current_idx < 0 or (self._selected_frame_idx < 0 and not self._selected_frame_ids):
             logger.warning("Select a frame to copy")
             return
         self._save_frame_editor()
@@ -645,26 +821,37 @@ class ForgeTab(Widget):
         self.app.push_screen(CopyFrameModal(targets), self._on_copy_frame_result)
 
     def _on_copy_frame_result(self, target_id: str | None) -> None:
-        if target_id is None or self._current_idx < 0 or self._selected_frame_idx < 0:
+        if target_id is None or self._current_idx < 0:
             return
         src_pb = self._playbooks[self._current_idx]
-        if self._selected_frame_idx >= len(src_pb.frames):
-            return
-        src_frame = src_pb.frames[self._selected_frame_idx]
         target_pb = next((pb for pb in self._playbooks if pb.id == target_id), None)
         if target_pb is None:
             return
-        new_frame = PlaybookFrame.create(
-            label=src_frame.label,
-            raw_hex=src_frame.raw_hex,
-            direction=src_frame.direction,
-        )
-        target_pb.frames.append(new_frame)
+
+        # Determine which frames to copy: multi-select or single
+        if len(self._selected_frame_ids) > 1:
+            frames_to_copy = [
+                f for f in src_pb.frames if f.id in self._selected_frame_ids
+            ]
+        elif self._selected_frame_idx >= 0 and self._selected_frame_idx < len(src_pb.frames):
+            frames_to_copy = [src_pb.frames[self._selected_frame_idx]]
+        else:
+            return
+
+        for src_frame in frames_to_copy:
+            new_frame = PlaybookFrame.create(
+                label=src_frame.label,
+                raw_hex=src_frame.raw_hex,
+                direction=src_frame.direction,
+            )
+            target_pb.frames.append(new_frame)
+
         target_idx = next(i for i, pb in enumerate(self._playbooks) if pb.id == target_id)
         self._update_playbook_list_row(target_idx)
         if hasattr(self.app, "mark_dirty"):
             self.app.mark_dirty()
-        logger.info("Frame copied to '%s'", target_pb.label)
+        n = len(frames_to_copy)
+        logger.info("%d frame(s) copied to '%s'", n, target_pb.label)
 
     # ------------------------------------------------------------------
     # Playbook delete
@@ -948,6 +1135,10 @@ class ForgeTab(Widget):
             event.stop()
             self._set_frame_editor_mode("hex" if bid == "btn-frame-hex" else "str")
 
+        elif bid in ("btn-view-hex", "btn-view-str"):
+            event.stop()
+            self._set_frame_view_mode("hex" if bid == "btn-view-hex" else "str")
+
         elif bid == "btn-run":
             event.stop()
             self._do_run()
@@ -980,18 +1171,36 @@ class ForgeTab(Widget):
 
         elif dt_id == "frames-table":
             if self._current_idx < 0 or self._history_view_mode:
+                self._extending_selection = False
                 return
             pb = self._playbooks[self._current_idx]
             frame_id = str(event.row_key.value)
-            for i, frame in enumerate(pb.frames):
-                if frame.id == frame_id:
-                    if i != self._selected_frame_idx:
-                        self._save_frame_editor()
-                        self._selected_frame_idx = i
-                        self._load_frame_into_editor(frame)
-                        self._clear_traffic()
-                        self._clear_frame_view()
-                    break
+            current_idx = next(
+                (i for i, fid in enumerate(self._frame_rows) if fid == frame_id), -1
+            )
+            if current_idx < 0:
+                self._extending_selection = False
+                return
+
+            if self._extending_selection and self._anchor_frame_idx >= 0:
+                # Extend / shrink the selection range
+                lo = min(self._anchor_frame_idx, current_idx)
+                hi = max(self._anchor_frame_idx, current_idx)
+                self._selected_frame_ids = self._frame_rows[lo : hi + 1]
+            else:
+                # Single selection — reset anchor, load into editor
+                self._anchor_frame_idx = current_idx
+                self._selected_frame_ids = [frame_id]
+                if current_idx != self._selected_frame_idx:
+                    self._save_frame_editor()
+                    self._selected_frame_idx = current_idx
+                    self._load_frame_into_editor(pb.frames[current_idx])
+                    self._clear_traffic()
+                    self._clear_frame_view()
+
+            self._extending_selection = False
+            self._update_frames_label()
+            self._highlight_selection()
 
         elif dt_id == "traffic-table":
             entry_id = str(event.row_key.value)
