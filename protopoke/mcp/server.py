@@ -4,17 +4,14 @@ All tools return JSON-serialisable dicts.  Bytes fields are hex-encoded strings.
 Tools are grouped by concern:
 
     Proxy lifecycle         : proxy_status, proxy_start, proxy_stop
+    Forwarder management    : list_forwarders, start_forwarder, stop_forwarder
     Session management      : list_sessions, get_session, get_frames,
                               get_frame, get_session_summary, decode_frames,
-                              decode_frame_by_id, search_frames
+                              decode_frame_by_id, search_frames,
+                              terminate_session, delete_session, export_session
+    Protocol management     : set_protocol_file, set_protocol_dict,
+                              get_protocol_info
     Tamper control          : tamper_status, tamper_toggle,
-                              list_intercepted, tamper_forward, tamper_drop,
-                              tamper_modify_and_forward
-    Global replace rules    : list_replace_rules, add_replace_rule, remove_replace_rule
-    Intercept rules         : list_intercept_rules, add_intercept_rule, remove_intercept_rule
-    Forge / send            : send_frame
-    Replay                  : forge_session
-    Fuzzing                 : fuzz_start, fuzz_status, fuzz_results, fuzz_stop, list_campaigns
                               list_intercepted, tamper_decode_pending,
                               tamper_forward, tamper_drop,
                               tamper_modify_and_forward,
@@ -28,14 +25,18 @@ Tools are grouped by concern:
     Intercept rules         : list_intercept_rules, add_intercept_rule,
                               update_intercept_rule, remove_intercept_rule,
                               reorder_intercept_rule, clear_intercept_rules
-    Protocol management     : set_protocol_file, set_protocol_dict,
-                              get_protocol_info
-    Forge / send            : send_frame, list_playbooks,
-                              create_playbook, get_playbook,
+    Forge / direct send     : send_frame, open_forge_session,
+                              send_on_forge_session,
+                              inject_to_server, inject_to_client
+    Playbook management     : list_playbooks, create_playbook, get_playbook,
                               update_playbook, delete_playbook,
                               run_playbook, frame_to_forge
     Replay                  : forge_session, replay_with_field_edits
+    Framing                 : set_framer
+    Variables               : get_variables, set_variable, clear_variables
     TLS / CA                : get_ca_cert
+    Fuzzing                 : fuzz_start, fuzz_status, fuzz_results,
+                              fuzz_stop, list_campaigns
     Config                  : get_config, set_config
 """
 
@@ -118,6 +119,75 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         try:
             await api.stop()
             return {"ok": True, "message": "Proxy stopped"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    # ------------------------------------------------------------------ #
+    # Forwarder management                                                  #
+    # ------------------------------------------------------------------ #
+
+    @mcp.tool()
+    def list_forwarders() -> list[dict]:
+        """
+        List all configured forwarders with their running state and config.
+
+        Each forwarder entry includes its name, enabled flag, running state,
+        and full ProxyConfig.  Useful when multiple forwarders are configured
+        (e.g. separate listeners for different protocols or ports).
+
+        Returns:
+            List of forwarder dicts with keys: name, enabled, running, config.
+        """
+        running = set(api.list_running())
+        result = []
+        for fwd in api.forwarders:
+            result.append({
+                "name":    fwd.name,
+                "enabled": fwd.enabled,
+                "running": fwd.name in running,
+                "config":  fwd.config.to_dict(),
+            })
+        return result
+
+    @mcp.tool()
+    async def start_forwarder(name: str) -> dict:
+        """
+        Start a specific named forwarder.
+
+        Use list_forwarders() to get the available forwarder names.
+        The protocol definition (if configured) is auto-loaded on start.
+
+        Args:
+            name: Forwarder name from list_forwarders.
+
+        Returns:
+            {"ok": True} on success, {"ok": False, "error": ...} on failure.
+        """
+        try:
+            await api.start_forwarder(name)
+            return {"ok": True, "name": name}
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @mcp.tool()
+    async def stop_forwarder(name: str) -> dict:
+        """
+        Stop a specific named forwarder without affecting others.
+
+        Existing sessions on this forwarder are closed; their frames remain
+        in the session registry for inspection.
+
+        Args:
+            name: Forwarder name from list_forwarders.
+
+        Returns:
+            {"ok": True} on success, {"ok": False, "error": ...} on failure.
+        """
+        try:
+            await api.stop_forwarder(name)
+            return {"ok": True, "name": name}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
@@ -339,6 +409,68 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
                     if len(results) >= max_results:
                         return results
         return results
+
+    @mcp.tool()
+    async def terminate_session(session_id: str) -> dict:
+        """
+        Forcefully close an active session's TCP connections.
+
+        Cancels the relay task for the session, closing both the client and
+        server TCP connections and marking the session CLOSED.  If the session
+        is already closed (or not found) this is a no-op.
+
+        Useful during reverse engineering to cleanly cut a session after
+        capturing what you need, or to test server reconnect behaviour.
+
+        Args:
+            session_id: UUID of the session to terminate.
+
+        Returns:
+            {"ok": True} if terminated, {"ok": False} if already closed or not found.
+        """
+        ok = await api.terminate_session(session_id)
+        return {"ok": ok, "session_id": session_id}
+
+    @mcp.tool()
+    def delete_session(session_id: str) -> dict:
+        """
+        Permanently remove a session and all its frames from the registry.
+
+        This only removes the in-memory record; it does **not** close the
+        underlying connection.  Call terminate_session() first if the session
+        is still active.
+
+        Useful for cleaning up uninteresting sessions to keep the view focused
+        on the traffic that matters for reverse engineering.
+
+        Args:
+            session_id: UUID of the session to delete.
+
+        Returns:
+            {"ok": True} if deleted, {"ok": False} if not found.
+        """
+        ok = api.delete_session(session_id)
+        return {"ok": ok, "session_id": session_id}
+
+    @mcp.tool()
+    def export_session(session_id: str) -> Optional[dict]:
+        """
+        Export a full session including all captured frames as a serialisable dict.
+
+        Returns the complete session record (info + all frames with raw bytes
+        as hex strings).  Useful for saving or transferring captured traffic
+        for offline analysis or sharing with collaborators.
+
+        Args:
+            session_id: UUID of the session to export.
+
+        Returns:
+            Full session dict (info + frames), or None if not found.
+        """
+        session = api.get_session(session_id)
+        if session is None:
+            return None
+        return api.session_to_dict(session)
 
     # ------------------------------------------------------------------ #
     # Protocol management                                                   #
@@ -911,6 +1043,135 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
             receive_timeout=receive_timeout,
         )
         return record.to_dict()
+
+    @mcp.tool()
+    async def open_forge_session(
+        host: str,
+        port: int,
+        tls:  bool = False,
+    ) -> dict:
+        """
+        Open a persistent TCP connection for interactive Forge sends.
+
+        Unlike send_frame() which opens and closes a connection per send,
+        this creates a named session that stays open so you can send multiple
+        requests sequentially (e.g. to maintain authentication state or test
+        multi-step protocols).
+
+        The connection appears in the Traffic tab as a regular session so
+        all frames sent and received are captured for analysis.
+
+        Use send_on_forge_session() to send data through the returned session.
+        The session is automatically marked CLOSED when the server drops it.
+
+        Args:
+            host: Target hostname or IP address.
+            port: Target TCP port.
+            tls:  Wrap the connection in TLS (no cert verification).
+
+        Returns:
+            {"ok": True, "session_id": "<uuid>"} on success.
+        """
+        try:
+            session_id = await api.open_forge_session(host, port, tls)
+            return {"ok": True, "session_id": session_id}
+        except ConnectionError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @mcp.tool()
+    async def send_on_forge_session(
+        session_id:      str,
+        data_hex:        str,
+        receive_timeout: Optional[float] = None,
+    ) -> dict:
+        """
+        Send bytes through an existing persistent forge session.
+
+        The session must have been opened with open_forge_session().
+        All sent and received frames are captured in the session's frame log
+        so they can be inspected with get_frames() / decode_frames().
+
+        Args:
+            session_id:      Session ID returned by open_forge_session.
+            data_hex:        Bytes to send as a hex string (e.g. "deadbeef01").
+            receive_timeout: Seconds to wait for a response.  Defaults to the
+                             proxy's configured connect_timeout.
+
+        Returns:
+            SendResult dict: sent_bytes_hex, received_bytes_hex, response_packets,
+            success, error.
+        """
+        try:
+            data = bytes.fromhex(data_hex)
+        except ValueError as exc:
+            return {"ok": False, "error": f"Invalid data hex: {exc}"}
+
+        try:
+            result = await api.send_on_forge_session(
+                session_id=session_id,
+                data=data,
+                receive_timeout=receive_timeout,
+            )
+            return result.to_dict()
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @mcp.tool()
+    async def inject_to_server(session_id: str, data_hex: str) -> dict:
+        """
+        Inject bytes directly into the upstream (server) side of an active session.
+
+        The bytes are sent on the same TCP connection that the real client is
+        using, so the server sees them as part of the established session.
+        The server's response flows back through the relay to the original
+        client and is captured as normal session frames.
+
+        This is the primary tool for mid-session injection during reverse
+        engineering: modify in-flight requests to test server behaviour without
+        re-establishing the full connection.
+
+        Args:
+            session_id: UUID of an active (not closed) session.
+            data_hex:   Bytes to inject as a hex string (e.g. "deadbeef").
+
+        Returns:
+            {"ok": True} on success, {"ok": False, "error": ...} if the session
+            is not active or the write failed (use send_frame as fallback).
+        """
+        try:
+            data = bytes.fromhex(data_hex)
+        except ValueError as exc:
+            return {"ok": False, "error": f"Invalid data hex: {exc}"}
+
+        ok = await api.inject_to_server(session_id, data)
+        return {"ok": ok, "session_id": session_id}
+
+    @mcp.tool()
+    async def inject_to_client(session_id: str, data_hex: str) -> dict:
+        """
+        Inject bytes directly into the client side of an active session.
+
+        The bytes arrive on the same TCP connection the real server is using,
+        so the client sees them as if they came from the server.  Useful for
+        injecting server-to-client traffic to probe client-side parsing during
+        reverse engineering.
+
+        Args:
+            session_id: UUID of an active (not closed) session.
+            data_hex:   Bytes to inject as a hex string (e.g. "deadbeef").
+
+        Returns:
+            {"ok": True} on success, {"ok": False} if session is not active.
+        """
+        try:
+            data = bytes.fromhex(data_hex)
+        except ValueError as exc:
+            return {"ok": False, "error": f"Invalid data hex: {exc}"}
+
+        ok = await api.inject_to_client(session_id, data)
+        return {"ok": ok, "session_id": session_id}
 
     # ------------------------------------------------------------------ #
     # Playbook management                                                #
@@ -1525,6 +1786,131 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         ]
 
     # ------------------------------------------------------------------ #
+    # Framing                                                               #
+    # ------------------------------------------------------------------ #
+
+    @mcp.tool()
+    def set_framer(
+        framer_name:        str,
+        framer_kwargs:      Optional[dict] = None,
+        custom_framer_path: Optional[str]  = None,
+        forwarder_name:     Optional[str]  = None,
+    ) -> dict:
+        """
+        Hot-swap the active framer on running sessions without restarting.
+
+        The framer determines how the raw TCP byte stream is segmented into
+        discrete frames for capture and display.  Choosing the right framer
+        is often one of the first steps in reverse engineering an unknown
+        binary protocol.
+
+        Available built-in framers:
+          - "raw"            — Each read() chunk = one frame. Use as a starting point.
+          - "delimiter"      — Split on a byte sequence (e.g. \\r\\n for line protocols).
+                               Requires framer_kwargs={"delimiter": "<hex>"}, where
+                               the delimiter is provided as a hex string
+                               (e.g. "0d0a" for CRLF).
+          - "length_prefix"  — Fixed-size integer length header before each frame.
+                               Requires framer_kwargs={"length_size": 2} (bytes).
+                               Optional: {"byte_order": "big"} (default "big") and
+                               {"includes_header": false} (default false).
+          - "line"           — Split on \\r\\n or \\n (shorthand for delimiter framer).
+          - "custom"         — Load a custom Framer subclass from a Python file.
+                               Requires custom_framer_path.
+
+        Args:
+            framer_name:        Framer key (see above).
+            framer_kwargs:      Extra options for the framer (see above).
+                                Bytes values should be provided as hex strings.
+            custom_framer_path: Path to a Python file with a custom Framer subclass.
+                                Required when framer_name == "custom".
+            forwarder_name:     If set, only update sessions on this forwarder.
+                                None (default) = update all forwarders.
+
+        Returns:
+            {"ok": True, "swapped_sessions": <count>} — number of active sessions
+            whose framer was hot-swapped.
+        """
+        kwargs: dict = {}
+        if framer_kwargs:
+            for k, v in framer_kwargs.items():
+                if isinstance(v, str) and framer_name in ("delimiter",):
+                    try:
+                        kwargs[k] = bytes.fromhex(v)
+                    except ValueError:
+                        kwargs[k] = v
+                else:
+                    kwargs[k] = v
+
+        try:
+            count = api.set_framer(
+                framer_name=framer_name,
+                framer_kwargs=kwargs or None,
+                custom_framer_path=custom_framer_path,
+                forwarder_name=forwarder_name,
+            )
+            return {"ok": True, "framer_name": framer_name, "swapped_sessions": count}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    # ------------------------------------------------------------------ #
+    # Variables                                                             #
+    # ------------------------------------------------------------------ #
+
+    @mcp.tool()
+    def get_variables() -> dict:
+        """
+        Return the global variable store used by replace rules and playbooks.
+
+        Variables are hex-encoded byte strings (e.g. {"SEQ": "00000001"}).
+        They can be read and written by script-type replace rules and are
+        shared across all pipelines (intercept, forge, sequence/playbook).
+
+        Useful during reverse engineering to track session state such as
+        sequence numbers, session tokens, or checksums extracted from
+        captured frames.
+
+        Returns:
+            Dict of variable_name → hex_value_string.
+        """
+        return dict(api.variables)
+
+    @mcp.tool()
+    def set_variable(name: str, value_hex: str) -> dict:
+        """
+        Set a variable in the global variable store.
+
+        Variables are used as {{VAR}} placeholders in playbook frames and
+        by script-type replace rules.  Setting a variable here updates it
+        immediately for all subsequent forge/playbook sends.
+
+        Args:
+            name:      Variable name (case-sensitive, e.g. "SEQ" or "TOKEN").
+            value_hex: Value as a hex string (e.g. "deadbeef" or "00000001").
+
+        Returns:
+            {"ok": True, "name": ..., "value_hex": ...}
+        """
+        try:
+            bytes.fromhex(value_hex)
+        except ValueError as exc:
+            return {"ok": False, "error": f"Invalid hex value: {exc}"}
+        api.variables[name] = value_hex
+        return {"ok": True, "name": name, "value_hex": value_hex}
+
+    @mcp.tool()
+    def clear_variables() -> dict:
+        """
+        Clear all variables from the global variable store.
+
+        Returns:
+            {"ok": True, "cleared": <count>}
+        """
+        count = len(api.variables)
+        api.variables.clear()
+        return {"ok": True, "cleared": count}
+
+    # ------------------------------------------------------------------ #
     # Config                                                                #
     # ------------------------------------------------------------------ #
 
@@ -1535,22 +1921,26 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
 
     @mcp.tool()
     def set_config(
-        listen_host:        Optional[str]  = None,
-        listen_port:        Optional[int]  = None,
-        upstream_host:      Optional[str]  = None,
-        upstream_port:      Optional[int]  = None,
-        tls_listen:         Optional[bool] = None,
-        tls_upstream:       Optional[bool] = None,
-        tamper_enabled:  Optional[bool] = None,
-        framer_name:        Optional[str]  = None,
-        protocol_definition_path: Optional[str] = None,
+        listen_host:              Optional[str]   = None,
+        listen_port:              Optional[int]   = None,
+        upstream_host:            Optional[str]   = None,
+        upstream_port:            Optional[int]   = None,
+        tls_listen:               Optional[bool]  = None,
+        tls_upstream:             Optional[bool]  = None,
+        tamper_enabled:           Optional[bool]  = None,
+        framer_name:              Optional[str]   = None,
+        framer_kwargs:            Optional[dict]  = None,
+        protocol_definition_path: Optional[str]   = None,
+        connect_timeout:          Optional[float] = None,
+        read_buffer_size:         Optional[int]   = None,
+        max_sessions:             Optional[int]   = None,
     ) -> dict:
         """
         Update one or more ProxyConfig fields.
 
         Only the provided (non-null) fields are changed; all others keep their
-        current values. Changes take effect for new connections; existing
-        connections are not affected.
+        current values.  Changes to network/framing settings take effect for
+        new connections; use set_framer() to hot-swap the framer on live sessions.
 
         Upstream TLS certificate verification is always disabled — this tool
         is for reverse engineering and accepts any certificate unconditionally.
@@ -1560,26 +1950,47 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
             listen_port:              Port for the proxy listener.
             upstream_host:            Default upstream host to forward to.
             upstream_port:            Default upstream port to forward to.
-            tls_listen:               Terminate TLS on the listening side.
-            tls_upstream:             Use TLS when connecting upstream.
-            tamper_enabled:        Master intercept on/off switch.
-            framer_name:              Framer: "raw", "delimiter", "length_prefix".
-            protocol_definition_path: Path to a protocol .yaml/.json file.
+            tls_listen:               Terminate TLS on the listening side (MITM).
+            tls_upstream:             Use TLS when connecting to upstream.
+            tamper_enabled:           Master intercept on/off switch.
+            framer_name:              Framer: "raw", "delimiter", "length_prefix", "line".
+            framer_kwargs:            Extra options for the framer (e.g.
+                                      {"delimiter": "0d0a"} — hex for delimiter framer,
+                                      {"length_size": 4} for length_prefix framer).
+                                      Byte values should be hex strings.
+            protocol_definition_path: Path to a .yaml/.json protocol definition file.
+            connect_timeout:          Seconds to wait when connecting upstream.
+            read_buffer_size:         Bytes per read() call (affects relay wake-up rate).
+            max_sessions:             Max concurrent sessions (0 = unlimited).
 
         Returns:
             The updated config dict.
         """
-        if listen_host        is not None: api.config.listen_host       = listen_host
-        if listen_port        is not None: api.config.listen_port       = listen_port
-        if upstream_host      is not None: api.config.upstream_host     = upstream_host
-        if upstream_port      is not None: api.config.upstream_port     = upstream_port
-        if tls_listen         is not None: api.config.tls_listen        = tls_listen
-        if tls_upstream       is not None: api.config.tls_upstream      = tls_upstream
-        if tamper_enabled  is not None: api.config.tamper_enabled = tamper_enabled
-        if framer_name        is not None: api.config.framer_name       = framer_name
-        if protocol_definition_path is not None:
-            api.config.protocol_definition_path = protocol_definition_path
+        cfg = api.config
+        if listen_host              is not None: cfg.listen_host              = listen_host
+        if listen_port              is not None: cfg.listen_port              = listen_port
+        if upstream_host            is not None: cfg.upstream_host            = upstream_host
+        if upstream_port            is not None: cfg.upstream_port            = upstream_port
+        if tls_listen               is not None: cfg.tls_listen               = tls_listen
+        if tls_upstream             is not None: cfg.tls_upstream             = tls_upstream
+        if tamper_enabled           is not None: cfg.tamper_enabled           = tamper_enabled
+        if framer_name              is not None: cfg.framer_name              = framer_name
+        if connect_timeout          is not None: cfg.connect_timeout          = connect_timeout
+        if read_buffer_size         is not None: cfg.read_buffer_size         = read_buffer_size
+        if max_sessions             is not None: cfg.max_sessions             = max_sessions
+        if protocol_definition_path is not None: cfg.protocol_definition_path = protocol_definition_path
+        if framer_kwargs is not None:
+            decoded: dict = {}
+            for k, v in framer_kwargs.items():
+                if isinstance(v, str):
+                    try:
+                        decoded[k] = bytes.fromhex(v)
+                    except ValueError:
+                        decoded[k] = v
+                else:
+                    decoded[k] = v
+            cfg.framer_kwargs = decoded
 
-        return api.config.to_dict()
+        return cfg.to_dict()
 
     return mcp
