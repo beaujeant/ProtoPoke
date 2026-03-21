@@ -157,11 +157,23 @@ class ForwarderEditModal(ModalScreen):
     }
     """
 
+    # Widget IDs that require a restart and should be disabled while running.
+    _RESTART_ONLY_IDS = frozenset({
+        "fm-listen-host", "fm-listen-port",
+        "fm-upstream-host", "fm-upstream-port",
+        "fm-max-sessions", "fm-read-buffer",
+        "fm-tls-listen", "fm-tls-upstream",
+        "fm-ca-cert", "fm-ca-key", "fm-tls-cert", "fm-tls-key",
+        "fm-browse-ca-cert", "fm-browse-ca-key",
+        "fm-browse-tls-cert", "fm-browse-tls-key",
+    })
+
     def __init__(
         self,
         forwarder: ForwarderConfig | None = None,
         *,
         existing_names: set[str] | None = None,
+        is_running: bool = False,
     ) -> None:
         """
         Parameters
@@ -170,6 +182,11 @@ class ForwarderEditModal(ModalScreen):
             The forwarder to edit, or ``None`` to create a new one.
         existing_names:
             Names already in use (for duplicate-name validation).
+        is_running:
+            Whether the forwarder is currently running.  When ``True``,
+            fields that require a restart (network, TLS, sessions) are
+            disabled; only hot-swappable fields (name, framing, protocol)
+            remain editable.
         """
         super().__init__()
         if forwarder is not None:
@@ -182,6 +199,7 @@ class ForwarderEditModal(ModalScreen):
             self._is_new = True
 
         self._existing_names = existing_names or set()
+        self._is_running = is_running
         cfg = self._forwarder.config
         self._framer_name = cfg.framer_name
         self._framer_kwargs = dict(cfg.framer_kwargs)
@@ -338,6 +356,14 @@ class ForwarderEditModal(ModalScreen):
     def on_mount(self) -> None:
         # Show/hide TLS paths based on the client-side TLS toggle
         self.query_one("#fm-tls-paths").display = self._forwarder.config.tls_listen
+
+        # Disable fields that require a restart when the forwarder is running
+        if self._is_running:
+            for wid in self._RESTART_ONLY_IDS:
+                try:
+                    self.query_one(f"#{wid}").disabled = True
+                except Exception:
+                    pass
 
     # ------------------------------------------------------------------
     # Event handlers
