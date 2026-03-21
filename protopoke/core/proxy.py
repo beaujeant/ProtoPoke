@@ -72,6 +72,21 @@ class ProxyEngine:
         rules_engine:         "Optional[RulesEngine]"       = None,
         forwarder_name:       str                           = "",
     ) -> None:
+        """
+        Args:
+            config:            Network, framing, TLS, and interception settings.
+            tamper_controller: Intercept/passthrough controller shared with the
+                               ProxyAPI.  Defaults to PassthroughController (no
+                               interception).
+            event_bus:         Shared event bus for lifecycle events.  Defaults
+                               to a new isolated bus.
+            session_registry:  Shared registry for all sessions.  Defaults to a
+                               new registry (isolated; useful in tests).
+            rules_engine:      Replace rules engine.  None means no substitution.
+            forwarder_name:    Human-readable label used in log messages and the
+                               Traffic tab to identify which forwarder a session
+                               came from.
+        """
         self.config               = config
         self.forwarder_name       = forwarder_name
         # Use explicit is-None checks rather than truthiness (`or`) because

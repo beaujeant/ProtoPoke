@@ -258,7 +258,11 @@ class ProjectManager:
                 if not self.forwarders:
                     self.forwarders = [ForwarderConfig(name="Default", enabled=True, config=ProxyConfig())]
             else:
-                # v3 migration: wrap the single config.json as a "Default" forwarder
+                # v3 migration: old projects stored a single config.json instead of
+                # forwarders.json.  Wrap it as a single "Default" forwarder so the
+                # rest of the code only needs to deal with the v4 multi-forwarder format.
+                # ProxyConfig.load() requires a file path, so we write the JSON to a
+                # temp file and immediately delete it after loading.
                 config_raw = _read("config.json")
                 if config_raw:
                     import tempfile, os

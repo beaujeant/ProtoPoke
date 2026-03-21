@@ -88,6 +88,7 @@ class ProtoPoke(App):
         F3 → Tamper tab
         F4 → Forge tab
         F5 → Fuzzer tab
+        F6 → Logs tab
         ctrl+n → New project
         ctrl+o → Open project
         ctrl+s → Save project
@@ -245,7 +246,13 @@ class ProtoPoke(App):
     # ------------------------------------------------------------------
 
     async def _poll_intercept_queue(self) -> None:
-        """Drain any newly queued intercepted units and post them to the UI."""
+        """
+        Forward any pending intercepted units from the tamper queue to the UI.
+
+        Called on a 200 ms timer.  Compares the controller's pending list against
+        the units already displayed in the Tamper tab and adds any that are new.
+        This avoids duplicates without requiring a dedicated asyncio task.
+        """
         for unit in self.api.list_intercepted():
             tamper_tab = self.query_one("#tamper-tab", TamperTab)
             if unit.id not in tamper_tab._units:

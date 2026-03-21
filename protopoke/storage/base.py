@@ -7,11 +7,8 @@ proxy restarts. The interface is defined here as an abstract base class.
 Included backends:
     NullStorageBackend   — no-op; drops everything (default for in-memory use)
     MemoryStorageBackend — in-memory dict; survives within one process run
-
-Planned but not yet implemented:
-    SqliteStorageBackend — store sessions and frames in a local SQLite file.
-                           The data model here (SessionInfo, Frame) maps
-                           cleanly to SQLite rows; no schema redesign needed.
+    SqliteStorageBackend — persists sessions and frames to a local SQLite file
+                           (see storage/sqlite.py)
 
 How persistence integrates:
     ProxyAPI subscribes a storage backend to the event bus:
@@ -24,7 +21,7 @@ How persistence integrates:
     The storage backend is completely decoupled from the proxy core.
     Swapping from NullStorage to SqliteStorage is a one-line change in ProxyAPI.
 
-SQLite schema sketch (for future reference):
+SQLite schema (implemented in storage/sqlite.py):
 
     CREATE TABLE sessions (
         id          TEXT PRIMARY KEY,
