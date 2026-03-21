@@ -339,51 +339,40 @@ class ProtoPoke(App):
         """
         Apply config changes for a specific forwarder immediately.
 
-        - Protocol definition: reloaded globally (shared decoder)
-        - Log level: applied to the root logger
-        - Framing: hot-swapped on the forwarder's active sessions
-        - Forwarder name change: update API engine mapping
+        Uses ``api.update_forwarder_config()`` to hot-swap name, framing,
+        and protocol definition on a running forwarder without restart.
+        Log level is applied separately (global setting, not per-forwarder).
         """
         import logging as _logging
 
         new_name = forwarder.name
         cfg = forwarder.config
 
-        # If name changed, update the API's engine registry
-        if old_name != new_name:
-            self.api.update_forwarders(self._project.forwarders)
-            if old_name in self._running_forwarders:
+        try:
+            result = self.api.update_forwarder_config(
+                old_name,
+                new_name=new_name if new_name != old_name else None,
+                framer_name=cfg.framer_name,
+                framer_kwargs=cfg.framer_kwargs,
+                custom_framer_path=cfg.custom_framer_path,
+                protocol_definition_path=cfg.protocol_definition_path,
+            )
+            if result["renamed"] and old_name in self._running_forwarders:
                 self._running_forwarders.discard(old_name)
                 self._running_forwarders.add(new_name)
+            if result["sessions_reframed"]:
+                logger.info(
+                    "Framer updated on %d active session(s)",
+                    result["sessions_reframed"],
+                )
+        except Exception as exc:
+            logger.warning("Hot-swap config failed: %s", exc)
 
-        # Protocol definition — reload so new frames are decoded
-        if cfg.protocol_definition_path:
-            try:
-                self.api.set_protocol_file(cfg.protocol_definition_path)
-            except Exception as exc:
-                logger.warning("Protocol definition reload failed: %s", exc)
-        else:
-            from ..protocol.base import PassthroughDecoder
-            self.api.set_protocol(PassthroughDecoder())
-
-        # Log level — apply immediately
+        # Log level — apply immediately (global, not per-forwarder)
         try:
             _logging.getLogger().setLevel(cfg.log_level)
         except Exception:
             pass
-
-        # Framing — hot-swap on this forwarder's active sessions
-        try:
-            swapped = self.api.set_framer(
-                framer_name=cfg.framer_name,
-                framer_kwargs=cfg.framer_kwargs,
-                custom_framer_path=cfg.custom_framer_path,
-                forwarder_name=new_name,
-            )
-            if swapped:
-                logger.info("Framer updated on %d active session(s)", swapped)
-        except Exception as exc:
-            logger.warning("Framer hot-swap failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Tab switching actions

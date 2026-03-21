@@ -314,6 +314,101 @@ class ProxyAPI:
         self.forwarders = forwarders
         self._engines = new_engines
 
+    def update_forwarder_config(
+        self,
+        current_name: str,
+        *,
+        new_name: Optional[str] = None,
+        framer_name: Optional[str] = None,
+        framer_kwargs: Optional[dict] = None,
+        custom_framer_path: Optional[str] = None,
+        protocol_definition_path: Optional[str] = None,
+    ) -> dict:
+        """
+        Hot-swap name, framing, and/or protocol definition on a forwarder.
+
+        Unlike ``update_forwarders()`` which rebuilds the engine mapping by
+        name, this method identifies the engine by its *current* name and
+        applies changes in-place — even while the forwarder is running.
+
+        Args:
+            current_name:           The forwarder's existing name.
+            new_name:               Rename the forwarder (updates engine
+                                    registry and existing sessions).
+            framer_name:            New built-in framer key (``"raw"``,
+                                    ``"delimiter"``, ``"length_prefix"``,
+                                    ``"line"``) or ``"custom"``).
+            framer_kwargs:          Extra kwargs for the built-in framer.
+            custom_framer_path:     Path to a custom framer Python file.
+            protocol_definition_path: Path to a YAML/JSON protocol definition
+                                    file, or empty string to clear.
+
+        Returns:
+            Dict with keys:
+            - ``renamed``: bool — whether the name was changed.
+            - ``sessions_reframed``: int — active sessions whose framer was
+              swapped.
+            - ``protocol_set``: bool — whether the protocol decoder was
+              updated.
+
+        Raises:
+            KeyError:  *current_name* not found.
+            KeyError:  *new_name* already taken by another forwarder.
+        """
+        if current_name not in self._engines:
+            raise KeyError(f"No forwarder named '{current_name}'")
+
+        engine = self._engines[current_name]
+        fwd = next(f for f in self.forwarders if f.name == current_name)
+
+        result: dict = {
+            "renamed": False,
+            "sessions_reframed": 0,
+            "protocol_set": False,
+        }
+
+        # --- Name change ---
+        effective_name = current_name
+        if new_name is not None and new_name != current_name:
+            if new_name in self._engines:
+                raise KeyError(
+                    f"Forwarder name '{new_name}' is already in use"
+                )
+            # Update engine registry
+            del self._engines[current_name]
+            self._engines[new_name] = engine
+            engine.forwarder_name = new_name
+            fwd.name = new_name
+            # Update existing sessions so they reference the new name
+            for session in self.session_registry.all_sessions():
+                if session.info.forwarder_name == current_name:
+                    session.info.forwarder_name = new_name
+            effective_name = new_name
+            result["renamed"] = True
+            logger.info(
+                "Forwarder renamed: '%s' -> '%s'", current_name, new_name
+            )
+
+        # --- Framing change ---
+        if framer_name is not None:
+            result["sessions_reframed"] = self.set_framer(
+                framer_name=framer_name,
+                framer_kwargs=framer_kwargs,
+                custom_framer_path=custom_framer_path,
+                forwarder_name=effective_name,
+            )
+
+        # --- Protocol definition change ---
+        if protocol_definition_path is not None:
+            fwd.config.protocol_definition_path = protocol_definition_path
+            if protocol_definition_path:
+                self.set_protocol_file(protocol_definition_path)
+            else:
+                self.set_protocol(PassthroughDecoder())
+            result["protocol_set"] = True
+
+        return result
+
     # ------------------------------------------------------------------
     # Session management
     # ------------------------------------------------------------------
