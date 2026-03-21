@@ -220,6 +220,7 @@ class TamperTab(Widget):
     def add_unit(self, unit: TamperedUnit) -> None:
         self._units[unit.id] = unit
         dt = self.query_one("#intercept-queue-table", DataTable)
+        is_first = dt.row_count == 0
         direction = "→" if unit.frame.direction is Direction.CLIENT_TO_SERVER else "←"
         data = unit.effective_bytes()
         preview = data[:24].hex()
@@ -233,13 +234,14 @@ class TamperTab(Widget):
             preview,
             key=unit.id,
         )
-        # Auto-select the newly arrived frame and load it into the editor
-        self._selected_unit_id = unit.id
-        self._load_bytes_into_editor(data)
-        try:
-            dt.move_cursor(row=dt.row_count - 1)
-        except Exception:
-            pass
+        # Auto-select only if this is the first (and only) frame in the queue
+        if is_first:
+            self._selected_unit_id = unit.id
+            self._load_bytes_into_editor(data)
+            try:
+                dt.move_cursor(row=0)
+            except Exception:
+                pass
         self._refresh_pending_label()
 
     def remove_unit(self, unit_id: str) -> None:
@@ -430,8 +432,10 @@ class TamperTab(Widget):
             state = "enabled" if event.value else "disabled"
             self.notify(f"Intercept {state}.")
 
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.data_table.id != "intercept-queue-table":
+            return
+        if event.row_key is None:
             return
         unit_id = str(event.row_key.value)
         unit = self._units.get(unit_id)

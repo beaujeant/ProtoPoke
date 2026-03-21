@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.widget import Widget
-from textual.widgets import Button, DataTable, Label, Select
+from textual.widgets import Button, DataTable, Label, Select, Static
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
 
@@ -79,17 +79,14 @@ class ConfigTab(Widget):
     ConfigTab .cfg-buttons Button {
         margin-right: 1;
     }
-    ConfigTab .cfg-global {
-        height: 3;
-        margin-top: 1;
-        align: left middle;
-        dock: bottom;
+    ConfigTab .cfg-spacer {
+        width: 1fr;
     }
-    ConfigTab .cfg-global Label {
-        width: 12;
+    ConfigTab .cfg-buttons Label {
+        width: auto;
         padding: 0 1;
     }
-    ConfigTab .cfg-global Select {
+    ConfigTab .cfg-buttons Select {
         width: 20;
     }
     """
@@ -116,8 +113,7 @@ class ConfigTab(Widget):
                 yield Button("✎ Edit", variant="primary", id="btn-cfg-edit")
                 yield Button("✕ Delete", variant="error", id="btn-cfg-remove")
                 yield Button("⏻ On/Off", id="btn-cfg-toggle")
-
-            with Horizontal(classes="cfg-global"):
+                yield Static("", classes="cfg-spacer")
                 yield Label("Log level:")
                 yield Select(
                     [(lbl, val) for lbl, val in _LOG_LEVEL_OPTIONS],
