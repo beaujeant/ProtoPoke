@@ -112,11 +112,11 @@ class ForgeTab(Widget):
         margin: 0;
     }
     ForgeTab #frame-editor-pane .pane-header Button.mode-active {
-        background: $primary;
+        background: $surface;
         color: $text;
     }
     ForgeTab #frame-editor-pane .pane-header Button.mode-inactive {
-        background: $surface;
+        background: $primary;
         color: $text-muted;
     }
     ForgeTab #frame-editor {

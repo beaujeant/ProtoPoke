@@ -100,11 +100,11 @@ class TamperTab(Widget):
         margin: 0;
     }
     TamperTab #hex-editor-pane .pane-header Button.mode-active {
-        background: $primary;
+        background: $surface;
         color: $text;
     }
     TamperTab #hex-editor-pane .pane-header Button.mode-inactive {
-        background: $surface;
+        background: $primary;
         color: $text-muted;
     }
     TamperTab TextArea {
