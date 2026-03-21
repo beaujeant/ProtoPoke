@@ -73,6 +73,7 @@ from .events.bus import (
     SessionClosedEvent,
     SessionUpdatedEvent,
     FrameCapturedEvent,
+    UpstreamConnectionFailedEvent,
 )
 from .tamper.controller import QueuedTamperController
 from .forge.engine import ForgeEngine, ForgeResult, PlaybookEngine, SendResult
@@ -1257,6 +1258,10 @@ class ProxyAPI:
             api.on_frame_captured(my_handler)
         """
         self.event_bus.subscribe(FrameCapturedEvent, handler)
+
+    def on_upstream_connection_failed(self, handler: Callable) -> None:
+        """Register a handler for UpstreamConnectionFailedEvent."""
+        self.event_bus.subscribe(UpstreamConnectionFailedEvent, handler)
 
     # ------------------------------------------------------------------
     # Fuzzing

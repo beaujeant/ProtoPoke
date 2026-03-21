@@ -76,6 +76,17 @@ class InterceptCompletedEvent:
     session: SessionInfo
 
 
+@dataclass
+class UpstreamConnectionFailedEvent:
+    """Emitted when a client connected but the proxy could not reach upstream."""
+    forwarder_name: str
+    client_host:    str
+    client_port:    int
+    upstream_host:  str
+    upstream_port:  int
+    error:          str
+
+
 # ---------------------------------------------------------------------------
 # Event bus
 # ---------------------------------------------------------------------------

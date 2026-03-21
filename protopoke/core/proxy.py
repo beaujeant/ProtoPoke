@@ -37,7 +37,7 @@ from typing import Optional, TYPE_CHECKING
 
 from ..config import ProxyConfig
 from ..models import Direction
-from ..events.bus import EventBus, SessionOpenedEvent, SessionClosedEvent, SessionUpdatedEvent
+from ..events.bus import EventBus, SessionOpenedEvent, SessionClosedEvent, SessionUpdatedEvent, UpstreamConnectionFailedEvent
 from ..framing import create_framer, load_framer_from_file
 from ..tamper.controller import TamperController, PassthroughController
 from ..tls.handler import TLSHandler
@@ -276,22 +276,39 @@ class ProxyEngine:
                 timeout=self.config.connect_timeout,
             )
         except asyncio.TimeoutError:
-            logger.error(
-                "Timeout connecting to upstream %s:%d for session %s",
-                self.config.upstream_host, self.config.upstream_port,
-                session.id,
+            error_msg = (
+                f"Timeout connecting to upstream "
+                f"{self.config.upstream_host}:{self.config.upstream_port}"
             )
+            logger.error("%s for session %s", error_msg, session.id[:8])
             client_writer.close()
             self.session_registry.mark_closed(session.id)
+            await self.event_bus.publish(UpstreamConnectionFailedEvent(
+                forwarder_name=self.forwarder_name,
+                client_host=client_host,
+                client_port=client_port,
+                upstream_host=self.config.upstream_host,
+                upstream_port=self.config.upstream_port,
+                error=error_msg,
+            ))
             return
         except OSError as exc:
+            error_msg = str(exc)
             logger.error(
                 "Failed to connect to upstream %s:%d for session %s: %s",
                 self.config.upstream_host, self.config.upstream_port,
-                session.id, exc,
+                session.id[:8], error_msg,
             )
             client_writer.close()
             self.session_registry.mark_closed(session.id)
+            await self.event_bus.publish(UpstreamConnectionFailedEvent(
+                forwarder_name=self.forwarder_name,
+                client_host=client_host,
+                client_port=client_port,
+                upstream_host=self.config.upstream_host,
+                upstream_port=self.config.upstream_port,
+                error=error_msg,
+            ))
             return
 
         # Both sides connected
