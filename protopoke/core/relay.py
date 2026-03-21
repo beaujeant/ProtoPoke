@@ -120,11 +120,11 @@ class DirectionalRelay:
                 try:
                     data = await self._source_reader.read(self._read_buffer_size)
                 except asyncio.IncompleteReadError:
-                    logger.debug("Source closed unexpectedly [%s]", label)
+                    logger.info("Source closed unexpectedly [%s]", label)
                     break
 
                 if not data:
-                    logger.debug("Source EOF [%s]", label)
+                    logger.info("Source disconnected (EOF) [%s]", label)
                     break
 
                 for frame in self._framer.feed(data):
@@ -135,7 +135,7 @@ class DirectionalRelay:
             raise
 
         except (ConnectionResetError, BrokenPipeError, OSError) as exc:
-            logger.debug("Connection error [%s]: %s", label, exc)
+            logger.info("Connection error [%s]: %s", label, exc)
 
         except Exception as exc:
             logger.error("Relay error [%s]: %s", label, exc, exc_info=True)

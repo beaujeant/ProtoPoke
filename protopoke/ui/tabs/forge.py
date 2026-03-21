@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time as _time
 
 from textual.app import ComposeResult
@@ -15,6 +16,8 @@ from ..modals.playbook_modal import PlaybookModal, PlaybookResult
 from ..modals.frame_edit import FrameEditModal
 from ..modals.copy_frame_modal import CopyFrameModal
 from ..utils.frame_codec import hex_template_to_str, str_to_hex_template
+
+logger = logging.getLogger(__name__)
 
 
 class ForgeTab(Widget):
@@ -409,7 +412,7 @@ class ForgeTab(Widget):
             try:
                 frame.raw_hex = str_to_hex_template(raw_text)
             except ValueError as exc:
-                self.notify(f"STR parse error: {exc}", severity="error")
+                logger.error("STR parse error: %s", exc)
                 return
         else:
             frame.raw_hex = raw_text
@@ -425,13 +428,13 @@ class ForgeTab(Widget):
             try:
                 new_text = hex_template_to_str(current_text)
             except ValueError as exc:
-                self.notify(f"Cannot switch to STR: {exc}", severity="error")
+                logger.error("Cannot switch to STR: %s", exc)
                 return
         else:
             try:
                 new_text = str_to_hex_template(current_text)
             except ValueError as exc:
-                self.notify(f"Cannot switch to HEX: {exc}", severity="error")
+                logger.error("Cannot switch to HEX: %s", exc)
                 return
         self._frame_editor_mode = mode
         editor.load_text(new_text)
@@ -542,7 +545,7 @@ class ForgeTab(Widget):
 
     def _add_blank_frame(self) -> None:
         if self._current_idx < 0:
-            self.notify("Create a playbook first.", severity="warning")
+            logger.warning("Create a playbook first")
             return
         self._save_frame_editor()
         pb = self._playbooks[self._current_idx]
@@ -562,7 +565,7 @@ class ForgeTab(Widget):
 
     def _remove_frame(self) -> None:
         if self._current_idx < 0 or self._selected_frame_idx < 0:
-            self.notify("Select a frame to remove.", severity="warning")
+            logger.warning("Select a frame to remove")
             return
         pb = self._playbooks[self._current_idx]
         pb.frames.pop(self._selected_frame_idx)
@@ -599,7 +602,7 @@ class ForgeTab(Widget):
 
     def _open_frame_edit_modal(self) -> None:
         if self._current_idx < 0 or self._selected_frame_idx < 0:
-            self.notify("Select a frame to edit.", severity="warning")
+            logger.warning("Select a frame to edit")
             return
         pb = self._playbooks[self._current_idx]
         if self._selected_frame_idx >= len(pb.frames):
@@ -628,7 +631,7 @@ class ForgeTab(Widget):
 
     def _open_copy_frame_modal(self) -> None:
         if self._current_idx < 0 or self._selected_frame_idx < 0:
-            self.notify("Select a frame to copy.", severity="warning")
+            logger.warning("Select a frame to copy")
             return
         self._save_frame_editor()
         targets = [
@@ -637,7 +640,7 @@ class ForgeTab(Widget):
             if i != self._current_idx
         ]
         if not targets:
-            self.notify("No other playbook to copy to.", severity="warning")
+            logger.warning("No other playbook to copy to")
             return
         self.app.push_screen(CopyFrameModal(targets), self._on_copy_frame_result)
 
@@ -661,7 +664,7 @@ class ForgeTab(Widget):
         self._update_playbook_list_row(target_idx)
         if hasattr(self.app, "mark_dirty"):
             self.app.mark_dirty()
-        self.notify(f"Frame copied to '{target_pb.label}'.")
+        logger.info("Frame copied to '%s'", target_pb.label)
 
     # ------------------------------------------------------------------
     # Playbook delete
@@ -669,7 +672,7 @@ class ForgeTab(Widget):
 
     def _delete_playbook(self) -> None:
         if self._current_idx < 0:
-            self.notify("No playbook selected.", severity="warning")
+            logger.warning("No playbook selected")
             return
         pb = self._playbooks[self._current_idx]
         self._playbooks.pop(self._current_idx)
@@ -702,7 +705,7 @@ class ForgeTab(Widget):
 
     def _open_playbook_modal(self, edit: bool = False) -> None:
         if edit and self._current_idx < 0:
-            self.notify("No playbook selected.", severity="warning")
+            logger.warning("No playbook selected")
             return
 
         try:
@@ -767,7 +770,7 @@ class ForgeTab(Widget):
 
     def _export_playbook(self) -> None:
         if self._current_idx < 0:
-            self.notify("No playbook selected to export.", severity="warning")
+            logger.warning("No playbook selected to export")
             return
         self._save_frame_editor()
         pb = self._playbooks[self._current_idx]
@@ -803,9 +806,9 @@ class ForgeTab(Widget):
             try:
                 import pathlib
                 pathlib.Path(path).write_text(json.dumps(export_data, indent=2), encoding="utf-8")
-                self.notify(f"Playbook exported to {path}")
+                logger.info("Playbook exported to %s", path)
             except Exception as exc:
-                self.notify(f"Export failed: {exc}", severity="error")
+                logger.error("Export failed: %s", exc)
 
         self.app.push_screen(_ExportModal(""), _on_path)
 
@@ -820,13 +823,13 @@ class ForgeTab(Widget):
                 raw  = pathlib.Path(path).read_text(encoding="utf-8")
                 data = json.loads(raw)
             except Exception as exc:
-                self.notify(f"Import failed (read/parse): {exc}", severity="error")
+                logger.error("Import failed (read/parse): %s", exc)
                 return
 
             label       = data.get("label", "Imported Playbook")
             frames_data = data.get("frames", [])
             if not isinstance(frames_data, list):
-                self.notify("Import failed: 'frames' must be a list.", severity="error")
+                logger.error("Import failed: 'frames' must be a list")
                 return
 
             pb = Playbook.create(label=label)
@@ -839,7 +842,7 @@ class ForgeTab(Widget):
             self.add_playbook(pb)
             if hasattr(self.app, "mark_dirty"):
                 self.app.mark_dirty()
-            self.notify(f"Imported '{label}' with {len(pb.frames)} frame(s).")
+            logger.info("Imported '%s' with %d frame(s)", label, len(pb.frames))
 
         self.app.push_screen(FilePickerModal(None), _on_pick)
 
@@ -849,12 +852,12 @@ class ForgeTab(Widget):
 
     def _do_run(self) -> None:
         if self._current_idx < 0:
-            self.notify("Create a playbook first.", severity="warning")
+            logger.warning("Create a playbook first")
             return
         self._save_frame_editor()
         pb = self._playbooks[self._current_idx]
         if not pb.frames:
-            self.notify("No frames in the playbook.", severity="warning")
+            logger.warning("No frames in the playbook")
             return
         if pb.source_session_id:
             try:
@@ -862,10 +865,9 @@ class ForgeTab(Widget):
             except Exception:
                 session = None
             if session is None or not session.is_active():
-                self.notify(
+                logger.error(
                     "Session is closed — cannot run playbook. "
-                    "Edit the playbook to select an active session or use a custom destination.",
-                    severity="error",
+                    "Edit the playbook to select an active session or use a custom destination"
                 )
                 return
         self._history_view_mode = False
@@ -885,12 +887,9 @@ class ForgeTab(Widget):
             run = await self.app.api.run_playbook(pb, on_entry=on_entry)
             pb.runs.append(run)
             self._refresh_history_table()
-            self.notify(
-                f"Playbook complete — {len(run.traffic)} traffic entries.",
-                severity="information",
-            )
+            logger.info("Playbook complete — %d traffic entries", len(run.traffic))
         except Exception as exc:
-            self.notify(f"Playbook error: {exc}", severity="error")
+            logger.error("Playbook error: %s", exc)
         finally:
             self._running = False
 

@@ -18,6 +18,7 @@ Clicking a result row opens the mutated bytes in the Forge tab.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import TYPE_CHECKING
 
@@ -28,6 +29,8 @@ from textual.widgets import Button, Checkbox, DataTable, Input, Label, Select, S
 
 if TYPE_CHECKING:
     from ...fuzzing.models import FuzzResult
+
+logger = logging.getLogger(__name__)
 
 
 class FuzzerTab(Widget):
@@ -183,13 +186,13 @@ class FuzzerTab(Widget):
 
     def _start_campaign(self) -> None:
         if self._campaign_running:
-            self.notify("Campaign already running.", severity="warning")
+            logger.warning("Campaign already running")
             return
 
         # Read session
         select = self.query_one("#session-select", Select)
         if select.value is Select.BLANK or select.value is None:
-            self.notify("Select a session first.", severity="warning")
+            logger.warning("Select a session first")
             return
         session_id = str(select.value)
 
@@ -201,7 +204,7 @@ class FuzzerTab(Widget):
         try:
             iterations = int(self.query_one("#iter-input", Input).value.strip())
         except ValueError:
-            self.notify("Iterations must be an integer.", severity="error")
+            logger.error("Iterations must be an integer")
             return
 
         stop_on_crash = self.query_one("#stop-crash-cb", Checkbox).value
@@ -209,7 +212,7 @@ class FuzzerTab(Widget):
         # Build mutator list
         mutators = self._build_mutators()
         if not mutators:
-            self.notify("Select at least one mutator.", severity="warning")
+            logger.warning("Select at least one mutator")
             return
 
         self._campaign_running = True
@@ -263,10 +266,10 @@ class FuzzerTab(Widget):
                 f"{n_interesting} interesting, {n_crash} crashes"
             )
             self._update_status(status)
-            self.notify(status, severity="information")
+            logger.info(status)
         except Exception as exc:
             self._update_status(f"Error: {exc}")
-            self.notify(f"Campaign error: {exc}", severity="error")
+            logger.error("Campaign error: %s", exc)
         finally:
             self._campaign_running = False
 
@@ -310,10 +313,9 @@ class FuzzerTab(Widget):
         # Look up the result in the API's last campaign
         # The simplest approach: search in all available campaigns
         # (app will need to expose this; for now notify the user)
-        self.notify(
-            f"Result {result_id[:8]} selected — "
-            "use Forge to replay mutated bytes manually.",
-            severity="information",
+        logger.info(
+            "Result %s selected — use Forge to replay mutated bytes manually",
+            result_id[:8],
         )
 
     # ------------------------------------------------------------------
@@ -372,10 +374,9 @@ class FuzzerTab(Widget):
             # Warn if protocol-aware mutators were requested but no encoder is loaded
             for mid in ("mut-fieldboundary", "mut-fieldoverflow", "mut-nullbyte", "mut-lengthmangle"):
                 if cb(mid):
-                    self.notify(
-                        "Protocol-aware mutators require a protocol definition. "
-                        "Load one in Config first.",
-                        severity="warning",
+                    logger.warning(
+                        "Protocol-aware mutators require a protocol definition — "
+                        "load one in Config first"
                     )
                     break
 

@@ -269,7 +269,7 @@ class ProtoPoke(App):
             except Exception:
                 pass
         except Exception as exc:
-            self.notify(f"Failed to start forwarder '{name}': {exc}", severity="error")
+            logger.error("Failed to start forwarder '%s': %s", name, exc)
 
     async def _stop_forwarder(self, name: str) -> None:
         try:
@@ -278,7 +278,7 @@ class ProtoPoke(App):
             self._update_title()
             self.query_one("#config-tab", ConfigTab).notify_forwarder_running(name, False)
         except Exception as exc:
-            self.notify(f"Failed to stop forwarder '{name}': {exc}", severity="error")
+            logger.error("Failed to stop forwarder '%s': %s", name, exc)
 
 
     def _apply_dynamic_config_for(
@@ -309,9 +309,7 @@ class ProtoPoke(App):
             try:
                 self.api.set_protocol_file(cfg.protocol_definition_path)
             except Exception as exc:
-                self.notify(
-                    f"Protocol definition reload failed: {exc}", severity="warning"
-                )
+                logger.warning("Protocol definition reload failed: %s", exc)
         else:
             from ..protocol.base import PassthroughDecoder
             self.api.set_protocol(PassthroughDecoder())
@@ -331,12 +329,9 @@ class ProtoPoke(App):
                 forwarder_name=new_name,
             )
             if swapped:
-                self.notify(
-                    f"Framer updated on {swapped} active session(s).",
-                    severity="information",
-                )
+                logger.info("Framer updated on %d active session(s)", swapped)
         except Exception as exc:
-            self.notify(f"Framer hot-swap failed: {exc}", severity="warning")
+            logger.warning("Framer hot-swap failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Tab switching actions
@@ -350,7 +345,7 @@ class ProtoPoke(App):
         """Ctrl+F — send the selected Traffic frame(s) to Forge."""
         traffic_tab = self.query_one("#traffic-tab", TrafficTab)
         if not traffic_tab._current_session_id:
-            self.notify("Select a frame in the Traffic tab first.", severity="warning")
+            logger.warning("Select a frame in the Traffic tab first")
         elif len(traffic_tab._selected_frame_ids) > 1:
             self.send_frames_to_forge(
                 traffic_tab._current_session_id,
@@ -361,7 +356,7 @@ class ProtoPoke(App):
                 traffic_tab._current_session_id, traffic_tab._current_frame_id
             )
         else:
-            self.notify("Select a frame in the Traffic tab first.", severity="warning")
+            logger.warning("Select a frame in the Traffic tab first")
 
     # ------------------------------------------------------------------
     # Project management actions
@@ -382,7 +377,7 @@ class ProtoPoke(App):
         self.query_one("#forge-tab", ForgeTab).load_playbooks([])
         self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions([])
         self._update_title()
-        self.notify(f"New project: {name}")
+        logger.info("New project: %s", name)
 
     def action_open_project(self) -> None:
         self.push_screen(OpenProjectModal(), self._on_open_project)
@@ -405,9 +400,9 @@ class ProtoPoke(App):
                     traffic_tab.add_session(session)
                 self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
             self._update_title()
-            self.notify(f"Opened project: {state.name}")
+            logger.info("Opened project: %s", state.name)
         except Exception as exc:
-            self.notify(f"Could not open project: {exc}", severity="error")
+            logger.error("Could not open project: %s", exc)
 
     def action_save_project(self) -> None:
         if self._project.path is None:
@@ -417,9 +412,9 @@ class ProtoPoke(App):
             self._sync_playbooks()
             self._project.save()
             self._update_title()
-            self.notify("Project saved.")
+            logger.info("Project saved")
         except Exception as exc:
-            self.notify(f"Save failed: {exc}", severity="error")
+            logger.error("Save failed: %s", exc)
 
     def action_save_project_as(self) -> None:
         default = str(self._project.path) if self._project.path else ""
@@ -432,9 +427,9 @@ class ProtoPoke(App):
             self._sync_playbooks()
             self._project.save_as(path)
             self._update_title()
-            self.notify(f"Saved to {path}")
+            logger.info("Saved to %s", path)
         except Exception as exc:
-            self.notify(f"Save failed: {exc}", severity="error")
+            logger.error("Save failed: %s", exc)
 
     def _sync_playbooks(self) -> None:
         """Copy the current UI state (forge playbooks, traffic) into the project."""
@@ -460,7 +455,7 @@ class ProtoPoke(App):
     async def _terminate_session(self, session_id: str) -> None:
         terminated = await self.api.terminate_session(session_id)
         if not terminated:
-            self.notify("Session is already closed.", severity="warning")
+            logger.warning("Session %s is already closed", session_id[:8])
 
     def delete_session(self, session_id: str) -> None:
         """Delete a session from the registry and remove it from the Traffic tab."""
@@ -471,7 +466,7 @@ class ProtoPoke(App):
                 self.api.list_sessions()
             )
         else:
-            self.notify("Session not found.", severity="warning")
+            logger.warning("Session not found: %s", session_id[:8])
 
     def _tls_upstream_for_session(self, session_id: str) -> bool:
         """Look up tls_upstream from the forwarder that owns this session."""
@@ -514,7 +509,7 @@ class ProtoPoke(App):
         def _schedule_switch_forge() -> None:
             self.call_after_refresh(_do_switch_forge)
         self.call_after_refresh(_schedule_switch_forge)
-        self.notify(f"Frame sent to Forge: {frame_id[:8]}")
+        logger.info("Frame sent to Forge: %s", frame_id[:8])
 
     def send_frames_to_forge(self, session_id: str, frame_ids: list[str]) -> None:
         """Called by TrafficTab — create a multi-frame playbook in Forge."""
@@ -567,7 +562,7 @@ class ProtoPoke(App):
         msg = f"{len(selected_frames)} frame(s) added to Forge"
         if skipped:
             msg += f" ({skipped} skipped — wrong direction)"
-        self.notify(msg)
+        logger.info(msg)
 
     # ------------------------------------------------------------------
     # Internal helpers
