@@ -1853,6 +1853,71 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    @mcp.tool()
+    def update_forwarder_config(
+        forwarder_name:          str,
+        new_name:                Optional[str]  = None,
+        framer_name:             Optional[str]  = None,
+        framer_kwargs:           Optional[dict] = None,
+        custom_framer_path:      Optional[str]  = None,
+        protocol_definition_path: Optional[str] = None,
+    ) -> dict:
+        """
+        Hot-swap name, framing, and/or protocol definition on a running
+        forwarder without restarting it.
+
+        This is the preferred way to change a forwarder's configuration
+        while it is running.  Changes take effect immediately:
+
+        - **Name**: the forwarder and all its existing sessions are
+          relabelled.
+        - **Framing**: the framer is swapped on every active session so
+          new data is segmented with the updated strategy.
+        - **Protocol definition**: the decoder/encoder are replaced so
+          subsequent ``decode_frame()`` calls use the new definition.
+
+        Args:
+            forwarder_name:          Current name of the forwarder to update.
+            new_name:                Rename the forwarder (must be unique).
+            framer_name:             New framer key ("raw", "delimiter",
+                                     "length_prefix", "line", or "custom").
+            framer_kwargs:           Extra options for the framer. Byte values
+                                     should be hex strings (e.g. "0d0a").
+            custom_framer_path:      Path to a custom framer Python file
+                                     (required when framer_name == "custom").
+            protocol_definition_path: Path to a .yaml/.json protocol
+                                     definition, or "" to clear.
+
+        Returns:
+            {"ok": True, "renamed": bool, "sessions_reframed": int,
+             "protocol_set": bool}
+        """
+        kwargs: dict = {}
+        if framer_kwargs:
+            for k, v in framer_kwargs.items():
+                if isinstance(v, str) and framer_name in ("delimiter",):
+                    try:
+                        kwargs[k] = bytes.fromhex(v)
+                    except ValueError:
+                        kwargs[k] = v
+                else:
+                    kwargs[k] = v
+
+        try:
+            result = api.update_forwarder_config(
+                forwarder_name,
+                new_name=new_name,
+                framer_name=framer_name,
+                framer_kwargs=kwargs or None,
+                custom_framer_path=custom_framer_path,
+                protocol_definition_path=protocol_definition_path,
+            )
+            return {"ok": True, **result}
+        except KeyError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
     # ------------------------------------------------------------------ #
     # Variables                                                             #
     # ------------------------------------------------------------------ #
