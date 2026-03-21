@@ -49,7 +49,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-import time
 from functools import partial
 from pathlib import Path
 from typing import Optional
@@ -252,11 +251,11 @@ class SqliteStorageBackend(StorageBackend):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _run(self, fn, *args):
-        """Run *fn* in a thread-pool executor, serialised by a lock."""
+    async def _run(self, fn):
+        """Run *fn* (a zero-argument callable) in a thread-pool executor, serialised by a lock."""
         loop = asyncio.get_running_loop()
         async with self._lock:
-            return await loop.run_in_executor(None, fn, *args)
+            return await loop.run_in_executor(None, fn)
 
 
 # ---------------------------------------------------------------------------

@@ -43,6 +43,12 @@ class _SessionClosed(Message):
         self.session_id = session_id
 
 
+class _SessionUpdated(Message):
+    def __init__(self, session_id: str) -> None:
+        super().__init__()
+        self.session_id = session_id
+
+
 class _FrameCaptured(Message):
     def __init__(self, session_id: str, frame_id: str) -> None:
         super().__init__()
@@ -176,7 +182,7 @@ class ProtoPoke(App):
             self.post_message(_SessionClosed(event.session.id))
 
         async def on_session_updated(event: SessionUpdatedEvent) -> None:
-            self.post_message(_SessionClosed(event.session.id))
+            self.post_message(_SessionUpdated(event.session.id))
 
         async def on_frame_captured(event: FrameCapturedEvent) -> None:
             self.post_message(_FrameCaptured(event.session.id, event.frame.id))
@@ -213,6 +219,11 @@ class ProtoPoke(App):
         if session:
             self.query_one("#traffic-tab", TrafficTab).update_session(session)
             self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
+
+    def on__session_updated(self, msg: _SessionUpdated) -> None:
+        session = self.api.get_session(msg.session_id)
+        if session:
+            self.query_one("#traffic-tab", TrafficTab).update_session(session)
 
     def on__frame_captured(self, msg: _FrameCaptured) -> None:
         session = self.api.get_session(msg.session_id)

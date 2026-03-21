@@ -281,7 +281,3 @@ class InterceptFilter:
         for d in data:
             filt.add_rule(InterceptRule.from_dict(d))
         return filt
-
-
-# Backward-compatibility alias
-TamperFilter = InterceptFilter

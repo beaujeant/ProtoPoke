@@ -12,6 +12,7 @@ This module is intentionally thin. All the interesting behavior lives in:
     - session.py (session lifecycle)
     - framing/  (byte-stream → frames)
     - tamper/ (tamper queue and verdicts)
+    - tls/ (TLS MITM via CertificateAuthority + TLSHandler)
 
 The engine just wires those pieces together for each new connection.
 
@@ -21,12 +22,6 @@ Concurrency model summary:
       BidirectionalRelay.run(), plus one outer session Task in _run_session().
     - All Tasks share the same event loop — no threads, no locks needed for
       the session registry or intercept queue.
-
-TLS future:
-    To add TLS MITM, wrap the asyncio.open_connection() call with
-    ssl.create_default_context() and do the same on the listening side with
-    asyncio.start_server(..., ssl=server_ssl_context). The relay code doesn't
-    need to change at all — it only sees StreamReader/StreamWriter.
 """
 
 from __future__ import annotations

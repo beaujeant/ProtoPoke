@@ -303,22 +303,6 @@ class FuzzerTab(Widget):
         dt.move_cursor(row=dt.row_count - 1)
 
     # ------------------------------------------------------------------
-    # Row selection → send to Forge
-    # ------------------------------------------------------------------
-
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if event.data_table.id != "results-table":
-            return
-        result_id = str(event.row_key.value)
-        # Look up the result in the API's last campaign
-        # The simplest approach: search in all available campaigns
-        # (app will need to expose this; for now notify the user)
-        logger.info(
-            "Result %s selected — use Forge to replay mutated bytes manually",
-            result_id[:8],
-        )
-
-    # ------------------------------------------------------------------
     # Status helper
     # ------------------------------------------------------------------
 

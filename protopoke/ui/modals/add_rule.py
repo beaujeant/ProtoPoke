@@ -257,7 +257,7 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
         msg_widget = self.query_one("#validation-msg", Static)
 
         label    = self.query_one("#r-label", Input).value.strip() or "Rule"
-        dir_val  = str(self.query_one("#r-direction", Select).value)
+        dir_select_val = self.query_one("#r-direction", Select).value
         enabled  = self.query_one("#r-enabled", Switch).value
         rule_type_val = str(self.query_one("#r-type", Select).value)
 
@@ -266,9 +266,9 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
         scope_sequence = self.query_one("#r-scope-sequence", Checkbox).value
 
         direction: Direction | None = None
-        if dir_val and dir_val != "Select.BLANK":
+        if dir_select_val is not Select.BLANK:
             try:
-                direction = Direction(dir_val)
+                direction = Direction(str(dir_select_val))
             except ValueError:
                 pass
 

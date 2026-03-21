@@ -56,7 +56,7 @@ class BitFlipMutator(FrameMutator):
     Flip *count* random bits in the frame.
 
     The flipped bits are chosen uniformly across the entire frame.  Flipping
-    a single bit changes exactly one byte.
+    a single bit affects exactly one byte (alters that byte's value).
     """
 
     def __init__(self, count: int = 1) -> None:
