@@ -97,6 +97,15 @@ class TamperTab(Widget):
     }
     TamperTab #hex-editor-pane .pane-header Button {
         width: 5;
+        margin: 0;
+    }
+    TamperTab #hex-editor-pane .pane-header Button.mode-active {
+        background: $primary;
+        color: $text;
+    }
+    TamperTab #hex-editor-pane .pane-header Button.mode-inactive {
+        background: $surface;
+        color: $text-muted;
     }
     TamperTab TextArea {
         height: 1fr;
@@ -150,7 +159,8 @@ class TamperTab(Widget):
                     "  Edit — modify before forwarding",
                     markup=False,
                 )
-                yield Button("HEX", id="btn-tamper-mode", compact=True)
+                yield Button("HEX", id="btn-tamper-hex", classes="mode-active",   compact=True)
+                yield Button("STR", id="btn-tamper-str", classes="mode-inactive", compact=True)
             yield TextArea(id="hex-editor", language=None)
 
         # Intercept rules
@@ -460,36 +470,48 @@ class TamperTab(Widget):
         hex_clean = text.replace(" ", "").replace("\n", "").strip()
         return bytes.fromhex(hex_clean)
 
-    def _toggle_editor_mode(self) -> None:
-        """Switch the hex editor between HEX and STR (python-like) display."""
+    def _set_editor_mode(self, mode: str) -> None:
+        """Switch the hex editor to the given *mode* ('hex' or 'str')."""
+        if mode == self._editor_mode:
+            return
         editor = self.query_one("#hex-editor", TextArea)
         current_text = editor.text
 
-        if self._editor_mode == "hex":
+        if mode == "str":
             try:
                 new_text = hex_pairs_to_str(current_text)
             except ValueError as exc:
                 self.notify(f"Cannot switch to STR: {exc}", severity="error")
                 return
-            self._editor_mode = "str"
-            self.query_one("#btn-tamper-mode", Button).label = "STR"
         else:
             try:
                 new_text = str_to_hex_pairs(current_text)
             except ValueError as exc:
                 self.notify(f"Cannot switch to HEX: {exc}", severity="error")
                 return
-            self._editor_mode = "hex"
-            self.query_one("#btn-tamper-mode", Button).label = "HEX"
 
+        self._editor_mode = mode
         editor.load_text(new_text)
+        self._update_tamper_mode_buttons()
+
+    def _update_tamper_mode_buttons(self) -> None:
+        btn_hex = self.query_one("#btn-tamper-hex", Button)
+        btn_str = self.query_one("#btn-tamper-str", Button)
+        for btn, is_active in [(btn_hex, self._editor_mode == "hex"),
+                               (btn_str, self._editor_mode == "str")]:
+            btn.set_class(is_active,  "mode-active")
+            btn.set_class(not is_active, "mode-inactive")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         bid = event.button.id
 
-        if bid == "btn-tamper-mode":
+        if bid == "btn-tamper-hex":
             event.stop()
-            self._toggle_editor_mode()
+            self._set_editor_mode("hex")
+            return
+        if bid == "btn-tamper-str":
+            event.stop()
+            self._set_editor_mode("str")
             return
 
         if bid == "dir-both":
