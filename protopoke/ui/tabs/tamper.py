@@ -138,9 +138,9 @@ class TamperTab(Widget):
 
         # Action bar
         with Horizontal(classes="action-bar"):
-            yield Button("▶ Forward",       variant="success", id="btn-forward",    flat=True)
-            yield Button("✖ Drop",           variant="error",   id="btn-drop",       flat=True)
             yield Button("✎ Modify+Forward", variant="warning", id="btn-modify",     flat=True)
+            yield Button("✖ Drop",           variant="error",   id="btn-drop",       flat=True)
+            yield Button("▶ Forward",       variant="success", id="btn-forward",    flat=True)
             yield Button("▶▶ Forward All",                     id="btn-forward-all", flat=True)
 
         # Hex editor

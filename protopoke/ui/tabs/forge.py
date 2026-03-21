@@ -92,8 +92,7 @@ class ForgeTab(Widget):
     ForgeTab .frame-controls Button {
         margin-right: 1;
     }
-    ForgeTab #btn-frame-up,
-    ForgeTab #btn-frame-down {
+    ForgeTab .btn-tiny {
         min-width: 5;
         width: 5;
     }
@@ -178,12 +177,12 @@ class ForgeTab(Widget):
                     yield Static("  Frames", classes="pane-header")
                     yield DataTable(id="frames-table", cursor_type="row")
                     with Horizontal(classes="frame-controls"):
-                        yield Button("↑",  id="btn-frame-up",   flat=True)
-                        yield Button("↓",  id="btn-frame-down", flat=True)
-                        yield Button("+ Add",    id="btn-frame-add",    variant="success", flat=True)
-                        yield Button("✖ Remove", id="btn-frame-remove", variant="error",   flat=True)
-                        yield Button("✎ Edit",   id="btn-frame-edit",   variant="primary", flat=True)
-                        yield Button("⧉ Copy to", id="btn-frame-copy",   flat=True)
+                        yield Button("↑", id="btn-frame-up", classes="btn-tiny", flat=True)
+                        yield Button("↓", id="btn-frame-down", classes="btn-tiny", flat=True)
+                        yield Button("+",     id="btn-frame-add", classes="btn-tiny", variant="success", flat=True)
+                        yield Button("✖", id="btn-frame-remove", classes="btn-tiny", variant="error",   flat=True)
+                        yield Button("✎",   id="btn-frame-edit", classes="btn-tiny",  variant="primary", flat=True)
+                        yield Button("⧉", id="btn-frame-copy", classes="btn-tiny",  flat=True)
                 with Vertical(id="frame-editor-pane"):
                     with Horizontal(classes="pane-header"):
                         yield Static(
