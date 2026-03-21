@@ -5,7 +5,7 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.screen import ModalScreen
 from textual.widgets import Button, Static
-from textual.containers import Vertical, Horizontal
+from textual.containers import Vertical, VerticalScroll, Horizontal
 
 
 _HELP_TEXT = """\
@@ -81,6 +81,10 @@ class FormatHelpModal(ModalScreen[None]):
         text-style: bold;
         margin-bottom: 1;
     }
+    FormatHelpModal #help-scroll {
+        height: 1fr;
+        max-height: 100%;
+    }
     FormatHelpModal #help-body {
         margin-bottom: 1;
     }
@@ -94,7 +98,8 @@ class FormatHelpModal(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static("Frame Editor Format Help", classes="modal-title")
-            yield Static(_HELP_TEXT, id="help-body", markup=False)
+            with VerticalScroll(id="help-scroll"):
+                yield Static(_HELP_TEXT, id="help-body", markup=False)
             with Horizontal(classes="buttons"):
                 yield Button("Close", variant="primary", id="btn-close")
 
