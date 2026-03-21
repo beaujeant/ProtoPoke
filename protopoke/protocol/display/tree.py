@@ -94,7 +94,7 @@ def render_field_tree(
         lines.append(_field_row(err_line[:inner_w], inner_w, color=False, warn=True))
 
     for pf in msg.fields:
-        lines.extend(_render_field(pf, inner_w, indent=0, color=color, is_last=True))
+        lines.extend(_render_field(pf, inner_w, indent=0, color=color))
 
     lines.append(bot)
     return "\n".join(lines) + "\n"
@@ -109,7 +109,6 @@ def _render_field(
     inner_w: int,
     indent:  int,
     color:   bool,
-    is_last: bool,
     prefix:  str = "",
 ) -> list[str]:
     """Render one field and its children recursively."""
@@ -142,7 +141,6 @@ def _render_field(
                 child, inner_w,
                 indent=child_indent,
                 color=color,
-                is_last=child_is_last,
                 prefix=child_prefix,
             ))
 

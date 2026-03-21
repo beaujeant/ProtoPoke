@@ -43,6 +43,12 @@ class _SessionClosed(Message):
         self.session_id = session_id
 
 
+class _SessionUpdated(Message):
+    def __init__(self, session_id: str) -> None:
+        super().__init__()
+        self.session_id = session_id
+
+
 class _FrameCaptured(Message):
     def __init__(self, session_id: str, frame_id: str) -> None:
         super().__init__()
@@ -82,6 +88,7 @@ class ProtoPoke(App):
         F3 → Tamper tab
         F4 → Forge tab
         F5 → Fuzzer tab
+        F6 → Logs tab
         ctrl+n → New project
         ctrl+o → Open project
         ctrl+s → Save project
@@ -176,7 +183,7 @@ class ProtoPoke(App):
             self.post_message(_SessionClosed(event.session.id))
 
         async def on_session_updated(event: SessionUpdatedEvent) -> None:
-            self.post_message(_SessionClosed(event.session.id))
+            self.post_message(_SessionUpdated(event.session.id))
 
         async def on_frame_captured(event: FrameCapturedEvent) -> None:
             self.post_message(_FrameCaptured(event.session.id, event.frame.id))
@@ -214,6 +221,11 @@ class ProtoPoke(App):
             self.query_one("#traffic-tab", TrafficTab).update_session(session)
             self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
 
+    def on__session_updated(self, msg: _SessionUpdated) -> None:
+        session = self.api.get_session(msg.session_id)
+        if session:
+            self.query_one("#traffic-tab", TrafficTab).update_session(session)
+
     def on__frame_captured(self, msg: _FrameCaptured) -> None:
         session = self.api.get_session(msg.session_id)
         if session:
@@ -234,7 +246,13 @@ class ProtoPoke(App):
     # ------------------------------------------------------------------
 
     async def _poll_intercept_queue(self) -> None:
-        """Drain any newly queued intercepted units and post them to the UI."""
+        """
+        Forward any pending intercepted units from the tamper queue to the UI.
+
+        Called on a 200 ms timer.  Compares the controller's pending list against
+        the units already displayed in the Tamper tab and adds any that are new.
+        This avoids duplicates without requiring a dedicated asyncio task.
+        """
         for unit in self.api.list_intercepted():
             tamper_tab = self.query_one("#tamper-tab", TamperTab)
             if unit.id not in tamper_tab._units:

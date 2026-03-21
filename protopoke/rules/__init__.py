@@ -9,7 +9,3 @@ from .rule import (
     pattern_to_display,
 )
 from .engine import RulesEngine, InterceptFilter
-
-# Backward-compatibility aliases
-TamperRule = InterceptRule
-TamperFilter = InterceptFilter

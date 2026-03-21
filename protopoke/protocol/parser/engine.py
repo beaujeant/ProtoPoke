@@ -208,9 +208,9 @@ class DefinitionBasedEncoder(ProtocolEncoder):
 
         # Two-pass strategy:
         #   Pass 1: determine final values for all fields (apply edits)
-        #   Pass 2: compute length fields that reference variable-length fields
-        #           (auto-recompute when edited fields changed size)
-        #   Pass 3: emit bytes
+        #   Pass 2: encode each field in order, auto-recomputing any length fields
+        #           that reference variable-length sibling fields (so length headers
+        #           stay correct even when an edited field changed size)
 
         # Build a value map: field_name → final value
         field_by_name = {f.name: f for f in message.fields}

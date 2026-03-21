@@ -1052,7 +1052,7 @@ class ForgeTab(Widget):
             tls=tls,
             source_session_id=source_session_id,
         )
-        hex_str = " ".join(raw_bytes.hex()[i:i+2] for i in range(0, len(raw_bytes.hex()), 2))
+        hex_str = " ".join(f"{b:02x}" for b in raw_bytes)
         pb.frames.append(PlaybookFrame.create(
             label=label,
             raw_hex=hex_str,
@@ -1078,7 +1078,7 @@ class ForgeTab(Widget):
             source_session_id=source_session_id,
         )
         for raw_bytes, frame_label, direction in frames_data:
-            hex_str = " ".join(raw_bytes.hex()[i:i+2] for i in range(0, len(raw_bytes.hex()), 2))
+            hex_str = " ".join(f"{b:02x}" for b in raw_bytes)
             pb.frames.append(PlaybookFrame.create(
                 label=frame_label,
                 raw_hex=hex_str,

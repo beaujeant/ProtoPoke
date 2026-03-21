@@ -145,6 +145,10 @@ class TLSHandler:
 
         Call this after the client connection is established (the handshake
         is complete by the time asyncio invokes the connection callback).
+
+        The ``TypeError`` guard handles the edge case where asyncio returns a
+        non-hashable ssl_object type in some Python/OpenSSL combinations,
+        which would cause the dict lookup to raise rather than returning None.
         """
         if ssl_object is None:
             return None

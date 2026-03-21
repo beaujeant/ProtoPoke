@@ -69,6 +69,18 @@ class MessageMatcher:
         frame:          Frame,
         sequence_index: int,
     ) -> bool:
+        """
+        Return True if *frame* matches *msg_def*'s match rule.
+
+        Matching order:
+          1. Optional direction filter on the message definition (BOTH/C2S/S2C).
+          2. The rule type:
+             - MAGIC:    check that ``frame.raw_bytes[offset:offset+n] == value``
+             - SEQUENCE: check that ``sequence_index == rule.index`` (and the
+                         rule's own direction filter, which may differ from the
+                         message-level filter)
+             - ALWAYS:   unconditionally matches (useful as a catch-all/fallback)
+        """
         # First check the optional direction filter on the message definition
         if not _direction_matches(msg_def.direction, frame.direction):
             return False

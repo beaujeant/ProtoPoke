@@ -93,6 +93,20 @@ class DirectionalRelay:
         read_buffer_size:     int = 4096,
         rules_engine:         "Optional[RulesEngine]" = None,
     ) -> None:
+        """
+        Args:
+            session:           The owning session (used to append captured frames).
+            direction:         Direction this relay handles (client→server or
+                               server→client).
+            source_reader:     Bytes are read from here.
+            dest_writer:       Bytes (possibly modified) are written here.
+            framer:            Splits the byte stream into logical frames.
+            tamper_controller: May block at await while an operator inspects the frame.
+            event_bus:         Used to publish FrameCapturedEvent and
+                               InterceptCompletedEvent.
+            read_buffer_size:  Bytes per asyncio read() call.
+            rules_engine:      Replace rules applied before tampering (None = no rules).
+        """
         self._session              = session
         self._direction            = direction
         self._source_reader        = source_reader
@@ -292,6 +306,26 @@ class BidirectionalRelay:
         rules_engine:         "Optional[RulesEngine]" = None,
         on_first_disconnect:  "Optional[Callable[[Direction], Awaitable[None]]]" = None,
     ) -> None:
+        """
+        Args:
+            session:             The owning session.
+            client_reader:       Reads bytes coming from the client.
+            client_writer:       Writes bytes going to the client.
+            server_reader:       Reads bytes coming from the upstream server.
+            server_writer:       Writes bytes going to the upstream server.
+            client_framer:       Frames the client→server byte stream.
+            server_framer:       Frames the server→client byte stream.
+            tamper_controller:   Shared intercept controller (may block a
+                                 direction while the operator reviews a frame).
+            event_bus:           Shared event bus.
+            read_buffer_size:    Bytes per asyncio read() call.
+            rules_engine:        Replace rules applied before tampering.
+            on_first_disconnect: Async callback fired when the first side closes
+                                 its connection (before the other side closes).
+                                 Receives the Direction of the side that closed.
+                                 Used by the engine to transition the session to
+                                 ONLY_SERVER or ONLY_CLIENT state.
+        """
         self._session              = session
         self._client_writer        = client_writer
         self._server_writer        = server_writer
