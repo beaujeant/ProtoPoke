@@ -129,18 +129,35 @@ class ProxyEngine:
         # surface before we bind the listening socket.
         self.tls_handler.setup()
 
-        self._server = await asyncio.start_server(
-            self._handle_client,
-            host=self.config.listen_host,
-            port=self.config.listen_port,
-            ssl=self.tls_handler.get_listen_ssl_context(),
-        )
+        try:
+            self._server = await asyncio.start_server(
+                self._handle_client,
+                host=self.config.listen_host,
+                port=self.config.listen_port,
+                ssl=self.tls_handler.get_listen_ssl_context(),
+            )
+        except OSError as exc:
+            logger.error(
+                "Forwarder '%s' failed to bind %s:%d: %s",
+                self.forwarder_name,
+                self.config.listen_host,
+                self.config.listen_port,
+                exc,
+            )
+            raise
         addrs = [str(s.getsockname()) for s in self._server.sockets]
+        tls_info = ""
+        if self.tls_handler.get_listen_ssl_context():
+            tls_info = " [TLS listen]"
+        if self.tls_handler.get_upstream_ssl_context():
+            tls_info += " [TLS upstream]"
         logger.info(
-            "Proxy listening on %s → %s:%d",
+            "Forwarder '%s' listening on %s → %s:%d%s",
+            self.forwarder_name,
             addrs,
             self.config.upstream_host,
             self.config.upstream_port,
+            tls_info,
         )
 
     async def serve_forever(self) -> None:
@@ -160,7 +177,10 @@ class ProxyEngine:
         """
         if self._server is not None:
             self._server.close()
-            logger.info("Proxy server stopped accepting connections")
+            logger.info(
+                "Forwarder '%s' stopped accepting connections",
+                self.forwarder_name,
+            )
 
         # Cancel all active sessions BEFORE calling wait_closed().
         # wait_closed() blocks until every open connection is gone — but those
@@ -199,7 +219,10 @@ class ProxyEngine:
         """
         peer = client_writer.get_extra_info("peername") or ("unknown", 0)
         client_host, client_port = peer[0], peer[1]
-        logger.info("New client: %s:%d", client_host, client_port)
+        logger.info(
+            "Client connected: %s:%d → forwarder '%s'",
+            client_host, client_port, self.forwarder_name,
+        )
 
         # Enforce session limit if configured
         if self.config.max_sessions > 0:
@@ -272,6 +295,11 @@ class ProxyEngine:
             return
 
         # Both sides connected
+        logger.info(
+            "Connected to upstream %s:%d for session %s",
+            self.config.upstream_host, self.config.upstream_port,
+            session.id[:8],
+        )
         self.session_registry.mark_active(session.id)
         self._session_server_writers[session.id] = server_writer
         self._session_client_writers[session.id] = client_writer
@@ -353,16 +381,21 @@ class ProxyEngine:
         try:
             await relay.run()
         except asyncio.CancelledError:
-            logger.debug("Session %s cancelled", session.id)
+            logger.debug("Session %s cancelled", session.id[:8])
         except Exception as exc:
-            logger.error("Session %s unhandled error: %s", session.id, exc, exc_info=True)
+            logger.error("Session %s unhandled error: %s", session.id[:8], exc, exc_info=True)
         finally:
             self._session_server_writers.pop(session.id, None)
             self._session_client_writers.pop(session.id, None)
             self._session_relays.pop(session.id, None)
             self.session_registry.mark_closed(session.id)
             await self.event_bus.publish(SessionClosedEvent(session=session.info))
-            logger.info("Session %s done", session.id)
+            logger.info(
+                "Session %s closed (client %s:%d ↔ server %s:%d)",
+                session.id[:8],
+                session.info.client_host, session.info.client_port,
+                session.info.server_host, session.info.server_port,
+            )
 
     # ------------------------------------------------------------------
     # Hot-swap framers

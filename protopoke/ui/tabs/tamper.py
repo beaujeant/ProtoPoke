@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import DataTable, TextArea, Button, Label, Static, Switch
@@ -13,6 +15,8 @@ from ...rules.rule import InterceptRule, ReplaceRule, RuleAction
 from ..widgets.rule_table import RuleTable
 from ..modals.add_rule import AddInterceptRuleModal, AddReplaceRuleModal
 from ..utils.frame_codec import bytes_to_str, str_to_bytes, hex_pairs_to_str, str_to_hex_pairs
+
+logger = logging.getLogger(__name__)
 
 
 class TamperTab(Widget):
@@ -405,13 +409,13 @@ class TamperTab(Widget):
         """Reset the cached script module for a script-type replace rule."""
         rule = self.app.api.rules_engine.get_rule(rule_id)
         if rule is None:
-            self.notify("Rule not found.", severity="warning")
+            logger.warning("Rule not found")
             return
         if rule.rule_type != "script":
-            self.notify("Reset Script only applies to script-type rules.", severity="warning")
+            logger.warning("Reset Script only applies to script-type rules")
             return
         rule.reset_script_state()
-        self.notify(f"Script state reset for rule '{rule.label}'.")
+        logger.info("Script state reset for rule '%s'", rule.label)
 
     # ------------------------------------------------------------------
     # Direction button state
@@ -440,7 +444,7 @@ class TamperTab(Widget):
         if event.switch.id == "tamper-toggle":
             self.app.api.tamper_enabled = event.value
             state = "enabled" if event.value else "disabled"
-            self.notify(f"Intercept {state}.")
+            logger.info("Intercept %s", state)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.data_table.id != "intercept-queue-table":
@@ -481,13 +485,13 @@ class TamperTab(Widget):
             try:
                 new_text = hex_pairs_to_str(current_text)
             except ValueError as exc:
-                self.notify(f"Cannot switch to STR: {exc}", severity="error")
+                logger.error("Cannot switch to STR: %s", exc)
                 return
         else:
             try:
                 new_text = str_to_hex_pairs(current_text)
             except ValueError as exc:
-                self.notify(f"Cannot switch to HEX: {exc}", severity="error")
+                logger.error("Cannot switch to HEX: %s", exc)
                 return
 
         self._editor_mode = mode
@@ -533,40 +537,40 @@ class TamperTab(Widget):
             count = self.app.api.forward_all()
             for uid in list(self._units):
                 self.remove_unit(uid)
-            self.notify(f"Forwarded {count} frames.")
+            logger.info("Forwarded %d frames", count)
 
     def _do_forward(self) -> None:
         uid = self._selected_unit_id
         if not uid:
-            self.notify("Select a frame to forward.", severity="warning")
+            logger.warning("Select a frame to forward")
             return
         if self.app.api.forward(uid):
             self.remove_unit(uid)
         else:
-            self.notify("Forward failed — unit may have already been processed.", severity="error")
+            logger.error("Forward failed — unit may have already been processed")
 
     def _do_drop(self) -> None:
         uid = self._selected_unit_id
         if not uid:
-            self.notify("Select a frame to drop.", severity="warning")
+            logger.warning("Select a frame to drop")
             return
         if self.app.api.drop(uid):
             self.remove_unit(uid)
         else:
-            self.notify("Drop failed — unit may have already been processed.", severity="error")
+            logger.error("Drop failed — unit may have already been processed")
 
     def _do_modify_and_forward(self) -> None:
         uid = self._selected_unit_id
         if not uid:
-            self.notify("Select a frame to modify.", severity="warning")
+            logger.warning("Select a frame to modify")
             return
         try:
             new_data = self._read_bytes_from_editor()
         except ValueError as exc:
             mode = "STR" if self._editor_mode == "str" else "hex"
-            self.notify(f"Invalid {mode}: {exc}", severity="error")
+            logger.error("Invalid %s: %s", mode, exc)
             return
         if self.app.api.modify_and_forward(uid, new_data):
             self.remove_unit(uid)
         else:
-            self.notify("Modify failed — unit may have already been processed.", severity="error")
+            logger.error("Modify failed — unit may have already been processed")

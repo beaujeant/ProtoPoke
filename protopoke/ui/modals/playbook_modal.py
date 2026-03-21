@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from textual.app import ComposeResult
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Switch
 from textual.containers import Horizontal, Vertical
+
+logger = logging.getLogger(__name__)
 
 # Sentinel value for the "Custom host:port" option in the session selector.
 _CUSTOM = "custom"
@@ -214,13 +217,13 @@ class PlaybookModal(ModalScreen[PlaybookResult | None]):
                     break
         else:
             if not host:
-                self.notify("Host is required for custom connections.", severity="error")
+                logger.error("Host is required for custom connections")
                 return
 
         try:
             port = int(port_str) if port_str else self._port
         except ValueError:
-            self.notify("Port must be a number.", severity="error")
+            logger.error("Port must be a number")
             return
 
         try:

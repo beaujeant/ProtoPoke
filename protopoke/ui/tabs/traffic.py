@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.widget import Widget
@@ -13,6 +15,8 @@ from rich.text import Text
 from ...models import Frame, Direction
 from ...core.session import Session
 from ..widgets.parsed_view import ParsedView
+
+logger = logging.getLogger(__name__)
 
 
 class _FramesTable(DataTable):
@@ -438,19 +442,19 @@ class TrafficTab(Widget):
             if self._current_session_id:
                 self.app.terminate_session(self._current_session_id)
             else:
-                self.notify("Select a session first.", severity="warning")
+                logger.warning("Select a session first")
 
         elif event.button.id == "btn-delete-session":
             event.stop()
             if self._current_session_id:
                 self.app.delete_session(self._current_session_id)
             else:
-                self.notify("Select a session first.", severity="warning")
+                logger.warning("Select a session first")
 
         elif event.button.id == "btn-to-forge":
             event.stop()
             if not self._current_session_id:
-                self.notify("Select a frame first.", severity="warning")
+                logger.warning("Select a frame first")
             elif len(self._selected_frame_ids) > 1:
                 self.app.send_frames_to_forge(
                     self._current_session_id, list(self._selected_frame_ids)
@@ -460,4 +464,4 @@ class TrafficTab(Widget):
                     self._current_session_id, self._current_frame_id
                 )
             else:
-                self.notify("Select a frame first.", severity="warning")
+                logger.warning("Select a frame first")
