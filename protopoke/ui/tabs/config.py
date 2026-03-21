@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, Label, Select, Static
@@ -10,6 +12,8 @@ from textual.message import Message
 
 from ...config import ForwarderConfig, ProxyConfig
 from ..modals.forwarder_edit import ForwarderEditModal
+
+logger = logging.getLogger(__name__)
 
 
 _LOG_LEVEL_OPTIONS = [
@@ -105,8 +109,10 @@ class ConfigTab(Widget):
     ) -> None:
         super().__init__(name=name, id=id, classes=classes)
         self._forwarders: list[ForwarderConfig] = list(forwarders)
-        # Track running state per forwarder name → address string
+        # Track running state per forwarder name → listen address string
         self._running_fwds: dict[str, str] = {}
+        # Track last upstream error per forwarder name (empty string = no error)
+        self._fwd_errors: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -147,6 +153,9 @@ class ConfigTab(Widget):
         if fwd.name in self._running_fwds:
             addr = self._running_fwds[fwd.name]
             status = f"listening on {addr}" if addr else "running"
+            err = self._fwd_errors.get(fwd.name, "")
+            if err:
+                status += f"  ⚠ {err}"
         return (
             "On" if fwd.enabled else "Off",
             fwd.name,
@@ -232,7 +241,7 @@ class ConfigTab(Widget):
         if fwd is None:
             return
         if fwd.name in self._running_fwds:
-            self.app.notify("Stop the forwarder before editing.", severity="warning")
+            logger.warning("Stop the forwarder '%s' before editing", fwd.name)
             return
         # Remember the old name so we can find the entry after the modal returns
         self._edit_old_name = fwd.name
@@ -283,6 +292,9 @@ class ConfigTab(Widget):
                 # Apply to all forwarders
                 for fwd in self._forwarders:
                     fwd.config.log_level = level
+                # Apply immediately to the root logger
+                logging.getLogger().setLevel(level)
+                logger.info("Log level changed to %s", level)
 
     # ------------------------------------------------------------------
     # Public API (called by app.py)
@@ -302,6 +314,18 @@ class ConfigTab(Widget):
             self._running_fwds[name] = address
         else:
             self._running_fwds.pop(name, None)
+            self._fwd_errors.pop(name, None)
+        try:
+            self._refresh_table()
+        except Exception:
+            pass
+
+    def notify_forwarder_error(self, name: str, error: str) -> None:
+        """Set (or clear) the upstream error annotation on a running forwarder."""
+        if error:
+            self._fwd_errors[name] = error
+        else:
+            self._fwd_errors.pop(name, None)
         try:
             self._refresh_table()
         except Exception:

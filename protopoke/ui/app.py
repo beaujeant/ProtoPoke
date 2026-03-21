@@ -14,7 +14,7 @@ from textual.widgets import Footer, Header, Switch, TabbedContent, TabPane
 from ..api import ProxyAPI
 from ..config import ForwarderConfig
 from ..models import Direction
-from ..events.bus import FrameCapturedEvent, SessionClosedEvent, SessionOpenedEvent, SessionUpdatedEvent
+from ..events.bus import FrameCapturedEvent, SessionClosedEvent, SessionOpenedEvent, SessionUpdatedEvent, UpstreamConnectionFailedEvent
 from ..project.manager import ProjectManager, ProjectState
 from .modals.project import NewProjectModal, OpenProjectModal, SaveAsModal
 from .tabs.config import ConfigTab
@@ -54,6 +54,18 @@ class _TamperedArrived(Message):
     def __init__(self, unit_id: str) -> None:
         super().__init__()
         self.unit_id = unit_id
+
+
+class _UpstreamConnectFailed(Message):
+    def __init__(self, forwarder_name: str, client_host: str, client_port: int,
+                 upstream_host: str, upstream_port: int, error: str) -> None:
+        super().__init__()
+        self.forwarder_name = forwarder_name
+        self.client_host    = client_host
+        self.client_port    = client_port
+        self.upstream_host  = upstream_host
+        self.upstream_port  = upstream_port
+        self.error          = error
 
 
 # ---------------------------------------------------------------------------
@@ -169,16 +181,32 @@ class ProtoPoke(App):
         async def on_frame_captured(event: FrameCapturedEvent) -> None:
             self.post_message(_FrameCaptured(event.session.id, event.frame.id))
 
+        async def on_upstream_connection_failed(event: UpstreamConnectionFailedEvent) -> None:
+            self.post_message(_UpstreamConnectFailed(
+                forwarder_name=event.forwarder_name,
+                client_host=event.client_host,
+                client_port=event.client_port,
+                upstream_host=event.upstream_host,
+                upstream_port=event.upstream_port,
+                error=event.error,
+            ))
+
         self.api.on_session_opened(on_session_opened)
         self.api.on_session_closed(on_session_closed)
         self.api.on_session_updated(on_session_updated)
         self.api.on_frame_captured(on_frame_captured)
+        self.api.on_upstream_connection_failed(on_upstream_connection_failed)
 
     def on__session_opened(self, msg: _SessionOpened) -> None:
         session = self.api.get_session(msg.session_id)
         if session:
             self.query_one("#traffic-tab", TrafficTab).add_session(session)
             self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
+            # Clear any upstream error banner — the forwarder can reach the server again
+            if session.info.forwarder_name:
+                self.query_one("#config-tab", ConfigTab).notify_forwarder_error(
+                    session.info.forwarder_name, ""
+                )
 
     def on__session_closed(self, msg: _SessionClosed) -> None:
         session = self.api.get_session(msg.session_id)
@@ -194,6 +222,12 @@ class ProtoPoke(App):
                 if frame.id == msg.frame_id:
                     self.query_one("#traffic-tab", TrafficTab).add_frame_to_current(frame)
                     break
+
+    def on__upstream_connect_failed(self, msg: _UpstreamConnectFailed) -> None:
+        error_label = f"error: {msg.error}"
+        self.query_one("#config-tab", ConfigTab).notify_forwarder_error(
+            msg.forwarder_name, error_label
+        )
 
     # ------------------------------------------------------------------
     # Tamper queue polling
@@ -618,7 +652,7 @@ def main() -> None:
         mcp_main(mcp_argv)
         return
 
-    logging.basicConfig(level=logging.WARNING)
+    logging.basicConfig(level=logging.INFO)
     app = ProtoPoke()
     app.run()
 
