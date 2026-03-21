@@ -64,8 +64,12 @@ class ConfigTab(Widget):
     # -- CSS ----------------------------------------------------------------
 
     DEFAULT_CSS = """
-    ConfigTab {
-        padding: 1 2;
+    ConfigTab .pane-header {
+        background: $primary-darken-2;
+        color: $text;
+        padding: 0 1;
+        height: 1;
+        text-style: bold;
     }
     ConfigTab #cfg-table {
         height: 1fr;
@@ -73,7 +77,7 @@ class ConfigTab(Widget):
     }
     ConfigTab .cfg-buttons {
         height: 3;
-        margin-top: 1;
+        margin: 1;
         align: left middle;
     }
     ConfigTab .cfg-buttons Button {
@@ -106,6 +110,7 @@ class ConfigTab(Widget):
 
     def compose(self) -> ComposeResult:
         with Vertical():
+            yield Static("  Forwarders", classes="pane-header")
             yield DataTable(id="cfg-table", cursor_type="row")
 
             with Horizontal(classes="cfg-buttons"):
