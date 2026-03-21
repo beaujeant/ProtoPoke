@@ -110,7 +110,7 @@ class TamperTab(Widget):
         min-width: 5;
         background: $surface-darken-1;
         color: $text-muted;
-        margin-left: 1;
+        margin-right: 1;
     }
     TamperTab #hex-editor-pane .pane-header Button.mode-active {
         background: $surface;
@@ -172,9 +172,9 @@ class TamperTab(Widget):
                     "  Edit — modify before forwarding",
                     markup=False,
                 )
+                yield Button("?",   id="btn-tamper-help", classes="btn-help",     compact=True)
                 yield Button("HEX", id="btn-tamper-hex", classes="mode-active",   compact=True)
                 yield Button("STR", id="btn-tamper-str", classes="mode-inactive", compact=True)
-                yield Button("?",   id="btn-tamper-help", classes="btn-help",     compact=True)
             yield TextArea(id="hex-editor", language=None)
 
         # Intercept rules

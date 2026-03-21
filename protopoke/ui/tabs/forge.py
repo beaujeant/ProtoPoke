@@ -155,7 +155,7 @@ class ForgeTab(Widget):
         min-width: 5;
         background: $surface-darken-1;
         color: $text-muted;
-        margin-left: 1;
+        margin-right: 1;
     }
     ForgeTab #frame-editor-pane .pane-header Button.mode-active {
         background: $surface;
@@ -279,9 +279,9 @@ class ForgeTab(Widget):
                             "  Frame Editor  ({{VAR}} · {{VAR:uint32be_add(1)}} · {{VAR:xor(ff)}})",
                             markup=False,
                         )
+                        yield Button("?",   id="btn-frame-help", classes="btn-help",     compact=True)
                         yield Button("HEX", id="btn-frame-hex", classes="mode-active",   compact=True)
                         yield Button("STR", id="btn-frame-str", classes="mode-inactive", compact=True)
-                        yield Button("?",   id="btn-frame-help", classes="btn-help",     compact=True)
                     yield TextArea("", id="frame-editor")
 
             with Vertical(id="right-col"):
