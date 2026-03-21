@@ -14,6 +14,7 @@ from ...models import TamperedUnit, Direction
 from ...rules.rule import InterceptRule, ReplaceRule, RuleAction
 from ..widgets.rule_table import RuleTable
 from ..modals.add_rule import AddInterceptRuleModal, AddReplaceRuleModal
+from ..modals.format_help import FormatHelpModal
 from ..utils.frame_codec import bytes_to_str, str_to_bytes, hex_pairs_to_str, str_to_hex_pairs
 
 logger = logging.getLogger(__name__)
@@ -104,6 +105,13 @@ class TamperTab(Widget):
         min-width: 9;
         margin: 0;
     }
+    TamperTab #hex-editor-pane .pane-header Button.btn-help {
+        width: 5;
+        min-width: 5;
+        background: $surface-darken-1;
+        color: $text-muted;
+        margin-left: 1;
+    }
     TamperTab #hex-editor-pane .pane-header Button.mode-active {
         background: $surface;
         color: $text;
@@ -166,6 +174,7 @@ class TamperTab(Widget):
                 )
                 yield Button("HEX", id="btn-tamper-hex", classes="mode-active",   compact=True)
                 yield Button("STR", id="btn-tamper-str", classes="mode-inactive", compact=True)
+                yield Button("?",   id="btn-tamper-help", classes="btn-help",     compact=True)
             yield TextArea(id="hex-editor", language=None)
 
         # Intercept rules
@@ -517,6 +526,10 @@ class TamperTab(Widget):
         if bid == "btn-tamper-str":
             event.stop()
             self._set_editor_mode("str")
+            return
+        if bid == "btn-tamper-help":
+            event.stop()
+            self.app.push_screen(FormatHelpModal())
             return
 
         if bid == "dir-both":

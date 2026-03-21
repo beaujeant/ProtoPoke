@@ -18,6 +18,7 @@ from ...forge.models import Playbook, PlaybookFrame, PlaybookRun, TrafficEntry
 from ..modals.playbook_modal import PlaybookModal, PlaybookResult
 from ..modals.frame_edit import FrameEditModal
 from ..modals.copy_frame_modal import CopyFrameModal
+from ..modals.format_help import FormatHelpModal
 from ..utils.frame_codec import (
     hex_template_to_str, str_to_hex_template, hex_pairs_to_str,
 )
@@ -149,6 +150,13 @@ class ForgeTab(Widget):
         min-width: 9;
         margin: 0;
     }
+    ForgeTab #frame-editor-pane .pane-header Button.btn-help {
+        width: 5;
+        min-width: 5;
+        background: $surface-darken-1;
+        color: $text-muted;
+        margin-left: 1;
+    }
     ForgeTab #frame-editor-pane .pane-header Button.mode-active {
         background: $surface;
         color: $text;
@@ -273,6 +281,7 @@ class ForgeTab(Widget):
                         )
                         yield Button("HEX", id="btn-frame-hex", classes="mode-active",   compact=True)
                         yield Button("STR", id="btn-frame-str", classes="mode-inactive", compact=True)
+                        yield Button("?",   id="btn-frame-help", classes="btn-help",     compact=True)
                     yield TextArea("", id="frame-editor")
 
             with Vertical(id="right-col"):
@@ -640,6 +649,7 @@ class ForgeTab(Widget):
 
     def _append_traffic_row(self, entry: TrafficEntry) -> None:
         tt = self.query_one("#traffic-table", DataTable)
+        was_empty = len(tt.rows) == 0
         direction = "→" if entry.direction == "sent" else "←"
         t = _time.strftime("%H:%M:%S", _time.localtime(entry.timestamp))
         # Count existing rows to get sequential number
@@ -656,6 +666,10 @@ class ForgeTab(Widget):
             _preview,
             key=entry.id,
         )
+        # Auto-select the first row so the Frame View populates immediately
+        if was_empty:
+            tt.move_cursor(row=0)
+            self._show_traffic_entry(entry.id)
 
     def _populate_traffic_from_run(self, run: PlaybookRun) -> None:
         self._clear_traffic()
@@ -1136,6 +1150,10 @@ class ForgeTab(Widget):
         elif bid in ("btn-frame-hex", "btn-frame-str"):
             event.stop()
             self._set_frame_editor_mode("hex" if bid == "btn-frame-hex" else "str")
+
+        elif bid == "btn-frame-help":
+            event.stop()
+            self.app.push_screen(FormatHelpModal())
 
         elif bid in ("btn-view-hex", "btn-view-str"):
             event.stop()
