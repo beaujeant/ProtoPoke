@@ -109,6 +109,15 @@ class ForgeTab(Widget):
     }
     ForgeTab #frame-editor-pane .pane-header Button {
         width: 5;
+        margin: 0;
+    }
+    ForgeTab #frame-editor-pane .pane-header Button.mode-active {
+        background: $primary;
+        color: $text;
+    }
+    ForgeTab #frame-editor-pane .pane-header Button.mode-inactive {
+        background: $surface;
+        color: $text-muted;
     }
     ForgeTab #frame-editor {
         height: 1fr;
@@ -189,7 +198,8 @@ class ForgeTab(Widget):
                             "  Frame Editor  ({{VAR}} · {{VAR:uint32be_add(1)}} · {{VAR:xor(ff)}})",
                             markup=False,
                         )
-                        yield Button("HEX", id="btn-frame-mode", compact=True)
+                        yield Button("HEX", id="btn-frame-hex", classes="mode-active",   compact=True)
+                        yield Button("STR", id="btn-frame-str", classes="mode-inactive", compact=True)
                     yield TextArea("", id="frame-editor")
 
             with Vertical(id="right-col"):
@@ -405,26 +415,35 @@ class ForgeTab(Widget):
             frame.raw_hex = raw_text
         self._update_frame_list_row(self._selected_frame_idx)
 
-    def _toggle_frame_editor_mode(self) -> None:
+    def _set_frame_editor_mode(self, mode: str) -> None:
+        """Switch the frame editor to the given *mode* ('hex' or 'str')."""
+        if mode == self._frame_editor_mode:
+            return
         editor = self.query_one("#frame-editor", TextArea)
         current_text = editor.text
-        if self._frame_editor_mode == "hex":
+        if mode == "str":
             try:
                 new_text = hex_template_to_str(current_text)
             except ValueError as exc:
                 self.notify(f"Cannot switch to STR: {exc}", severity="error")
                 return
-            self._frame_editor_mode = "str"
-            self.query_one("#btn-frame-mode", Button).label = "STR"
         else:
             try:
                 new_text = str_to_hex_template(current_text)
             except ValueError as exc:
                 self.notify(f"Cannot switch to HEX: {exc}", severity="error")
                 return
-            self._frame_editor_mode = "hex"
-            self.query_one("#btn-frame-mode", Button).label = "HEX"
+        self._frame_editor_mode = mode
         editor.load_text(new_text)
+        self._update_frame_mode_buttons()
+
+    def _update_frame_mode_buttons(self) -> None:
+        btn_hex = self.query_one("#btn-frame-hex", Button)
+        btn_str = self.query_one("#btn-frame-str", Button)
+        for btn, is_active in [(btn_hex, self._frame_editor_mode == "hex"),
+                               (btn_str, self._frame_editor_mode == "str")]:
+            btn.set_class(is_active,  "mode-active")
+            btn.set_class(not is_active, "mode-inactive")
 
     # ------------------------------------------------------------------
     # Traffic table
@@ -926,9 +945,9 @@ class ForgeTab(Widget):
             event.stop()
             self._open_copy_frame_modal()
 
-        elif bid == "btn-frame-mode":
+        elif bid in ("btn-frame-hex", "btn-frame-str"):
             event.stop()
-            self._toggle_frame_editor_mode()
+            self._set_frame_editor_mode("hex" if bid == "btn-frame-hex" else "str")
 
         elif bid == "btn-run":
             event.stop()
