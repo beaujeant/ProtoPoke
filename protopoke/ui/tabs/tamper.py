@@ -27,13 +27,13 @@ class TamperTab(Widget):
       ┌──────────────────────────────────────────────────┐
       │ Top bar: Enable toggle, direction filter, count  │
       ├──────────────────────────────────────────────────┤
-      │ Queue (DataTable of pending intercepted units)│  ~30%
+      │ Queue (DataTable of pending intercepted units)   │  ~30%
       ├──────────────────────────────────────────────────┤
       │ [Forward] [Drop] [Modify+Forward] [Forward All]  │
       ├──────────────────────────────────────────────────┤
       │ Hex editor (editable TextArea)                   │  ~20%
       ├──────────────────────────────────────────────────┤
-      │ Intercept Rules header + RuleTable            │  ~25%
+      │ Intercept Rules header + RuleTable               │  ~25%
       ├──────────────────────────────────────────────────┤
       │ Global Replace Rules header + RuleTable          │  ~25%
       └──────────────────────────────────────────────────┘
@@ -100,7 +100,8 @@ class TamperTab(Widget):
         width: 1fr;
     }
     TamperTab #hex-editor-pane .pane-header Button {
-        width: 5;
+        width: 9;
+        min-width: 9;
         margin: 0;
     }
     TamperTab #hex-editor-pane .pane-header Button.mode-active {

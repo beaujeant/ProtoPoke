@@ -72,7 +72,7 @@ class ForgeTab(Widget):
       │  Label:[____][→C→S][HEX]    │  TextArea#frame-view      │
       │  TextArea#frame-editor      │                           │
       ├─────────────────────────────┴───────────────────────────┤
-      │ [▶ Run Playbook]  [■ Stop]  [Clear Traffic]   h=3       │
+      │ [▶ Run Playbook]  [■ Stop]  [Clear Traffic]   h=3      │
       ├─────────────────────────────────────────────────────────┤
       │ Playbook History (DataTable)                 h=20%      │
       │  #  Name  Time  Frames  Sent  Rcvd                      │
@@ -145,7 +145,8 @@ class ForgeTab(Widget):
         width: 1fr;
     }
     ForgeTab #frame-editor-pane .pane-header Button {
-        width: 5;
+        width: 9;
+        min-width: 9;
         margin: 0;
     }
     ForgeTab #frame-editor-pane .pane-header Button.mode-active {
@@ -164,7 +165,8 @@ class ForgeTab(Widget):
         width: 1fr;
     }
     ForgeTab #frame-view-pane .pane-header Button {
-        width: 5;
+        width: 9;
+        min-width: 9;
         margin: 0;
     }
     ForgeTab #frame-view-pane .pane-header Button.mode-active {
