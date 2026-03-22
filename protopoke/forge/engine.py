@@ -420,6 +420,7 @@ class ForgeEngine:
             ssl_ctx = ssl.create_default_context()
             ssl_ctx.check_hostname = False
             ssl_ctx.verify_mode    = ssl.CERT_NONE
+            ssl_ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
 
         try:
             reader, writer = await asyncio.wait_for(
@@ -587,6 +588,7 @@ class ForgeEngine:
             ssl_ctx = ssl.create_default_context()
             ssl_ctx.check_hostname = False
             ssl_ctx.verify_mode    = ssl.CERT_NONE
+            ssl_ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
 
         try:
             reader, writer = await asyncio.wait_for(
