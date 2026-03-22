@@ -126,6 +126,7 @@ class TLSHandler:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
+        ctx.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
         ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
         logger.debug("TLS upstream: certificate verification disabled (reverser mode)")
         return ctx
@@ -225,6 +226,7 @@ class TLSHandler:
     def _ctx_from_files(cert_path: str, key_path: str) -> ssl.SSLContext:
         """Build a server-side SSLContext from PEM files."""
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
         ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
         ctx.load_cert_chain(cert_path, key_path)
         return ctx

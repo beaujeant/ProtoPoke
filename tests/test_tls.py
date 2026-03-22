@@ -38,6 +38,7 @@ async def tls_echo_server_ctx(
     cert_pem: bytes,
     key_pem: bytes,
     host: str = "127.0.0.1",
+    seclevel: int | None = None,
 ):
     """Async context manager: TLS echo server using the supplied cert/key PEM bytes."""
     with (
@@ -50,6 +51,9 @@ async def tls_echo_server_ctx(
 
     try:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        if seclevel is not None:
+            ctx.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
+            ctx.set_ciphers(f"DEFAULT:@SECLEVEL={seclevel}")
         ctx.load_cert_chain(cert_path, key_path)
 
         async def handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
@@ -533,6 +537,69 @@ class TestTLSProxyIntegration:
                     timeout=5.0,
                 )
                 msg = b"manual cert test"
+                writer.write(msg)
+                await writer.drain()
+                data = await asyncio.wait_for(
+                    reader.readexactly(len(msg)), timeout=3.0
+                )
+                assert data == msg
+                writer.close()
+            finally:
+                await engine.stop()
+
+    async def test_tls_upstream_small_key(self, tmp_path):
+        """
+        Proxy connects to a TLS upstream server whose certificate uses a
+        1024-bit RSA key.  This must not fail with UNSUPPORTED_PROTOCOL or
+        EE_KEY_TOO_SMALL — ProtoPoke is a reverse-engineering tool and should
+        accept any key size.
+        """
+        from cryptography.hazmat.primitives.asymmetric import rsa as _rsa
+        from cryptography.hazmat.primitives import hashes as _hashes, serialization as _ser
+        from cryptography import x509 as _x509
+        from cryptography.x509.oid import NameOID as _OID
+        import datetime as _dt
+        import ipaddress as _ip
+
+        small_key = _rsa.generate_private_key(public_exponent=65537, key_size=1024)
+        now = _dt.datetime.now(_dt.timezone.utc)
+        cert = (
+            _x509.CertificateBuilder()
+            .subject_name(_x509.Name([_x509.NameAttribute(_OID.COMMON_NAME, "127.0.0.1")]))
+            .issuer_name(_x509.Name([_x509.NameAttribute(_OID.COMMON_NAME, "127.0.0.1")]))
+            .public_key(small_key.public_key())
+            .serial_number(_x509.random_serial_number())
+            .not_valid_before(now)
+            .not_valid_after(now + _dt.timedelta(days=1))
+            .add_extension(
+                _x509.SubjectAlternativeName([_x509.IPAddress(_ip.ip_address("127.0.0.1"))]),
+                critical=False,
+            )
+            .sign(small_key, _hashes.SHA256())
+        )
+        cert_pem = cert.public_bytes(_ser.Encoding.PEM)
+        key_pem = small_key.private_bytes(
+            _ser.Encoding.PEM, _ser.PrivateFormat.TraditionalOpenSSL, _ser.NoEncryption()
+        )
+
+        async with tls_echo_server_ctx(cert_pem, key_pem, seclevel=0) as (up_host, up_port):
+            listen_port = free_port()
+            cfg = ProxyConfig(
+                listen_host="127.0.0.1",
+                listen_port=listen_port,
+                upstream_host=up_host,
+                upstream_port=up_port,
+                tls_upstream=True,
+            )
+            engine = ProxyEngine(cfg)
+            await engine.start()
+
+            try:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection("127.0.0.1", listen_port),
+                    timeout=5.0,
+                )
+                msg = b"small key test"
                 writer.write(msg)
                 await writer.drain()
                 data = await asyncio.wait_for(

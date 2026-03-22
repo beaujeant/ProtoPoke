@@ -420,6 +420,7 @@ class ForgeEngine:
             ssl_ctx = ssl.create_default_context()
             ssl_ctx.check_hostname = False
             ssl_ctx.verify_mode    = ssl.CERT_NONE
+            ssl_ctx.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
             ssl_ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
 
         try:
@@ -588,6 +589,7 @@ class ForgeEngine:
             ssl_ctx = ssl.create_default_context()
             ssl_ctx.check_hostname = False
             ssl_ctx.verify_mode    = ssl.CERT_NONE
+            ssl_ctx.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
             ssl_ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
 
         try:
