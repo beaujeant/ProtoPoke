@@ -299,9 +299,11 @@ class ProxyAPI:
         for fwd in forwarders:
             if fwd.name in self._engines:
                 # Update the engine's config reference in-place
-                self._engines[fwd.name].config = fwd.config
-                self._engines[fwd.name].forwarder_name = fwd.name
-                new_engines[fwd.name] = self._engines[fwd.name]
+                engine = self._engines[fwd.name]
+                engine.config = fwd.config
+                engine.tls_handler._config = fwd.config
+                engine.forwarder_name = fwd.name
+                new_engines[fwd.name] = engine
             else:
                 new_engines[fwd.name] = ProxyEngine(
                     config=fwd.config,
