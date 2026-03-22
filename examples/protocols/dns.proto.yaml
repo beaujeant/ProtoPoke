@@ -4,7 +4,7 @@
 # big-endian length field. ProtoPoke's framer strips that prefix, so the
 # frames fed to this parser start directly at the 12-byte DNS header.
 #
-# Configure the framer in ProxyConfig:
+# Configure the framer in ForwarderConfig:
 #
 #   framer_name="length_prefix",
 #   framer_kwargs={"prefix_length": 2, "byte_order": "big"},

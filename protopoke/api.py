@@ -1,5 +1,5 @@
 """
-ProxyAPI — the unified control interface.
+ProtoPokeAPI — the unified control interface.
 
 This is the main entry point for all programmatic control of the proxy.
 It wires together all the internal components and exposes a clean facade:
@@ -24,25 +24,26 @@ It wires together all the internal components and exposes a clean facade:
 
 Why a separate API class:
     - The proxy engine, session registry, tamper controller, event bus,
-      and replay engine are all independent components. ProxyAPI composes them.
-    - Tests can drive the proxy via ProxyAPI without touching internals.
-    - A future HTTP API server (e.g. aiohttp/FastAPI) wraps ProxyAPI methods.
-    - A future terminal UI also wraps ProxyAPI — no other layer changes.
+      and replay engine are all independent components. ProtoPokeAPI composes them.
+    - Tests can drive the proxy via ProtoPokeAPI without touching internals.
+    - A future HTTP API server (e.g. aiohttp/FastAPI) wraps ProtoPokeAPI methods.
+    - The terminal UI wraps ProtoPokeAPI — no other layer changes.
     - The tamper controller always uses QueuedTamperController, with
       config.tamper_enabled controlling its initial on/off state. This allows
       toggling tampering at runtime regardless of the startup config value.
 
 Usage example:
 
-    from protopoke.config import ForwarderConfig, ProxyConfig
+    from protopoke.config import ForwarderConfig
 
     forwarders = [
-        ForwarderConfig(name="Default", config=ProxyConfig(
+        ForwarderConfig(
+            name="Default",
             listen_port=8080, upstream_host="10.0.0.1", upstream_port=9090,
             tamper_enabled=True,
-        )),
+        ),
     ]
-    api = ProxyAPI(forwarders)
+    api = ProtoPokeAPI(forwarders)
     await api.start()
 
     # In another task:
@@ -61,7 +62,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from .config import ForwarderConfig, ProxyConfig
+from .config import ForwarderConfig
 from .models import Direction, Frame, TamperedUnit, ParsedMessage
 from .core.proxy import ProxyEngine
 from .core.session import Session, SessionRegistry
@@ -89,7 +90,7 @@ from .fuzzing.mutators.base import FrameMutator
 logger = logging.getLogger(__name__)
 
 
-class ProxyAPI:
+class ProtoPokeAPI:
     """
     High-level control interface for the TCP proxy.
 
@@ -128,7 +129,7 @@ class ProxyAPI:
 
         # Shared tamper controller — enabled if any forwarder has tamper on.
         # The on/off state can be toggled at runtime via api.tamper_enabled.
-        any_tamper = any(f.config.tamper_enabled for f in forwarders) if forwarders else False
+        any_tamper = any(f.tamper_enabled for f in forwarders) if forwarders else False
         self._tamper_controller: QueuedTamperController
         self._tamper_controller = QueuedTamperController(
             tamper_enabled=any_tamper,
@@ -138,7 +139,7 @@ class ProxyAPI:
         # One ProxyEngine per forwarder (not started yet; start() does that).
         self._engines: dict[str, ProxyEngine] = {
             fwd.name: ProxyEngine(
-                config=fwd.config,
+                config=fwd,
                 tamper_controller=self._tamper_controller,
                 event_bus=self.event_bus,
                 session_registry=self.session_registry,
@@ -149,7 +150,7 @@ class ProxyAPI:
         }
 
         # Replay engine — uses the first forwarder's connection settings.
-        _first_cfg = forwarders[0].config if forwarders else ProxyConfig()
+        _first_cfg = forwarders[0] if forwarders else ForwarderConfig()
         self.forge_engine = ForgeEngine(
             session_registry=self.session_registry,
             connect_timeout=_first_cfg.connect_timeout,
@@ -172,12 +173,12 @@ class ProxyAPI:
     # ------------------------------------------------------------------
 
     @property
-    def config(self) -> ProxyConfig:
-        """The first enabled forwarder's ProxyConfig, or a fallback default."""
+    def config(self) -> ForwarderConfig:
+        """The first enabled forwarder's config, or a fallback default."""
         for fwd in self.forwarders:
             if fwd.enabled:
-                return fwd.config
-        return self.forwarders[0].config if self.forwarders else ProxyConfig()
+                return fwd
+        return self.forwarders[0] if self.forwarders else ForwarderConfig()
 
     def _engine_for_session(self, session_id: str) -> "Optional[ProxyEngine]":
         """Return the engine that owns *session_id*, or None."""
@@ -226,7 +227,7 @@ class ProxyAPI:
             if fwd.enabled:
                 await self.start_forwarder(fwd.name)
         logger.info(
-            "ProxyAPI: started %d forwarder(s)",
+            "ProtoPokeAPI: started %d forwarder(s)",
             sum(1 for f in self.forwarders if f.enabled),
         )
 
@@ -244,7 +245,7 @@ class ProxyAPI:
         await self.storage.close()
         if self._serve_event is not None:
             self._serve_event.set()
-        logger.info("ProxyAPI stopped")
+        logger.info("ProtoPokeAPI stopped")
 
     async def start_forwarder(self, name: str) -> None:
         """Start a single forwarder by name (non-blocking)."""
@@ -255,14 +256,14 @@ class ProxyAPI:
         if fwd is None:
             raise ValueError(f"No forwarder named {name!r}")
         # Auto-load protocol definition if configured
-        if fwd.config.protocol_definition_path:
-            self.set_protocol_file(fwd.config.protocol_definition_path)
+        if fwd.protocol_definition_path:
+            self.set_protocol_file(fwd.protocol_definition_path)
         await engine.start()
         logger.info(
             "Forwarder %r started: %s:%d → %s:%d",
             name,
-            fwd.config.listen_host, fwd.config.listen_port,
-            fwd.config.upstream_host, fwd.config.upstream_port,
+            fwd.listen_host, fwd.listen_port,
+            fwd.upstream_host, fwd.upstream_port,
         )
 
     async def stop_forwarder(self, name: str) -> None:
@@ -299,14 +300,12 @@ class ProxyAPI:
         for fwd in forwarders:
             if fwd.name in self._engines:
                 # Update the engine's config reference in-place
-                engine = self._engines[fwd.name]
-                engine.config = fwd.config
-                engine.tls_handler._config = fwd.config
-                engine.forwarder_name = fwd.name
-                new_engines[fwd.name] = engine
+                self._engines[fwd.name].config = fwd
+                self._engines[fwd.name].forwarder_name = fwd.name
+                new_engines[fwd.name] = self._engines[fwd.name]
             else:
                 new_engines[fwd.name] = ProxyEngine(
-                    config=fwd.config,
+                    config=fwd,
                     tamper_controller=self._tamper_controller,
                     event_bus=self.event_bus,
                     session_registry=self.session_registry,
@@ -402,7 +401,7 @@ class ProxyAPI:
 
         # --- Protocol definition change ---
         if protocol_definition_path is not None:
-            fwd.config.protocol_definition_path = protocol_definition_path
+            fwd.protocol_definition_path = protocol_definition_path
             if protocol_definition_path:
                 self.set_protocol_file(protocol_definition_path)
             else:
@@ -668,9 +667,9 @@ class ProxyAPI:
         )
         total = 0
         for fwd in target_fwds:
-            fwd.config.framer_name = framer_name
-            fwd.config.framer_kwargs = dict(framer_kwargs or {})
-            fwd.config.custom_framer_path = custom_framer_path
+            fwd.framer_name = framer_name
+            fwd.framer_kwargs = dict(framer_kwargs or {})
+            fwd.custom_framer_path = custom_framer_path
             engine = self._engines.get(fwd.name)
             if engine:
                 total += engine.swap_framers_on_all_sessions()

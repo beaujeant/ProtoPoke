@@ -22,7 +22,8 @@ Config tab → Edit Framer → Custom, then set:
 
 Python API:
 
-  config = ProxyConfig(
+  config = ForwarderConfig(
+      name="Default",
       ...,
       custom_framer_path="/path/to/examples/dns_framer.py",
   )

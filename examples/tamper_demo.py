@@ -5,7 +5,7 @@ Starts the proxy with interception enabled. For each intercepted frame,
 you can choose to forward, drop, or modify it from the command line.
 
 This is a minimal demonstration of the interception API. A real UI would
-wrap the same ProxyAPI calls in a graphical interface.
+wrap the same ProtoPokeAPI calls in a graphical interface.
 
 Usage:
     python examples/tamper_demo.py
@@ -27,8 +27,8 @@ import asyncio
 import logging
 import sys
 
-from protopoke.api import ProxyAPI
-from protopoke.config import ProxyConfig
+from protopoke.api import ProtoPokeAPI
+from protopoke.config import ForwarderConfig
 from protopoke.models import TamperedUnit
 
 logging.basicConfig(
@@ -51,7 +51,7 @@ def print_unit(unit: TamperedUnit) -> None:
     print(f"{'─'*60}")
 
 
-async def intercept_loop(api: ProxyAPI, stop_event: asyncio.Event) -> None:
+async def intercept_loop(api: ProtoPokeAPI, stop_event: asyncio.Event) -> None:
     """Process the intercept queue until stop_event is set."""
     loop = asyncio.get_running_loop()
 
@@ -111,7 +111,8 @@ async def intercept_loop(api: ProxyAPI, stop_event: asyncio.Event) -> None:
 
 
 async def main() -> None:
-    config = ProxyConfig(
+    config = ForwarderConfig(
+        name="Default",
         listen_host="127.0.0.1",
         listen_port=8080,
         upstream_host="127.0.0.1",
@@ -120,7 +121,7 @@ async def main() -> None:
         framer_name="raw",  # Raw framer: each read chunk = one frame
     )
 
-    api = ProxyAPI(config)
+    api = ProtoPokeAPI([config])
     stop_event = asyncio.Event()
 
     print(f"Proxy with interception: 127.0.0.1:{config.listen_port} "

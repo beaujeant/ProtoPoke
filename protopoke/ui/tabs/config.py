@@ -10,7 +10,7 @@ from textual.widgets import Button, DataTable, Label, Select, Static
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
 
-from ...config import ForwarderConfig, ProxyConfig
+from ...config import ForwarderConfig
 from ..modals.forwarder_edit import ForwarderEditModal
 
 logger = logging.getLogger(__name__)
@@ -148,7 +148,6 @@ class ConfigTab(Widget):
     # ------------------------------------------------------------------
 
     def _row_values(self, fwd: ForwarderConfig) -> tuple:
-        cfg = fwd.config
         status = "stopped"
         if fwd.name in self._running_fwds:
             addr = self._running_fwds[fwd.name]
@@ -159,10 +158,10 @@ class ConfigTab(Widget):
         return (
             "On" if fwd.enabled else "Off",
             fwd.name,
-            f"{cfg.listen_host}:{cfg.listen_port}",
-            f"{cfg.upstream_host}:{cfg.upstream_port}",
-            "Yes" if cfg.tls_listen else "No",
-            "Yes" if cfg.tls_upstream else "No",
+            f"{fwd.listen_host}:{fwd.listen_port}",
+            f"{fwd.upstream_host}:{fwd.upstream_port}",
+            "Yes" if fwd.tls_listen else "No",
+            "Yes" if fwd.tls_upstream else "No",
             status,
         )
 
@@ -214,13 +213,13 @@ class ConfigTab(Widget):
     def _open_add_modal(self) -> None:
         existing_names = {f.name for f in self._forwarders}
         new_name = self._unique_forwarder_name()
-        new_fwd = ForwarderConfig(name=new_name, enabled=True, config=ProxyConfig())
+        new_fwd = ForwarderConfig(name=new_name, enabled=True)
 
         # Apply current global log level to the new forwarder
         try:
             log_val = self.query_one("#cfg-log-level", Select).value
             if log_val and log_val is not Select.BLANK:
-                new_fwd.config.log_level = str(log_val)
+                new_fwd.log_level = str(log_val)
         except Exception:
             pass
 
@@ -289,7 +288,7 @@ class ConfigTab(Widget):
                 level = str(val)
                 # Apply to all forwarders
                 for fwd in self._forwarders:
-                    fwd.config.log_level = level
+                    fwd.log_level = level
                 # Apply immediately to the root logger
                 logging.getLogger().setLevel(level)
                 logger.info("Log level changed to %s", level)

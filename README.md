@@ -54,17 +54,18 @@ claude mcp add protopoke -- protopoke-mcp --upstream-host 10.0.0.1 --upstream-po
 
 ```python
 import asyncio
-from protopoke.api import ProxyAPI
-from protopoke.config import ForwarderConfig, ProxyConfig
+from protopoke.api import ProtoPokeAPI
+from protopoke.config import ForwarderConfig
 
 async def main():
-    config = ProxyConfig(
+    fwd = ForwarderConfig(
+        name="Default",
         listen_port=8080,
         upstream_host="10.0.0.1",
         upstream_port=9090,
         tamper_enabled=True,
     )
-    api = ProxyAPI(forwarders=[ForwarderConfig(name="Default", enabled=True, config=config)])
+    api = ProtoPokeAPI([fwd])
     await api.start()
 
     while True:

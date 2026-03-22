@@ -1,12 +1,12 @@
 """
 ProtoPoke — a personal TCP interception and replay tool.
 
-High-level entry point: use protopoke.api.ProxyAPI to control everything.
+High-level entry point: use protopoke.api.ProtoPokeAPI to control everything.
 
-    from protopoke.config import ProxyConfig
-    from protopoke.api import ProxyAPI
+    from protopoke.config import ForwarderConfig
+    from protopoke.api import ProtoPokeAPI
 
-    config = ProxyConfig(listen_port=8080, upstream_host="...", upstream_port=9090)
-    api = ProxyAPI(config)
+    fwd = ForwarderConfig(name="Default", listen_port=8080, upstream_host="...", upstream_port=9090)
+    api = ProtoPokeAPI([fwd])
     await api.start()
 """

@@ -19,7 +19,7 @@ Limitations (important for replay and interception):
       messages requires a protocol-aware framer.
 
 Replacing this later:
-    Set framer_name="delimiter" or "length_prefix" in ProxyConfig, or
+    Set framer_name="delimiter" or "length_prefix" in ForwarderConfig, or
     implement a custom Framer subclass and register it in FRAMER_REGISTRY.
 """
 

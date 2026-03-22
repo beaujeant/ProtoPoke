@@ -11,7 +11,7 @@ Included backends:
                            (see storage/sqlite.py)
 
 How persistence integrates:
-    ProxyAPI subscribes a storage backend to the event bus:
+    ProtoPokeAPI subscribes a storage backend to the event bus:
 
         async def on_frame(event: FrameCapturedEvent):
             await storage.save_frame(event.frame)
@@ -19,7 +19,7 @@ How persistence integrates:
         api.event_bus.subscribe(FrameCapturedEvent, on_frame)
 
     The storage backend is completely decoupled from the proxy core.
-    Swapping from NullStorage to SqliteStorage is a one-line change in ProxyAPI.
+    Swapping from NullStorage to SqliteStorage is a one-line change in ProtoPokeAPI.
 
 SQLite schema (implemented in storage/sqlite.py):
 

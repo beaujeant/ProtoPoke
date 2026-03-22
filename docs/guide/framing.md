@@ -34,7 +34,7 @@ Every `read()` chunk becomes one frame immediately. No buffering or boundary det
 === "Python API"
 
     ```python
-    config = ProxyConfig(
+    fwd = ForwarderConfig(
         listen_port=8080,
         upstream_host="10.0.0.1",
         upstream_port=9090,
@@ -54,14 +54,14 @@ Accumulates bytes until a configurable byte sequence appears, then emits everyth
 
     ```python
     # Split on CRLF
-    config = ProxyConfig(
+    fwd = ForwarderConfig(
         ...,
         framer_name="delimiter",
         framer_kwargs={"delimiter": b"\r\n"},
     )
 
     # Split on null byte
-    config = ProxyConfig(
+    fwd = ForwarderConfig(
         ...,
         framer_name="delimiter",
         framer_kwargs={"delimiter": b"\x00"},
@@ -80,14 +80,14 @@ Reads a fixed-size integer header that declares the payload length, buffers unti
 
     ```python
     # 4-byte big-endian length field
-    config = ProxyConfig(
+    fwd = ForwarderConfig(
         ...,
         framer_name="length_prefix",
         framer_kwargs={"prefix_length": 4, "byte_order": "big"},
     )
 
     # 2-byte little-endian, length field at offset 3, add 6 to include header
-    config = ProxyConfig(
+    fwd = ForwarderConfig(
         ...,
         framer_name="length_prefix",
         framer_kwargs={
@@ -117,7 +117,7 @@ Reads a fixed-size integer header that declares the payload length, buffers unti
 Convenience wrapper around `delimiter` that splits on `\r\n` and also accepts bare `\n`.
 
 ```python
-config = ProxyConfig(..., framer_name="line")
+fwd = ForwarderConfig(..., framer_name="line")
 ```
 
 ## Custom Framer
@@ -129,7 +129,7 @@ When none of the built-in framers fit, write a Python script with two functions.
 === "Python API"
 
     ```python
-    config = ProxyConfig(
+    fwd = ForwarderConfig(
         listen_port=8080,
         upstream_host="10.0.0.1",
         upstream_port=9090,

@@ -16,7 +16,7 @@ from protopoke.models import (
     SessionState,
 )
 from protopoke.core.session import Session, SessionRegistry
-from protopoke.forge.models import ForgeRequest, ForgeRecord
+from protopoke.forge.models import Playbook, PlaybookFrame, TrafficEntry, PlaybookRun
 
 
 # ---------------------------------------------------------------------------
@@ -209,44 +209,41 @@ class TestParsedMessageToDict:
 
 
 # ---------------------------------------------------------------------------
-# ForgeRequest.to_dict() / from_dict()
+# Playbook.to_dict() / from_dict()
 # ---------------------------------------------------------------------------
 
-class TestForgeRequestToDict:
+class TestPlaybookToDict:
     def test_round_trip(self):
-        req = ForgeRequest.create("Tab 1", "10.0.0.1", 443, current_bytes=b"\x01\x02")
-        rec = ForgeRecord.create(b"\x01\x02", b"\x03\x04", "10.0.0.1", 443)
-        req.add_record(rec)
-        d = req.to_dict()
-        restored = ForgeRequest.from_dict(d)
-        assert restored.label == "Tab 1"
+        p = Playbook.create("Test", host="10.0.0.1", port=443, tls=True)
+        frame = PlaybookFrame.create(label="F1", raw_hex="01 02")
+        p.frames.append(frame)
+        d = p.to_dict()
+        restored = Playbook.from_dict(d)
+        assert restored.label == "Test"
         assert restored.host == "10.0.0.1"
-        assert restored.current_bytes == b"\x01\x02"
-        assert len(restored.history) == 1
-        assert restored.history[0].sent_bytes == b"\x01\x02"
+        assert len(restored.frames) == 1
+        assert restored.frames[0].raw_hex == "01 02"
 
     def test_json_serialisable(self):
-        req = ForgeRequest.create("T", "localhost", 80)
-        json.dumps(req.to_dict())
+        p = Playbook.create("T", host="localhost", port=80)
+        json.dumps(p.to_dict())
 
 
 # ---------------------------------------------------------------------------
-# ForgeRecord.to_dict() / from_dict()
+# TrafficEntry.to_dict() / from_dict()
 # ---------------------------------------------------------------------------
 
-class TestForgeRecordToDict:
+class TestTrafficEntryToDict:
     def test_bytes_are_hex(self):
-        rec = ForgeRecord.create(b"\xAA", b"\xBB", "host", 1234)
-        d = rec.to_dict()
-        assert d["sent_bytes"] == "aa"
-        assert d["received_bytes"] == "bb"
+        e = TrafficEntry.create_sent(b"\xAA", "f1")
+        d = e.to_dict()
+        assert d["raw_bytes"] == "aa"
 
     def test_round_trip(self):
-        rec = ForgeRecord.create(b"\x01", b"\x02", "localhost", 8080, tls=True)
-        rec2 = ForgeRecord.from_dict(rec.to_dict())
-        assert rec2.sent_bytes == b"\x01"
-        assert rec2.received_bytes == b"\x02"
-        assert rec2.tls is True
+        e = TrafficEntry.create_sent(b"\x01\x02", "f1")
+        e2 = TrafficEntry.from_dict(e.to_dict())
+        assert e2.raw_bytes == b"\x01\x02"
+        assert e2.direction == "sent"
 
     def test_json_serialisable(self):
-        json.dumps(ForgeRecord.create(b"\x00", b"\x00", "h", 1).to_dict())
+        json.dumps(TrafficEntry.create_sent(b"\x00", "f1").to_dict())

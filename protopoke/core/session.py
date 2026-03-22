@@ -118,7 +118,7 @@ class SessionRegistry:
 
     The ProxyEngine creates sessions here on new connections.
     The relay updates state via mark_active / mark_closed.
-    The ProxyAPI queries sessions for the operator.
+    The ProtoPokeAPI queries sessions for the operator.
 
     Not thread-safe by design — all interaction happens within the same
     asyncio event loop, so no locks are needed.

@@ -15,8 +15,8 @@ import asyncio
 
 import pytest
 
-from protopoke.api import ProxyAPI
-from protopoke.config import ForwarderConfig, ProxyConfig
+from protopoke.api import ProtoPokeAPI
+from protopoke.config import ForwarderConfig
 from protopoke.models import Direction
 from tests.conftest import echo_server_ctx, free_port
 
@@ -51,11 +51,12 @@ class TestPassthroughProxy:
     async def test_forwards_data_to_upstream(self):
         async with echo_server_ctx() as (upstream_host, upstream_port):
             listen_port = free_port()
-            config = ProxyConfig(
+            config = ForwarderConfig(
+                name="Test",
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
             )
-            api = ProxyAPI(config)
+            api = ProtoPokeAPI([config])
             await api.start()
             try:
                 response = await send_recv("127.0.0.1", listen_port, b"hello proxy")
@@ -67,11 +68,12 @@ class TestPassthroughProxy:
     async def test_captures_frames_both_directions(self):
         async with echo_server_ctx() as (upstream_host, upstream_port):
             listen_port = free_port()
-            config = ProxyConfig(
+            config = ForwarderConfig(
+                name="Test",
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
             )
-            api = ProxyAPI(config)
+            api = ProtoPokeAPI([config])
             await api.start()
             try:
                 await send_recv("127.0.0.1", listen_port, b"test data")
@@ -100,11 +102,12 @@ class TestPassthroughProxy:
     async def test_handles_multiple_sessions(self):
         async with echo_server_ctx() as (upstream_host, upstream_port):
             listen_port = free_port()
-            config = ProxyConfig(
+            config = ForwarderConfig(
+                name="Test",
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
             )
-            api = ProxyAPI(config)
+            api = ProtoPokeAPI([config])
             await api.start()
             try:
                 # Run 3 sessions concurrently
@@ -123,11 +126,12 @@ class TestPassthroughProxy:
     async def test_session_state_lifecycle(self):
         async with echo_server_ctx() as (upstream_host, upstream_port):
             listen_port = free_port()
-            config = ProxyConfig(
+            config = ForwarderConfig(
+                name="Test",
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
             )
-            api = ProxyAPI(config)
+            api = ProtoPokeAPI([config])
             opened_sessions = []
             closed_sessions = []
 
@@ -155,11 +159,12 @@ class TestPassthroughProxy:
     async def test_event_bus_frame_events(self):
         async with echo_server_ctx() as (upstream_host, upstream_port):
             listen_port = free_port()
-            config = ProxyConfig(
+            config = ForwarderConfig(
+                name="Test",
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
             )
-            api = ProxyAPI(config)
+            api = ProtoPokeAPI([config])
             captured = []
 
             async def on_frame(event):
@@ -185,12 +190,13 @@ class TestInterception:
     async def test_intercept_and_forward(self):
         async with echo_server_ctx() as (upstream_host, upstream_port):
             listen_port = free_port()
-            config = ProxyConfig(
+            config = ForwarderConfig(
+                name="Test",
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
                 tamper_enabled=True,
             )
-            api = ProxyAPI(config)
+            api = ProtoPokeAPI([config])
             await api.start()
 
             async def handle_intercepts():
@@ -218,12 +224,13 @@ class TestInterception:
     async def test_intercept_and_modify(self):
         async with echo_server_ctx() as (upstream_host, upstream_port):
             listen_port = free_port()
-            config = ProxyConfig(
+            config = ForwarderConfig(
+                name="Test",
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
                 tamper_enabled=True,
             )
-            api = ProxyAPI(config)
+            api = ProtoPokeAPI([config])
             await api.start()
 
             async def handle_intercepts():
@@ -257,12 +264,13 @@ class TestInterception:
     async def test_intercept_and_drop(self):
         async with echo_server_ctx() as (upstream_host, upstream_port):
             listen_port = free_port()
-            config = ProxyConfig(
+            config = ForwarderConfig(
+                name="Test",
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
                 tamper_enabled=True,
             )
-            api = ProxyAPI(config)
+            api = ProtoPokeAPI([config])
             await api.start()
 
             async def handle_intercepts():
@@ -279,7 +287,7 @@ class TestInterception:
             intercept_task = asyncio.create_task(handle_intercepts())
 
             try:
-                # Drop the client→server frame; server should not echo anything
+                # Drop the client->server frame; server should not echo anything
                 reader, writer = await asyncio.open_connection("127.0.0.1", listen_port)
                 writer.write(b"drop this")
                 await writer.drain()
@@ -307,15 +315,16 @@ class TestInterception:
     async def test_toggle_intercept_at_runtime(self):
         async with echo_server_ctx() as (upstream_host, upstream_port):
             listen_port = free_port()
-            config = ProxyConfig(
+            config = ForwarderConfig(
+                name="Test",
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
                 tamper_enabled=True,
             )
-            api = ProxyAPI(config)
+            api = ProtoPokeAPI([config])
             await api.start()
 
-            # Disable interception — everything should flow through
+            # Disable interception -- everything should flow through
             api.tamper_enabled = False
 
             try:
@@ -334,12 +343,13 @@ class TestSessionLimit:
     async def test_max_sessions_enforced(self):
         async with echo_server_ctx() as (upstream_host, upstream_port):
             listen_port = free_port()
-            config = ProxyConfig(
+            config = ForwarderConfig(
+                name="Test",
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
                 max_sessions=1,
             )
-            api = ProxyAPI(config)
+            api = ProtoPokeAPI([config])
             await api.start()
 
             try:
@@ -353,7 +363,7 @@ class TestSessionLimit:
                 # Second connection should be rejected
                 r2, w2 = await asyncio.open_connection("127.0.0.1", listen_port)
                 await asyncio.sleep(0.1)
-                # Attempt to read — should get EOF (rejected)
+                # Attempt to read -- should get EOF (rejected)
                 data = await asyncio.wait_for(r2.read(1), timeout=1.0)
                 assert data == b""
 
@@ -373,17 +383,18 @@ class TestUpstreamFailure:
         """If upstream is not running, the client should get a clean close."""
         dead_port = free_port()  # Nothing listening here
         listen_port = free_port()
-        config = ProxyConfig(
+        config = ForwarderConfig(
+            name="Test",
             listen_host="127.0.0.1", listen_port=listen_port,
             upstream_host="127.0.0.1", upstream_port=dead_port,
             connect_timeout=1.0,
         )
-        api = ProxyAPI(config)
+        api = ProtoPokeAPI([config])
         await api.start()
         try:
             reader, writer = await asyncio.open_connection("127.0.0.1", listen_port)
             data = await asyncio.wait_for(reader.read(4096), timeout=3.0)
-            assert data == b""  # EOF — proxy closed the connection
+            assert data == b""  # EOF -- proxy closed the connection
             writer.close()
         finally:
             await api.stop()
@@ -405,14 +416,15 @@ class TestShutdownWithActiveSession:
         """
         async with echo_server_ctx() as (upstream_host, upstream_port):
             listen_port = free_port()
-            config = ProxyConfig(
+            config = ForwarderConfig(
+                name="Test",
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
             )
-            api = ProxyAPI(config)
+            api = ProtoPokeAPI([config])
             await api.start()
 
-            # Open a connection but intentionally do NOT close it — the session
+            # Open a connection but intentionally do NOT close it -- the session
             # stays active while we ask the proxy to stop.
             reader, writer = await asyncio.open_connection("127.0.0.1", listen_port)
             writer.write(b"hello")

@@ -1,14 +1,15 @@
 """
-Proxy configuration.
+Forwarder configuration.
 
-All runtime settings live here as a single dataclass. This makes it easy to:
+All runtime settings for a single forwarder live here as a single dataclass.
+This makes it easy to:
 - Create configs programmatically (in scripts, tests)
-- Load from a file (JSON/TOML — add a classmethod for that)
+- Load from a file (JSON)
 - Pass a config around without global state
 - Override individual fields for testing
 
-There is no global config singleton. Every ProxyEngine and ProxyAPI takes
-an explicit ProxyConfig.
+There is no global config singleton. Every ProxyEngine and ProtoPokeAPI takes
+an explicit ForwarderConfig.
 """
 
 from __future__ import annotations
@@ -20,9 +21,13 @@ from typing import Optional
 
 
 @dataclass
-class ProxyConfig:
+class ForwarderConfig:
     """
-    Configuration for one proxy instance.
+    Configuration for one named forwarder instance.
+
+    Identity:
+        name:    Human-readable label shown in the Config tab.
+        enabled: When False the forwarder is excluded from "Start All".
 
     Networking:
         listen_host:      Local address to bind on. Use "0.0.0.0" for all interfaces.
@@ -64,6 +69,11 @@ class ProxyConfig:
         tls_cert_path: Manual cert override (skips auto-CA).
         tls_key_path:  Private key for tls_cert_path.
     """
+
+    # Identity
+    name:    str  = "Forwarder"
+    enabled: bool = True
+
     # Networking
     listen_host:      str   = "127.0.0.1"
     listen_port:      int   = 8080
@@ -118,7 +128,7 @@ class ProxyConfig:
     # ------------------------------------------------------------------
 
     # Path to a .yaml or .json protocol definition file.
-    # When set, ProxyAPI auto-loads the definition on start() and attaches
+    # When set, ProtoPokeAPI auto-loads the definition on start() and attaches
     # a DefinitionBasedDecoder so that frames are automatically parsed.
     # The definition can also be loaded manually via api.set_protocol_file().
     protocol_definition_path: Optional[str] = None
@@ -152,8 +162,20 @@ class ProxyConfig:
         return d
 
     @classmethod
-    def from_dict(cls, d: dict) -> "ProxyConfig":
-        """Deserialise from a dict (as produced by to_dict())."""
+    def from_dict(cls, d: dict) -> "ForwarderConfig":
+        """
+        Deserialise from a dict (as produced by to_dict()).
+
+        Also handles legacy v4 format where networking/framing/TLS fields
+        were nested inside a ``"config"`` sub-dict.
+        """
+        # v4 migration: flatten nested "config" dict into top-level
+        if "config" in d and isinstance(d["config"], dict):
+            flat = dict(d["config"])
+            flat["name"] = d.get("name", "Forwarder")
+            flat["enabled"] = d.get("enabled", True)
+            d = flat
+
         kwargs = {}
         for f_name, f_obj in cls.__dataclass_fields__.items():
             if f_name not in d:
@@ -179,44 +201,7 @@ class ProxyConfig:
         Path(path).write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
 
     @classmethod
-    def load(cls, path: str | Path) -> "ProxyConfig":
+    def load(cls, path: str | Path) -> "ForwarderConfig":
         """Load config from a JSON file written by save()."""
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls.from_dict(data)
-
-
-@dataclass
-class ForwarderConfig:
-    """
-    Configuration for one named forwarder instance.
-
-    Wraps a :class:`ProxyConfig` with a user-visible name and an
-    enabled/disabled flag so that multiple forwarders can coexist in a
-    project and be started/stopped independently.
-
-    Attributes:
-        name:    Human-readable label shown in the Config tab.
-        enabled: When False the forwarder is excluded from "Start All".
-        config:  The underlying network/framing/TLS configuration.
-    """
-
-    name:    str         = "Forwarder"
-    enabled: bool        = True
-    config:  ProxyConfig = field(default_factory=ProxyConfig)
-
-    def to_dict(self) -> dict:
-        """Serialise to a JSON-compatible dict."""
-        return {
-            "name":    self.name,
-            "enabled": self.enabled,
-            "config":  self.config.to_dict(),
-        }
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "ForwarderConfig":
-        """Deserialise from a dict (as produced by to_dict())."""
-        return cls(
-            name    = d.get("name", "Forwarder"),
-            enabled = d.get("enabled", True),
-            config  = ProxyConfig.from_dict(d.get("config", {})),
-        )

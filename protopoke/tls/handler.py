@@ -36,7 +36,7 @@ from weakref import WeakKeyDictionary
 from .ca import CertificateAuthority
 
 if TYPE_CHECKING:
-    from ..config import ProxyConfig
+    from ..config import ForwarderConfig
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ class TLSHandler:
         get_upstream_ssl_context() → pass to asyncio.open_connection()
     """
 
-    def __init__(self, config: "ProxyConfig") -> None:
+    def __init__(self, config: "ForwarderConfig") -> None:
         self._config = config
         self._ca: Optional[CertificateAuthority] = None
         self._listen_ctx: Optional[ssl.SSLContext] = None

@@ -157,5 +157,5 @@ ProtoPoke exposes 50+ tools through MCP. All tools return JSON-serialisable dict
 
 | Tool | Description |
 |------|-------------|
-| `get_config` | Current ProxyConfig as a JSON dict |
+| `get_config` | Current ForwarderConfig as a JSON dict |
 | `set_config` | Update one or more config fields at runtime |

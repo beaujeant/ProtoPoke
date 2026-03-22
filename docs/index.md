@@ -19,7 +19,7 @@ ProtoPoke intercepts any TCP connection and lets you inspect, modify, or drop in
 - **Rules engine** — ordered replace rules (binary/regex/script) and intercept filter rules
 - **Terminal UI** — full Textual-based interface with Config, Traffic, Tamper, Forge, Fuzzer, and Logs tabs
 - **MCP server** — expose 50+ proxy operations as AI tools via the Model Context Protocol
-- **Python API** — programmatic control through `ProxyAPI` for scripting and automation
+- **Python API** — programmatic control through `ProtoPokeAPI` for scripting and automation
 - **Project system** — save and load proxy configurations, rules, and forge data as `.pp` ZIP files
 
 ---

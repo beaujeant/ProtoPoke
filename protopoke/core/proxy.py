@@ -30,7 +30,7 @@ import asyncio
 import logging
 from typing import Optional, TYPE_CHECKING
 
-from ..config import ProxyConfig
+from ..config import ForwarderConfig
 from ..models import Direction
 from ..events.bus import EventBus, SessionOpenedEvent, SessionClosedEvent, SessionUpdatedEvent, UpstreamConnectionFailedEvent
 from ..framing import create_framer, load_framer_from_file
@@ -60,12 +60,12 @@ class ProxyEngine:
 
     Dependencies are injected rather than constructed internally so that
     the engine is easy to test (pass in mock controllers, registries, etc.)
-    and easy to compose at the ProxyAPI level.
+    and easy to compose at the ProtoPokeAPI level.
     """
 
     def __init__(
         self,
-        config:               ProxyConfig,
+        config:               ForwarderConfig,
         tamper_controller: Optional[TamperController] = None,
         event_bus:            Optional[EventBus]            = None,
         session_registry:     Optional[SessionRegistry]     = None,
@@ -76,7 +76,7 @@ class ProxyEngine:
         Args:
             config:            Network, framing, TLS, and interception settings.
             tamper_controller: Intercept/passthrough controller shared with the
-                               ProxyAPI.  Defaults to PassthroughController (no
+                               ProtoPokeAPI.  Defaults to PassthroughController (no
                                interception).
             event_bus:         Shared event bus for lifecycle events.  Defaults
                                to a new isolated bus.

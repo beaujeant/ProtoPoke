@@ -1,11 +1,11 @@
-"""MCP server for ProtoPoke — exposes ProxyAPI operations as AI-callable tools.
+"""MCP server for ProtoPoke — exposes ProtoPokeAPI operations as AI-callable tools.
 
 Usage:
-    from protopoke.api import ProxyAPI
-    from protopoke.config import ProxyConfig
+    from protopoke.api import ProtoPokeAPI
+    from protopoke.config import ForwarderConfig
     from protopoke.mcp.server import build_mcp_server
 
-    api = ProxyAPI(ProxyConfig(...))
+    api = ProtoPokeAPI([ForwarderConfig(name="Default", upstream_host="...")])
     mcp = build_mcp_server(api)
     mcp.run()
 """

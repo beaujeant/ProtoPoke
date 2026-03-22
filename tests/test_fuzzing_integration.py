@@ -1,5 +1,5 @@
 """
-Integration tests for the fuzzing subsystem — requires ProxyAPI + TLS + network.
+Integration tests for the fuzzing subsystem -- requires ProtoPokeAPI + TLS + network.
 
 These tests are separated from test_fuzzing.py so that the pure unit tests
 always run even in environments where the `cryptography` package is broken.
@@ -10,14 +10,14 @@ from __future__ import annotations
 import asyncio
 import pytest
 
-from protopoke.config import ProxyConfig
-from protopoke.api import ProxyAPI
+from protopoke.config import ForwarderConfig
+from protopoke.api import ProtoPokeAPI
 from protopoke.fuzzing.models import CampaignStatus, FuzzResult
 from protopoke.fuzzing.mutators import BitFlipMutator, KnownBadMutator
 from tests.conftest import echo_server_ctx, free_port
 
 
-async def _capture(api: ProxyAPI, listen_port: int, data: bytes) -> str:
+async def _capture(api: ProtoPokeAPI, listen_port: int, data: bytes) -> str:
     reader, writer = await asyncio.open_connection("127.0.0.1", listen_port)
     writer.write(data)
     await writer.drain()
@@ -40,10 +40,11 @@ class TestFuzzSessionAPI:
     async def test_campaign_completes(self):
         async with echo_server_ctx() as (h, p):
             port = free_port()
-            api  = ProxyAPI(ProxyConfig(
+            api  = ProtoPokeAPI([ForwarderConfig(
+                name="Test",
                 listen_host="127.0.0.1", listen_port=port,
                 upstream_host=h, upstream_port=p,
-            ))
+            )])
             await api.start()
             try:
                 sid      = await _capture(api, port, b"hello fuzzer")
@@ -61,10 +62,11 @@ class TestFuzzSessionAPI:
     async def test_on_result_callback(self):
         async with echo_server_ctx() as (h, p):
             port = free_port()
-            api  = ProxyAPI(ProxyConfig(
+            api  = ProtoPokeAPI([ForwarderConfig(
+                name="Test",
                 listen_host="127.0.0.1", listen_port=port,
                 upstream_host=h, upstream_port=p,
-            ))
+            )])
             await api.start()
             try:
                 sid       = await _capture(api, port, b"callback test")
@@ -84,12 +86,13 @@ class TestFuzzSessionAPI:
     async def test_frame_selector(self):
         async with echo_server_ctx() as (h, p):
             port = free_port()
-            api  = ProxyAPI(ProxyConfig(
+            api  = ProtoPokeAPI([ForwarderConfig(
+                name="Test",
                 listen_host="127.0.0.1", listen_port=port,
                 upstream_host=h, upstream_port=p,
                 framer_name="delimiter",
                 framer_kwargs={"delimiter": b"\n"},
-            ))
+            )])
             await api.start()
             try:
                 reader, writer = await asyncio.open_connection("127.0.0.1", port)
