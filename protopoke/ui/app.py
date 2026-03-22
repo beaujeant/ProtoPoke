@@ -264,6 +264,13 @@ class ProtoPoke(App):
 
     def on_config_tab_forwarder_applied(self, event: ConfigTab.ForwarderApplied) -> None:
         """User applied settings for a specific forwarder."""
+        # Sync the project's forwarder list so that subsequent start/stop
+        # cycles pick up the new config (host, port, TLS, etc.).
+        for i, fwd in enumerate(self._project.forwarders):
+            if fwd.name == event.old_name:
+                self._project.forwarders[i] = event.forwarder
+                break
+        self.api.update_forwarders(self._project.forwarders)
         self._project.mark_dirty()
         self._update_title()
         self._apply_dynamic_config_for(event.old_name, event.forwarder)
