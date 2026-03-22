@@ -444,3 +444,49 @@ class TestShutdownWithActiveSession:
                 await writer.wait_closed()
             except Exception:
                 pass
+
+
+# ---------------------------------------------------------------------------
+# Config update after toggle off/on
+# ---------------------------------------------------------------------------
+
+class TestForwarderConfigUpdate:
+    @pytest.mark.asyncio
+    async def test_update_forwarders_applies_new_upstream(self):
+        """After stop → update_forwarders with new upstream → start, traffic
+        must reach the NEW upstream, not the old one."""
+        async with echo_server_ctx() as (host_a, port_a):
+            listen_port = free_port()
+            fwd = ForwarderConfig(
+                name="test",
+                config=ProxyConfig(
+                    listen_host="127.0.0.1", listen_port=listen_port,
+                    upstream_host=host_a, upstream_port=port_a,
+                ),
+            )
+            api = ProxyAPI([fwd])
+            await api.start_forwarder("test")
+            try:
+                # Verify initial routing
+                resp = await send_recv("127.0.0.1", listen_port, b"to-A")
+                assert resp == b"to-A"
+            finally:
+                await api.stop_forwarder("test")
+
+            # Now start a SECOND echo server and re-point the forwarder
+            async with echo_server_ctx() as (host_b, port_b):
+                new_listen = free_port()
+                fwd_updated = ForwarderConfig(
+                    name="test",
+                    config=ProxyConfig(
+                        listen_host="127.0.0.1", listen_port=new_listen,
+                        upstream_host=host_b, upstream_port=port_b,
+                    ),
+                )
+                api.update_forwarders([fwd_updated])
+                await api.start_forwarder("test")
+                try:
+                    resp = await send_recv("127.0.0.1", new_listen, b"to-B")
+                    assert resp == b"to-B"
+                finally:
+                    await api.stop_forwarder("test")
