@@ -6,8 +6,8 @@
 protopoke/
 ├── models.py           Core data classes: Frame, SessionInfo, TamperedUnit,
 │                       ParsedMessage, ParsedField, Direction, SessionState
-├── config.py           ProxyConfig, ForwarderConfig dataclasses
-├── api.py              ProxyAPI — the single public facade
+├── config.py           ForwarderConfig dataclass
+├── api.py              ProtoPokeAPI — the single public facade
 │
 ├── core/
 │   ├── proxy.py        ProxyEngine — asyncio server, one per forwarder
@@ -115,7 +115,7 @@ BidirectionalRelay.run()            [core/relay.py]
 
 | Principle | How it manifests |
 |-----------|-----------------|
-| **No global state** | Every component receives dependencies as constructor args. ProxyAPI wires them together. |
+| **No global state** | Every component receives dependencies as constructor args. ProtoPokeAPI wires them together. |
 | **Async-only I/O** | Everything is `asyncio`. No threads except the SQLite executor bridge. |
 | **Single event loop** | All tasks share one loop. Session registry and intercept queue need no locks. |
 | **Immutable IDs** | Frame/Session/Rule IDs are UUID4 strings, set at creation, never changed. |
@@ -156,4 +156,4 @@ Write a YAML definition file and call `api.set_protocol_file("my_protocol.yaml")
 
 ### Add a Storage Backend
 
-Subclass `protopoke.storage.base.StorageBackend`, implement the five async methods (`save_session`, `load_session`, `list_sessions`, `save_frame`, `load_frames`), and pass it to `ProxyAPI(forwarders, storage=MyBackend())`.
+Subclass `protopoke.storage.base.StorageBackend`, implement the five async methods (`save_session`, `load_session`, `list_sessions`, `save_frame`, `load_frames`), and pass it to `ProtoPokeAPI(forwarders, storage=MyBackend())`.

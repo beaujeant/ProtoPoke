@@ -51,8 +51,8 @@ needed — all `async def test_*` functions run automatically).
 protopoke/
 ├── models.py           Core data classes: Frame, SessionInfo, TamperedUnit,
 │                       ParsedMessage, ParsedField, Direction, SessionState, …
-├── config.py           ProxyConfig, ForwarderConfig dataclasses
-├── api.py              ProxyAPI — the single public façade (start, stop, tamper,
+├── config.py           ForwarderConfig dataclass
+├── api.py              ProtoPokeAPI — the single public façade (start, stop, tamper,
 │                       forge, fuzz, rules, events, …)
 │
 ├── core/
@@ -125,7 +125,7 @@ protopoke/
 │   └── sqlite.py       SqliteStorageBackend — SQLite persistence
 │
 ├── mcp/
-│   ├── server.py       build_mcp_server() — 50+ MCP tools wrapping ProxyAPI
+│   ├── server.py       build_mcp_server() — 50+ MCP tools wrapping ProtoPokeAPI
 │   └── runner.py       CLI entry point for protopoke-mcp
 │
 └── ui/
@@ -178,7 +178,7 @@ plain dataclasses — immutable IDs, serialisable to JSON via `.to_dict()`.
 
 | Principle | How it manifests |
 |-----------|-----------------|
-| **No global state** | Every component receives its dependencies (config, event_bus, registry, …) as constructor args. ProxyAPI wires them together. |
+| **No global state** | Every component receives its dependencies (config, event_bus, registry, …) as constructor args. ProtoPokeAPI wires them together. |
 | **Async-only I/O** | Everything is `asyncio`. No threads except the SQLite executor bridge (`_run()` in sqlite.py). |
 | **Single event loop** | All tasks share one loop. Session registry and intercept queue need no locks. |
 | **Immutable IDs** | Frame/Session/Rule IDs are UUID4 strings, set at creation, never changed. |
@@ -234,7 +234,7 @@ parsing logic and call `api.set_protocol(decoder, encoder)`.
 
 Subclass `protopoke.storage.base.StorageBackend`, implement the five async
 methods (`save_session`, `load_session`, `list_sessions`, `save_frame`,
-`load_frames`), and pass it to `ProxyAPI(forwarders, storage=MyBackend())`.
+`load_frames`), and pass it to `ProtoPokeAPI(forwarders, storage=MyBackend())`.
 
 ---
 
@@ -301,7 +301,7 @@ The `ProjectManager.open()` method auto-migrates v3 files to v4 on load.
 
 ```
 tests/
-├── conftest.py                   shared fixtures (ProxyConfig, free port, …)
+├── conftest.py                   shared fixtures (ForwarderConfig, free port, …)
 ├── test_proxy_integration.py     full end-to-end proxy flow
 ├── test_session.py               Session + SessionRegistry unit tests
 ├── test_framing.py               all four framers (raw, delimiter, length_prefix, line)
@@ -315,7 +315,7 @@ tests/
 ├── test_fuzzing.py               FuzzerEngine + mutators
 ├── test_fuzzing_integration.py   end-to-end fuzzing against a real server
 ├── test_events.py                EventBus pub/sub
-├── test_config_serialization.py  ProxyConfig / ForwarderConfig round-trip
+├── test_config_serialization.py  ForwarderConfig round-trip
 ├── test_project_manager.py       save/open .pp ZIP files
 ├── test_models.py                Frame / SessionInfo / TamperedUnit / ParsedMessage
 ├── test_tls.py                   TLS MITM (CA generation, cert signing, handshake)
@@ -333,7 +333,7 @@ tests/
 
 | Task | File |
 |------|------|
-| Change what ProxyAPI exposes | `protopoke/api.py` |
+| Change what ProtoPokeAPI exposes | `protopoke/api.py` |
 | Change frame capture / interception data path | `protopoke/core/relay.py` |
 | Add a framer | `protopoke/framing/` |
 | Add a protocol field type | `protopoke/protocol/parser/fields.py` |
@@ -353,5 +353,5 @@ tests/
 - **No dependency injection framework** — dependencies are constructor arguments.
 - **No threading** — single asyncio event loop throughout; SQLite uses a thread
   pool executor but serialises access with an asyncio lock.
-- **No HTTP API** — control surface is `ProxyAPI` (Python) and MCP (AI tools).
-  Adding an HTTP layer would wrap `ProxyAPI` methods with no core changes.
+- **No HTTP API** — control surface is `ProtoPokeAPI` (Python) and MCP (AI tools).
+  Adding an HTTP layer would wrap `ProtoPokeAPI` methods with no core changes.

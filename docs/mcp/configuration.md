@@ -13,7 +13,7 @@
 | `--tls-upstream` | off | Connect to upstream over TLS |
 | `--framer NAME` | `raw` | Framer: `raw`, `delimiter`, or `length_prefix` |
 | `--protocol PATH` | — | Path to a `.yaml`/`.json` protocol definition |
-| `--config PATH` | — | Load a saved `ProxyConfig` JSON file (CLI flags override file values) |
+| `--config PATH` | — | Load a saved `ForwarderConfig` JSON file (CLI flags override file values) |
 | `--log-level LEVEL` | `WARNING` | Python logging level (logs go to stderr) |
 | `--name NAME` | `ProtoPoke` | MCP server name shown to AI clients |
 
@@ -136,18 +136,19 @@ Build the MCP server directly in Python:
 
 ```python
 import asyncio
-from protopoke.api import ProxyAPI
-from protopoke.config import ForwarderConfig, ProxyConfig
+from protopoke.api import ProtoPokeAPI
+from protopoke.config import ForwarderConfig
 from protopoke.mcp.server import build_mcp_server
 
 async def main():
-    config = ProxyConfig(
+    fwd = ForwarderConfig(
+        name="Default",
         listen_port=8080,
         upstream_host="10.0.0.1",
         upstream_port=9090,
         tamper_enabled=True,
     )
-    api = ProxyAPI(forwarders=[ForwarderConfig(name="Default", enabled=True, config=config)])
+    api = ProtoPokeAPI([fwd])
     await api.start()
 
     mcp = build_mcp_server(api, name="ProtoPoke")

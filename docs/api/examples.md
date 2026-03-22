@@ -8,17 +8,17 @@ Basic proxy with event handlers that print session and frame activity:
 
 ```python
 import asyncio
-from protopoke.api import ProxyAPI
-from protopoke.config import ForwarderConfig, ProxyConfig
+from protopoke.api import ProtoPokeAPI
+from protopoke.config import ForwarderConfig
 
 async def main():
-    config = ProxyConfig(
+    fwd = ForwarderConfig(
+        name="Default",
         listen_port=8080,
         upstream_host="10.0.0.1",
         upstream_port=9090,
     )
-    forwarders = [ForwarderConfig(name="Default", enabled=True, config=config)]
-    api = ProxyAPI(forwarders)
+    api = ProtoPokeAPI([fwd])
 
     # Subscribe to events
     api.on_session_opened(lambda e: print(f"Session opened: {e.session_id}"))
@@ -37,18 +37,18 @@ See `examples/simple_proxy.py` for the full version.
 
 ```python
 import asyncio
-from protopoke.api import ProxyAPI
-from protopoke.config import ForwarderConfig, ProxyConfig
+from protopoke.api import ProtoPokeAPI
+from protopoke.config import ForwarderConfig
 
 async def main():
-    config = ProxyConfig(
+    fwd = ForwarderConfig(
+        name="Default",
         listen_port=8080,
         upstream_host="10.0.0.1",
         upstream_port=9090,
         tamper_enabled=True,
     )
-    forwarders = [ForwarderConfig(name="Default", enabled=True, config=config)]
-    api = ProxyAPI(forwarders)
+    api = ProtoPokeAPI([fwd])
     await api.start()
 
     # Intercept loop
@@ -69,11 +69,12 @@ See `examples/tamper_demo.py` for a more complete example.
 
 ```python
 import asyncio
-from protopoke.api import ProxyAPI
-from protopoke.config import ForwarderConfig, ProxyConfig
+from protopoke.api import ProtoPokeAPI
+from protopoke.config import ForwarderConfig
 
 async def main():
-    config = ProxyConfig(
+    fwd = ForwarderConfig(
+        name="Default",
         listen_port=8080,
         upstream_host="10.0.0.1",
         upstream_port=9090,
@@ -82,8 +83,7 @@ async def main():
         framer_kwargs={"prefix_length": 2, "byte_order": "big"},
         protocol_definition_path="examples/protocols/chat.proto.yaml",
     )
-    forwarders = [ForwarderConfig(name="Default", enabled=True, config=config)]
-    api = ProxyAPI(forwarders)
+    api = ProtoPokeAPI([fwd])
     await api.start()
 
     while True:
@@ -101,17 +101,17 @@ asyncio.run(main())
 
 ```python
 import asyncio
-from protopoke.api import ProxyAPI
-from protopoke.config import ForwarderConfig, ProxyConfig
+from protopoke.api import ProtoPokeAPI
+from protopoke.config import ForwarderConfig
 
 async def main():
-    config = ProxyConfig(
+    fwd = ForwarderConfig(
+        name="Default",
         listen_port=8080,
         upstream_host="10.0.0.1",
         upstream_port=9090,
     )
-    forwarders = [ForwarderConfig(name="Default", enabled=True, config=config)]
-    api = ProxyAPI(forwarders)
+    api = ProtoPokeAPI([fwd])
     await api.start()
 
     # ... capture some traffic first ...

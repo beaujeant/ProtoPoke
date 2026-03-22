@@ -1,23 +1,23 @@
 # Python API
 
-ProtoPoke's entire functionality is accessible through the `ProxyAPI` class, which serves as the single public facade for all proxy operations.
+ProtoPoke's entire functionality is accessible through the `ProtoPokeAPI` class, which serves as the single public facade for all proxy operations.
 
 ## Basic Setup
 
 ```python
 import asyncio
-from protopoke.api import ProxyAPI
-from protopoke.config import ForwarderConfig, ProxyConfig
+from protopoke.api import ProtoPokeAPI
+from protopoke.config import ForwarderConfig
 
 async def main():
-    config = ProxyConfig(
+    fwd = ForwarderConfig(
+        name="Default",
         listen_host="127.0.0.1",
         listen_port=8080,
         upstream_host="10.0.0.1",
         upstream_port=9090,
     )
-    forwarders = [ForwarderConfig(name="Default", enabled=True, config=config)]
-    api = ProxyAPI(forwarders)
+    api = ProtoPokeAPI([fwd])
 
     await api.start()
 
@@ -30,16 +30,18 @@ asyncio.run(main())
 
 ## Configuration
 
-`ProxyConfig` controls all proxy behaviour:
+`ForwarderConfig` controls all forwarder behaviour. Each forwarder is configured with a single flat dataclass:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
+| `name` | str | `"Forwarder"` | Human-readable label |
+| `enabled` | bool | `True` | Include in "Start All" |
 | `listen_host` | str | `"127.0.0.1"` | Bind address |
 | `listen_port` | int | `8080` | Listen port |
 | `upstream_host` | str | `"127.0.0.1"` | Target host |
 | `upstream_port` | int | `9090` | Target port |
-| `connect_timeout` | float | — | Upstream connection timeout |
-| `read_buffer_size` | int | — | Read buffer size |
+| `connect_timeout` | float | `10.0` | Upstream connection timeout |
+| `read_buffer_size` | int | `4096` | Read buffer size |
 | `max_sessions` | int | `0` | Max concurrent sessions (0 = unlimited) |
 | `tamper_enabled` | bool | `False` | Enable intercept on startup |
 | `framer_name` | str | `"raw"` | Framer: `raw`, `delimiter`, `length_prefix`, `line` |
@@ -56,10 +58,10 @@ Configs can be serialised:
 
 ```python
 # Save to JSON
-config.save("proxy_config.json")
+fwd.save("forwarder_config.json")
 
 # Load from JSON
-config = ProxyConfig.load("proxy_config.json")
+fwd = ForwarderConfig.load("forwarder_config.json")
 ```
 
 ## Multi-Forwarder Setup
@@ -68,14 +70,16 @@ Multiple forwarders let you proxy several targets simultaneously. All share a si
 
 ```python
 forwarders = [
-    ForwarderConfig(name="Service A", enabled=True, config=ProxyConfig(
+    ForwarderConfig(
+        name="Service A",
         listen_port=8080, upstream_host="10.0.0.1", upstream_port=9090,
-    )),
-    ForwarderConfig(name="Service B", enabled=True, config=ProxyConfig(
+    ),
+    ForwarderConfig(
+        name="Service B",
         listen_port=8081, upstream_host="10.0.0.2", upstream_port=9091,
-    )),
+    ),
 ]
-api = ProxyAPI(forwarders)
+api = ProtoPokeAPI(forwarders)
 await api.start()
 ```
 
@@ -219,7 +223,7 @@ By default, ProtoPoke stores sessions in memory. A SQLite backend is available:
 from protopoke.storage.sqlite import SqliteStorageBackend
 
 storage = SqliteStorageBackend("sessions.db")
-api = ProxyAPI(forwarders, storage=storage)
+api = ProtoPokeAPI(forwarders, storage=storage)
 ```
 
 You can implement custom backends by subclassing `StorageBackend`:

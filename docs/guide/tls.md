@@ -23,7 +23,7 @@ Client ──TLS──▶ ProtoPoke ──TLS (optional)──▶ Upstream
 === "Python API"
 
     ```python
-    config = ProxyConfig(
+    fwd = ForwarderConfig(
         listen_port=8080,
         upstream_host="api.example.com",
         upstream_port=443,
@@ -57,10 +57,11 @@ For the MITM to work, clients must trust the ProtoPoke CA certificate.
     ca_pem = api.get_ca_cert()
     ```
 
-The CA certificate and key are auto-generated and stored in memory by default. You can also provide your own CA certificate and key via `ProxyConfig`:
+The CA certificate and key are auto-generated and stored in memory by default. You can also provide your own CA certificate and key via `ForwarderConfig`:
 
 ```python
-config = ProxyConfig(
+fwd = ForwarderConfig(
+    name="Default",
     ...,
     tls_listen=True,
     ca_cert_path="/path/to/ca.pem",

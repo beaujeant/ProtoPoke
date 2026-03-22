@@ -46,7 +46,7 @@ tests/
 ├── test_fuzzing.py               FuzzerEngine + mutators
 ├── test_fuzzing_integration.py   End-to-end fuzzing
 ├── test_events.py                EventBus pub/sub
-├── test_config_serialization.py  ProxyConfig round-trip
+├── test_config_serialization.py  ForwarderConfig round-trip
 ├── test_project_manager.py       Save/open .pp ZIP files
 ├── test_models.py                Frame / SessionInfo / TamperedUnit
 ├── test_tls.py                   TLS MITM

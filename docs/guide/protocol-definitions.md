@@ -51,7 +51,7 @@ protocol:
 
     ```python
     # Via config (loaded on start)
-    config = ProxyConfig(
+    fwd = ForwarderConfig(
         ...,
         protocol_definition_path="myproto.yaml",
     )
