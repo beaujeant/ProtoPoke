@@ -21,14 +21,14 @@ import asyncio
 import sys
 import logging
 
-from protopoke.api import ProxyAPI
-from protopoke.config import ProxyConfig
+from protopoke.api import ProtoPokeAPI
+from protopoke.config import ForwarderConfig
 from protopoke.models import Direction
 
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 
 
-async def wait_for_session(api: ProxyAPI, timeout: float = 60.0) -> str:
+async def wait_for_session(api: ProtoPokeAPI, timeout: float = 60.0) -> str:
     """Wait until at least one session is fully closed."""
     elapsed = 0.0
     while elapsed < timeout:
@@ -41,13 +41,14 @@ async def wait_for_session(api: ProxyAPI, timeout: float = 60.0) -> str:
 
 
 async def main() -> None:
-    config = ProxyConfig(
+    config = ForwarderConfig(
+        name="Default",
         listen_host="127.0.0.1",
         listen_port=8080,
         upstream_host="127.0.0.1",
         upstream_port=9090,
     )
-    api = ProxyAPI(config)
+    api = ProtoPokeAPI([config])
     await api.start()
 
     print(f"Proxy: 127.0.0.1:{config.listen_port} → "

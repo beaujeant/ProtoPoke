@@ -13,7 +13,7 @@ Two concrete implementations:
 
     QueuedTamperController:
         Holds frames in an asyncio Queue. The relay awaits a verdict.
-        An external caller (ProxyAPI, CLI, UI) polls get_pending() and calls
+        An external caller (ProtoPokeAPI, CLI, UI) polls get_pending() and calls
         set_verdict() / forward() / drop() / modify_and_forward().
 
 How interception blocks the relay (but not other sessions):
@@ -92,7 +92,7 @@ class PassthroughController(TamperController):
     Forward-everything controller. No interception.
 
     Use this for passive capture and logging without pausing traffic.
-    This is the default when tamper_enabled=False in ProxyConfig.
+    This is the default when tamper_enabled=False in ForwarderConfig.
     """
 
     async def process(self, frame: Frame) -> TamperedUnit:
@@ -280,7 +280,7 @@ class QueuedTamperController(TamperController):
         """
         Wait for and return the next intercepted unit.
 
-        Call this from the ProxyAPI / UI / CLI to process the intercept queue.
+        Call this from the ProtoPokeAPI / UI / CLI to process the intercept queue.
         Blocks until a frame is available.
         """
         return await self._incoming_queue.get()

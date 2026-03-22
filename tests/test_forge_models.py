@@ -1,76 +1,112 @@
-"""Tests for ForgeRequest and ForgeRecord models."""
+"""Tests for forge data models (PlaybookFrame, TrafficEntry, PlaybookRun, Playbook)."""
 
 from __future__ import annotations
 
 import pytest
 
-from protopoke.forge.models import ForgeRecord, ForgeRequest
+from protopoke.forge.models import PlaybookFrame, TrafficEntry, PlaybookRun, Playbook
 
 
-class TestForgeRecord:
+class TestPlaybookFrame:
     def test_create(self):
-        rec = ForgeRecord.create(b"\x01\x02", b"\x03\x04", "10.0.0.1", 443)
-        assert rec.sent_bytes == b"\x01\x02"
-        assert rec.received_bytes == b"\x03\x04"
-        assert rec.host == "10.0.0.1"
-        assert rec.port == 443
-        assert rec.success is True
-        assert rec.error is None
+        f = PlaybookFrame.create(label="Login", raw_hex="01 02 03", direction="client_to_server")
+        assert f.label == "Login"
+        assert f.raw_hex == "01 02 03"
+        assert f.direction == "client_to_server"
+        assert f.id  # non-empty UUID
 
-    def test_create_failure(self):
-        rec = ForgeRecord.create(b"\x01", b"", "bad-host", 9999, success=False, error="timeout")
-        assert not rec.success
-        assert rec.error == "timeout"
-        assert rec.received_bytes == b""
+    def test_preview(self):
+        f = PlaybookFrame.create(raw_hex="01 02 03 04 05")
+        assert "01" in f.preview()
+
+    def test_byte_length(self):
+        f = PlaybookFrame.create(raw_hex="01 02 03")
+        assert f.byte_length() == 3
+
+    def test_byte_length_with_placeholder(self):
+        f = PlaybookFrame.create(raw_hex="01 {{VAR}} 03")
+        assert f.byte_length() == 2
 
     def test_serialise_round_trip(self):
-        rec = ForgeRecord.create(b"\xDE\xAD", b"\xBE\xEF", "localhost", 8080, tls=True)
-        restored = ForgeRecord.from_dict(rec.to_dict())
-        assert restored.sent_bytes == b"\xDE\xAD"
-        assert restored.received_bytes == b"\xBE\xEF"
-        assert restored.tls is True
-        assert restored.id == rec.id
-
-    def test_null_bytes_round_trip(self):
-        rec = ForgeRecord.create(b"\x00\x00\x00", b"\x00", "h", 1)
-        restored = ForgeRecord.from_dict(rec.to_dict())
-        assert restored.sent_bytes == b"\x00\x00\x00"
+        f = PlaybookFrame.create(label="Test", raw_hex="DE AD", direction="server_to_client")
+        restored = PlaybookFrame.from_dict(f.to_dict())
+        assert restored.label == "Test"
+        assert restored.raw_hex == "DE AD"
+        assert restored.direction == "server_to_client"
+        assert restored.id == f.id
 
 
-class TestForgeRequest:
-    def test_create(self):
-        req = ForgeRequest.create("Tab 1", "10.0.0.1", 443, current_bytes=b"\x01")
-        assert req.label == "Tab 1"
-        assert req.host == "10.0.0.1"
-        assert req.port == 443
-        assert req.current_bytes == b"\x01"
-        assert req.history == []
+class TestTrafficEntry:
+    def test_create_sent(self):
+        e = TrafficEntry.create_sent(b"\x01\x02", "Login")
+        assert e.direction == "sent"
+        assert e.raw_bytes == b"\x01\x02"
+        assert e.frame_label == "Login"
 
-    def test_add_record(self):
-        req = ForgeRequest.create("Tab", "h", 80)
-        rec = ForgeRecord.create(b"\x01", b"\x02", "h", 80)
-        req.add_record(rec)
-        assert len(req.history) == 1
-        assert req.history[0] is rec
+    def test_create_received(self):
+        e = TrafficEntry.create_received(b"\x03\x04", "Response")
+        assert e.direction == "received"
+        assert e.raw_bytes == b"\x03\x04"
 
     def test_serialise_round_trip(self):
-        req = ForgeRequest.create(
-            "My Tab", "example.com", 443, tls=True,
-            current_bytes=b"\xFF\xFE", source_session_id="sess-1"
-        )
-        rec = ForgeRecord.create(b"\xFF\xFE", b"\x00\x01", "example.com", 443, tls=True)
-        req.add_record(rec)
+        e = TrafficEntry.create_sent(b"\xDE\xAD", "Frame1")
+        restored = TrafficEntry.from_dict(e.to_dict())
+        assert restored.raw_bytes == b"\xDE\xAD"
+        assert restored.direction == "sent"
+        assert restored.id == e.id
 
-        restored = ForgeRequest.from_dict(req.to_dict())
-        assert restored.label == "My Tab"
+
+class TestPlaybookRun:
+    def test_create(self):
+        run = PlaybookRun.create("My Playbook")
+        assert run.playbook_label == "My Playbook"
+        assert run.traffic == []
+
+    def test_bytes_totals(self):
+        run = PlaybookRun.create("Test")
+        run.traffic.append(TrafficEntry.create_sent(b"\x01\x02\x03", "f1"))
+        run.traffic.append(TrafficEntry.create_received(b"\x04\x05", "f1"))
+        assert run.sent_bytes_total() == 3
+        assert run.received_bytes_total() == 2
+
+    def test_serialise_round_trip(self):
+        run = PlaybookRun.create("Test")
+        run.traffic.append(TrafficEntry.create_sent(b"\xAA", "f1"))
+        restored = PlaybookRun.from_dict(run.to_dict())
+        assert restored.playbook_label == "Test"
+        assert len(restored.traffic) == 1
+        assert restored.traffic[0].raw_bytes == b"\xAA"
+
+
+class TestPlaybook:
+    def test_create(self):
+        p = Playbook.create("My Playbook", host="10.0.0.1", port=443, tls=True)
+        assert p.label == "My Playbook"
+        assert p.host == "10.0.0.1"
+        assert p.port == 443
+        assert p.tls is True
+        assert p.frames == []
+        assert p.runs == []
+
+    def test_serialise_round_trip(self):
+        p = Playbook.create("Test", host="example.com", port=443, tls=True)
+        frame = PlaybookFrame.create(label="F1", raw_hex="01 02")
+        p.frames.append(frame)
+        run = PlaybookRun.create("Test")
+        run.traffic.append(TrafficEntry.create_sent(b"\x01\x02", "F1"))
+        p.runs.append(run)
+
+        restored = Playbook.from_dict(p.to_dict())
+        assert restored.label == "Test"
         assert restored.host == "example.com"
         assert restored.tls is True
-        assert restored.current_bytes == b"\xFF\xFE"
-        assert restored.source_session_id == "sess-1"
-        assert len(restored.history) == 1
-        assert restored.history[0].sent_bytes == b"\xFF\xFE"
+        assert len(restored.frames) == 1
+        assert restored.frames[0].raw_hex == "01 02"
+        assert len(restored.runs) == 1
+        assert restored.runs[0].traffic[0].raw_bytes == b"\x01\x02"
 
-    def test_empty_current_bytes(self):
-        req = ForgeRequest.create("Empty", "h", 80)
-        restored = ForgeRequest.from_dict(req.to_dict())
-        assert restored.current_bytes == b""
+    def test_variables_persist(self):
+        p = Playbook.create("Test")
+        p.variables["SEQ"] = "00000001"
+        restored = Playbook.from_dict(p.to_dict())
+        assert restored.variables["SEQ"] == "00000001"

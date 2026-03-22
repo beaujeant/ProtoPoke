@@ -11,8 +11,8 @@ import tempfile
 
 import pytest
 
-from protopoke.api import ProxyAPI
-from protopoke.config import ForwarderConfig, ProxyConfig
+from protopoke.api import ProtoPokeAPI
+from protopoke.config import ForwarderConfig
 from protopoke.models import Direction
 from tests.conftest import echo_server_ctx, free_port
 
@@ -38,17 +38,15 @@ async def send_recv(host: str, port: int, data: bytes, timeout: float = 5.0) -> 
 
 
 def make_api(listen_port: int, upstream_host: str, upstream_port: int,
-             name: str = "Test") -> ProxyAPI:
+             name: str = "Test") -> ProtoPokeAPI:
     fwd = ForwarderConfig(
         name=name,
-        config=ProxyConfig(
-            listen_host="127.0.0.1",
-            listen_port=listen_port,
-            upstream_host=upstream_host,
-            upstream_port=upstream_port,
-        ),
+        listen_host="127.0.0.1",
+        listen_port=listen_port,
+        upstream_host=upstream_host,
+        upstream_port=upstream_port,
     )
-    return ProxyAPI([fwd])
+    return ProtoPokeAPI([fwd])
 
 
 # ---------------------------------------------------------------------------
@@ -103,10 +101,10 @@ class TestRenameForwarder:
 
     async def test_rename_to_duplicate_raises(self):
         fwds = [
-            ForwarderConfig(name="A", config=ProxyConfig(listen_port=free_port())),
-            ForwarderConfig(name="B", config=ProxyConfig(listen_port=free_port())),
+            ForwarderConfig(name="A", listen_port=free_port()),
+            ForwarderConfig(name="B", listen_port=free_port()),
         ]
-        api = ProxyAPI(fwds)
+        api = ProtoPokeAPI(fwds)
         with pytest.raises(KeyError, match="already in use"):
             api.update_forwarder_config("A", new_name="B")
 
@@ -141,7 +139,7 @@ class TestFramingHotSwap:
                 assert result["sessions_reframed"] >= 1
 
                 # Config should be updated
-                assert api.forwarders[0].config.framer_name == "line"
+                assert api.forwarders[0].framer_name == "line"
 
                 writer.close()
                 await writer.wait_closed()
@@ -155,9 +153,9 @@ class TestFramingHotSwap:
             framer_name="delimiter",
             framer_kwargs={"delimiter": b"\r\n"},
         )
-        cfg = api.forwarders[0].config
-        assert cfg.framer_name == "delimiter"
-        assert cfg.framer_kwargs == {"delimiter": b"\r\n"}
+        fwd = api.forwarders[0]
+        assert fwd.framer_name == "delimiter"
+        assert fwd.framer_kwargs == {"delimiter": b"\r\n"}
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +193,7 @@ class TestProtocolHotSwap:
                 protocol_definition_path=path,
             )
             assert result["protocol_set"] is True
-            assert api.forwarders[0].config.protocol_definition_path == path
+            assert api.forwarders[0].protocol_definition_path == path
             assert api._decoder.protocol_name == "TestProto"
         finally:
             os.unlink(path)
@@ -237,7 +235,7 @@ class TestCombinedHotSwap:
                 assert result["renamed"] is True
                 assert result["sessions_reframed"] >= 1
                 assert api.forwarders[0].name == "New"
-                assert api.forwarders[0].config.framer_name == "line"
+                assert api.forwarders[0].framer_name == "line"
                 assert api.is_running("New")
 
                 writer.close()

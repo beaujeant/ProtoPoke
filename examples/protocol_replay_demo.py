@@ -19,15 +19,15 @@ import asyncio
 import logging
 import sys
 
-from protopoke.api import ProxyAPI
-from protopoke.config import ProxyConfig
+from protopoke.api import ProtoPokeAPI
+from protopoke.config import ForwarderConfig
 from protopoke.models import Direction
 from protopoke.protocol.display import render_field_tree, render_frame_header
 
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 
 
-async def wait_for_session(api: ProxyAPI, timeout: float = 120.0) -> str:
+async def wait_for_session(api: ProtoPokeAPI, timeout: float = 120.0) -> str:
     elapsed = 0.0
     while elapsed < timeout:
         closed = [s for s in api.list_sessions() if not s.is_active()]
@@ -38,7 +38,7 @@ async def wait_for_session(api: ProxyAPI, timeout: float = 120.0) -> str:
     raise TimeoutError("No session captured within timeout")
 
 
-def show_session(api: ProxyAPI, session_id: str) -> None:
+def show_session(api: ProtoPokeAPI, session_id: str) -> None:
     """Print a parsed summary of all captured frames."""
     msgs = api.decode_session_frames(session_id)
     print(f"\nCaptured {len(msgs)} frames:\n")
@@ -51,7 +51,8 @@ def show_session(api: ProxyAPI, session_id: str) -> None:
 async def main() -> None:
     proto_path = sys.argv[1] if len(sys.argv) > 1 else None
 
-    config = ProxyConfig(
+    config = ForwarderConfig(
+        name="Default",
         listen_host="127.0.0.1",
         listen_port=8080,
         upstream_host="127.0.0.1",
@@ -59,7 +60,7 @@ async def main() -> None:
         protocol_definition_path=proto_path,
     )
 
-    api = ProxyAPI(config)
+    api = ProtoPokeAPI([config])
     await api.start()
 
     print(f"Proxy: 127.0.0.1:{config.listen_port} → "

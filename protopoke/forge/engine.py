@@ -210,7 +210,7 @@ class ForgeEngine:
     Replays captured TCP sessions against a target server, and manages
     persistent forge sessions for repeated sends.
 
-    Used by FuzzerEngine and the ProxyAPI replay methods.
+    Used by FuzzerEngine and the ProtoPokeAPI replay methods.
     """
 
     def __init__(

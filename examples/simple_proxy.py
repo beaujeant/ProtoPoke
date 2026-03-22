@@ -22,8 +22,8 @@ import asyncio
 import logging
 import sys
 
-from protopoke.api import ProxyAPI
-from protopoke.config import ProxyConfig
+from protopoke.api import ProtoPokeAPI
+from protopoke.config import ForwarderConfig
 from protopoke.events.bus import FrameCapturedEvent, SessionOpenedEvent, SessionClosedEvent
 
 logging.basicConfig(
@@ -35,7 +35,8 @@ logger = logging.getLogger("simple_proxy")
 
 
 async def main() -> None:
-    config = ProxyConfig(
+    config = ForwarderConfig(
+        name="Default",
         listen_host="127.0.0.1",
         listen_port=8080,
         upstream_host="127.0.0.1",
@@ -46,7 +47,7 @@ async def main() -> None:
         # framer_kwargs={"delimiter": b"\n"},
     )
 
-    api = ProxyAPI(config)
+    api = ProtoPokeAPI([config])
 
     async def on_session_open(event: SessionOpenedEvent) -> None:
         s = event.session

@@ -6,15 +6,15 @@ import asyncio
 
 import pytest
 
-from protopoke.config import ProxyConfig
-from protopoke.api import ProxyAPI
+from protopoke.config import ForwarderConfig
+from protopoke.api import ProtoPokeAPI
 from protopoke.models import Direction
 from protopoke.forge.engine import parse_frame_selector, ForgeEngine
 from protopoke.core.session import SessionRegistry
 from tests.conftest import echo_server_ctx, free_port
 
 
-async def capture_session(api: ProxyAPI, listen_port: int, data: bytes) -> str:
+async def capture_session(api: ProtoPokeAPI, listen_port: int, data: bytes) -> str:
     """Helper: connect through the proxy, send data, return session ID."""
     reader, writer = await asyncio.open_connection("127.0.0.1", listen_port)
     writer.write(data)
@@ -96,11 +96,11 @@ class TestReplayCore:
     async def test_simple_replay(self):
         async with echo_server_ctx() as (upstream_host, upstream_port):
             listen_port = free_port()
-            config = ProxyConfig(
-                listen_host="127.0.0.1", listen_port=listen_port,
+            config = ForwarderConfig(
+                name="Test", listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
             )
-            api = ProxyAPI(config)
+            api = ProtoPokeAPI([config])
             await api.start()
             try:
                 session_id = await capture_session(api, listen_port, b"replay me")
@@ -119,11 +119,11 @@ class TestReplayCore:
     async def test_replay_with_modified_frames(self):
         async with echo_server_ctx() as (upstream_host, upstream_port):
             listen_port = free_port()
-            config = ProxyConfig(
-                listen_host="127.0.0.1", listen_port=listen_port,
+            config = ForwarderConfig(
+                name="Test", listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
             )
-            api = ProxyAPI(config)
+            api = ProtoPokeAPI([config])
             await api.start()
             try:
                 session_id = await capture_session(api, listen_port, b"original")
@@ -151,11 +151,11 @@ class TestReplayCore:
     async def test_replay_creates_new_session(self):
         async with echo_server_ctx() as (upstream_host, upstream_port):
             listen_port = free_port()
-            config = ProxyConfig(
+            config = ForwarderConfig(name="Test",
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
             )
-            api = ProxyAPI(config)
+            api = ProtoPokeAPI([config])
             await api.start()
             try:
                 session_id = await capture_session(api, listen_port, b"original")
@@ -174,11 +174,11 @@ class TestReplayCore:
         async with echo_server_ctx() as (host1, port1):
             async with echo_server_ctx() as (host2, port2):
                 listen_port = free_port()
-                config = ProxyConfig(
+                config = ForwarderConfig(name="Test",
                     listen_host="127.0.0.1", listen_port=listen_port,
                     upstream_host=host1, upstream_port=port1,
                 )
-                api = ProxyAPI(config)
+                api = ProtoPokeAPI([config])
                 await api.start()
                 try:
                     session_id = await capture_session(api, listen_port, b"cross server")
@@ -196,11 +196,11 @@ class TestReplayCore:
     async def test_backward_compat_aliases(self):
         async with echo_server_ctx() as (upstream_host, upstream_port):
             listen_port = free_port()
-            config = ProxyConfig(
+            config = ForwarderConfig(name="Test",
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
             )
-            api = ProxyAPI(config)
+            api = ProtoPokeAPI([config])
             await api.start()
             try:
                 session_id = await capture_session(api, listen_port, b"compat")
@@ -221,13 +221,13 @@ class TestFrameSelector:
     async def _setup(self, upstream_host, upstream_port):
         """Create a proxy and send 5 separate frames through it."""
         listen_port = free_port()
-        config = ProxyConfig(
+        config = ForwarderConfig(name="Test",
             listen_host="127.0.0.1", listen_port=listen_port,
             upstream_host=upstream_host, upstream_port=upstream_port,
             framer_name="delimiter",
             framer_kwargs={"delimiter": b"\n"},
         )
-        api = ProxyAPI(config)
+        api = ProtoPokeAPI([config])
         await api.start()
 
         # Send 5 newline-terminated lines so the delimiter framer creates 5 frames
@@ -342,11 +342,11 @@ class TestDirectionFilter:
     async def test_default_direction_is_client_to_server(self):
         async with echo_server_ctx() as (h, p):
             listen_port = free_port()
-            config = ProxyConfig(
+            config = ForwarderConfig(name="Test",
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=h, upstream_port=p,
             )
-            api = ProxyAPI(config)
+            api = ProtoPokeAPI([config])
             await api.start()
             try:
                 session_id = await capture_session(api, listen_port, b"client data")
@@ -362,11 +362,11 @@ class TestDirectionFilter:
         """Replay server→client frames (sends the server's original response to the server)."""
         async with echo_server_ctx() as (h, p):
             listen_port = free_port()
-            config = ProxyConfig(
+            config = ForwarderConfig(name="Test",
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=h, upstream_port=p,
             )
-            api = ProxyAPI(config)
+            api = ProtoPokeAPI([config])
             await api.start()
             try:
                 session_id = await capture_session(api, listen_port, b"ping")
@@ -414,13 +414,13 @@ class TestDirectionFilter:
         """direction + frame_selector work together."""
         async with echo_server_ctx() as (h, p):
             listen_port = free_port()
-            config = ProxyConfig(
+            config = ForwarderConfig(name="Test",
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=h, upstream_port=p,
                 framer_name="delimiter",
                 framer_kwargs={"delimiter": b"\n"},
             )
-            api = ProxyAPI(config)
+            api = ProtoPokeAPI([config])
             await api.start()
             try:
                 reader, writer = await asyncio.open_connection("127.0.0.1", listen_port)

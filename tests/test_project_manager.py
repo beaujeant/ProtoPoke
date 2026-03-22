@@ -7,18 +7,18 @@ import zipfile
 
 import pytest
 
-from protopoke.config import ProxyConfig
+from protopoke.config import ForwarderConfig
 from protopoke.rules.rule import ReplaceRule, InterceptRule, RuleAction
-from protopoke.forge.models import ForgeRequest, ForgeRecord
+from protopoke.forge.models import Playbook, PlaybookFrame, TrafficEntry
 from protopoke.project.manager import ProjectManager, ProjectState
 
 
 class TestProjectManager:
     def test_new_resets_state(self):
         pm = ProjectManager()
-        pm.config.listen_port = 9999
+        pm.forwarders = [ForwarderConfig(name="Test", listen_port=9999)]
         pm.new("Fresh")
-        assert pm.config.listen_port == 8080  # default
+        assert pm.forwarders == []
         assert pm.name == "Fresh"
         assert pm.path is None
         assert pm.is_dirty is False
@@ -31,9 +31,9 @@ class TestProjectManager:
         assert zipfile.is_zipfile(out)
         with zipfile.ZipFile(out) as zf:
             assert "project.json" in zf.namelist()
-            assert "config.json" in zf.namelist()
+            assert "forwarders.json" in zf.namelist()
             assert "rules.json" in zf.namelist()
-            assert "repeater.json" in zf.namelist()
+            assert "forge.json" in zf.namelist()
 
     def test_save_as_sets_path(self, tmp_path):
         pm = ProjectManager()
@@ -48,24 +48,24 @@ class TestProjectManager:
 
     def test_save_after_save_as(self, tmp_path):
         pm = ProjectManager()
+        pm.forwarders = [ForwarderConfig(name="Default", listen_port=1234)]
         pm.save_as(tmp_path / "p.pp")
-        pm.config.listen_port = 1234
+        pm.forwarders[0].listen_port = 5678
         pm.mark_dirty()
         pm.save()
         # Reload and verify
         pm2 = ProjectManager()
         pm2.open(tmp_path / "p.pp")
-        assert pm2.config.listen_port == 1234
+        assert pm2.forwarders[0].listen_port == 5678
 
-    def test_open_loads_config(self, tmp_path):
+    def test_open_loads_forwarders(self, tmp_path):
         pm = ProjectManager()
-        pm.config.listen_port = 7777
+        pm.forwarders = [ForwarderConfig(name="Default", listen_port=7777)]
         pm.save_as(tmp_path / "p.pp")
 
         pm2 = ProjectManager()
         state = pm2.open(tmp_path / "p.pp")
-        assert state.config.listen_port == 7777
-        assert pm2.config.listen_port == 7777
+        assert state.forwarders[0].listen_port == 7777
 
     def test_open_loads_replace_rules(self, tmp_path):
         pm = ProjectManager()
@@ -89,21 +89,28 @@ class TestProjectManager:
         assert len(state.intercept_filter.rules) == 1
         assert state.intercept_filter.rules[0].action == RuleAction.FORWARD
 
-    def test_open_loads_forge_requests(self, tmp_path):
+    def test_open_loads_playbooks(self, tmp_path):
         pm = ProjectManager()
-        req = ForgeRequest.create("10.0.0.1", 443, label="Tab 1", current_bytes=b"\x01\x02")
-        rec = ForgeRecord.create(b"\x01\x02", b"\x03\x04", "10.0.0.1", 443)
-        req.add_record(rec)
-        pm.forge_requests.append(req)
+        frame = PlaybookFrame.create(
+            raw_hex="01 02",
+            direction="client_to_server",
+            label="Login",
+        )
+        playbook = Playbook.create(
+            label="Test Playbook",
+            host="10.0.0.1",
+            port=443,
+        )
+        playbook.frames.append(frame)
+        pm.playbooks.append(playbook)
         pm.save_as(tmp_path / "p.pp")
 
         pm2 = ProjectManager()
         state = pm2.open(tmp_path / "p.pp")
-        assert len(state.forge_requests) == 1
-        assert state.forge_requests[0].label == "Tab 1"
-        assert state.forge_requests[0].current_bytes == b"\x01\x02"
-        assert len(state.forge_requests[0].history) == 1
-        assert state.forge_requests[0].history[0].sent_bytes == b"\x01\x02"
+        assert len(state.playbooks) == 1
+        assert state.playbooks[0].label == "Test Playbook"
+        assert len(state.playbooks[0].frames) == 1
+        assert state.playbooks[0].frames[0].raw_hex == "01 02"
 
     def test_open_missing_path_raises(self):
         pm = ProjectManager()
@@ -126,24 +133,12 @@ class TestProjectManager:
         state = pm2.open(tmp_path / "p.pp")
         assert isinstance(state, ProjectState)
         assert state.name == "MyProj"
-        # ZIP format: db_path is always None
-        assert state.db_path is None
 
     def test_mark_dirty(self):
         pm = ProjectManager()
         assert pm.is_dirty is False
         pm.mark_dirty()
         assert pm.is_dirty is True
-
-    def test_db_path_none_when_unsaved(self):
-        pm = ProjectManager()
-        assert pm.db_path is None
-
-    def test_db_path_none_for_zip_format(self, tmp_path):
-        pm = ProjectManager()
-        pm.save_as(tmp_path / "p.pp")
-        # ZIP format projects have no db_path
-        assert pm.db_path is None
 
     def test_project_json_contains_metadata(self, tmp_path):
         pm = ProjectManager()

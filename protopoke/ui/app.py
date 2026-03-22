@@ -11,7 +11,7 @@ from textual.binding import Binding
 from textual.message import Message
 from textual.widgets import Footer, Header, Switch, TabbedContent, TabPane
 
-from ..api import ProxyAPI
+from ..api import ProtoPokeAPI
 from ..config import ForwarderConfig
 from ..models import Direction
 from ..events.bus import FrameCapturedEvent, SessionClosedEvent, SessionOpenedEvent, SessionUpdatedEvent, UpstreamConnectionFailedEvent
@@ -133,7 +133,7 @@ class ProtoPoke(App):
     ) -> None:
         super().__init__()
         self._project = project or ProjectManager()
-        self.api = ProxyAPI(
+        self.api = ProtoPokeAPI(
             forwarders=self._project.forwarders,
             rules_engine=self._project.rules_engine,
             intercept_filter=self._project.intercept_filter,
@@ -308,13 +308,13 @@ class ProtoPoke(App):
             self._update_title()
             fwd = next((f for f in self._project.forwarders if f.name == name), None)
             address = (
-                f"{fwd.config.listen_host}:{fwd.config.listen_port}"
+                f"{fwd.listen_host}:{fwd.listen_port}"
                 if fwd else ""
             )
             self.query_one("#config-tab", ConfigTab).notify_forwarder_running(name, True, address)
             # Sync the tamper toggle in the Tamper tab
             try:
-                any_tamper = any(f.config.tamper_enabled for f in self._project.forwarders)
+                any_tamper = any(f.tamper_enabled for f in self._project.forwarders)
                 self.query_one("#tamper-tab", TamperTab).query_one(
                     "#tamper-toggle", Switch
                 ).value = any_tamper
@@ -346,16 +346,15 @@ class ProtoPoke(App):
         import logging as _logging
 
         new_name = forwarder.name
-        cfg = forwarder.config
 
         try:
             result = self.api.update_forwarder_config(
                 old_name,
                 new_name=new_name if new_name != old_name else None,
-                framer_name=cfg.framer_name,
-                framer_kwargs=cfg.framer_kwargs,
-                custom_framer_path=cfg.custom_framer_path,
-                protocol_definition_path=cfg.protocol_definition_path,
+                framer_name=forwarder.framer_name,
+                framer_kwargs=forwarder.framer_kwargs,
+                custom_framer_path=forwarder.custom_framer_path,
+                protocol_definition_path=forwarder.protocol_definition_path,
             )
             if result["renamed"] and old_name in self._running_forwarders:
                 self._running_forwarders.discard(old_name)
@@ -370,7 +369,7 @@ class ProtoPoke(App):
 
         # Log level — apply immediately (global, not per-forwarder)
         try:
-            _logging.getLogger().setLevel(cfg.log_level)
+            _logging.getLogger().setLevel(forwarder.log_level)
         except Exception:
             pass
 
@@ -518,7 +517,7 @@ class ProtoPoke(App):
                 None,
             )
             if fwd:
-                return fwd.config.tls_upstream
+                return fwd.tls_upstream
         return False
 
     def send_frame_to_forge(self, session_id: str, frame_id: str) -> None:
@@ -618,8 +617,8 @@ class ProtoPoke(App):
         self.sub_title = f"{name}{dirty}{path}{running}"
 
     def _rebuild_api(self) -> None:
-        """Replace the ProxyAPI with a fresh instance from current project state."""
-        self.api = ProxyAPI(
+        """Replace the ProtoPokeAPI with a fresh instance from current project state."""
+        self.api = ProtoPokeAPI(
             forwarders=self._project.forwarders,
             rules_engine=self._project.rules_engine,
             intercept_filter=self._project.intercept_filter,
@@ -628,8 +627,8 @@ class ProtoPoke(App):
         self._running_forwarders.clear()
 
     def _rebuild_api_from_state(self, state: ProjectState) -> None:
-        """Replace the ProxyAPI from a loaded ProjectState."""
-        self.api = ProxyAPI(
+        """Replace the ProtoPokeAPI from a loaded ProjectState."""
+        self.api = ProtoPokeAPI(
             forwarders=state.forwarders,
             rules_engine=state.rules_engine,
             intercept_filter=state.intercept_filter,

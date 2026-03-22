@@ -15,7 +15,7 @@ Design:
 Future UI integration:
     A UI layer subscribes to FrameCapturedEvent and SessionOpenedEvent to
     update its display. It doesn't touch the relay or the intercept controller
-    directly — it goes through ProxyAPI.
+    directly — it goes through ProtoPokeAPI.
 
 Future persistence:
     A StorageBackend can subscribe to events and write frames/sessions

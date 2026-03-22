@@ -51,8 +51,8 @@ def _make_tls_stubs() -> None:
 
 _make_tls_stubs()
 
-from protopoke.api import ProxyAPI  # noqa: E402
-from protopoke.config import ProxyConfig  # noqa: E402
+from protopoke.api import ProtoPokeAPI  # noqa: E402
+from protopoke.config import ForwarderConfig  # noqa: E402
 from protopoke.models import Direction  # noqa: E402
 from protopoke.rules.rule import ReplaceRule, InterceptRule, RuleAction  # noqa: E402
 from protopoke.mcp import build_mcp_server  # noqa: E402
@@ -64,13 +64,14 @@ from protopoke.mcp import build_mcp_server  # noqa: E402
 
 @pytest.fixture
 def api():
-    cfg = ProxyConfig(
+    fwd = ForwarderConfig(
+        name="Default",
         listen_port=19999,
         upstream_host="127.0.0.1",
         upstream_port=19998,
         tamper_enabled=True,
     )
-    return ProxyAPI(cfg)
+    return ProtoPokeAPI([fwd])
 
 
 @pytest.fixture

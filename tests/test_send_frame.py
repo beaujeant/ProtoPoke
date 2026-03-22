@@ -9,7 +9,7 @@ import pytest
 
 from protopoke.core.session import SessionRegistry
 from protopoke.forge.engine import ForgeEngine
-from protopoke.forge.models import ForgeRecord
+from protopoke.forge.engine import SendResult
 
 
 def free_port() -> int:
@@ -81,8 +81,8 @@ class TestSendFrame:
         server = await _echo_server_task("127.0.0.1", port)
         async with server:
             rec = await engine.send_frame(b"hello", "127.0.0.1", port)
-        assert isinstance(rec, ForgeRecord)
-        assert rec.id  # non-empty UUID
+        assert isinstance(rec, SendResult)
+        assert rec.success is True
 
     async def test_empty_bytes(self, engine):
         port = free_port()

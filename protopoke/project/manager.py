@@ -42,13 +42,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from ..config import ForwarderConfig, ProxyConfig
+from ..config import ForwarderConfig
 from ..rules.engine import RulesEngine, InterceptFilter
 from ..forge.models import Playbook
 
 # Project format version — bump when the schema changes incompatibly.
 # v3 → v4: config.json (single ProxyConfig) replaced by forwarders.json (list of ForwarderConfig).
-_FORMAT_VERSION = 4
+# v4 → v5: flat ForwarderConfig (no nested ProxyConfig wrapper).
+_FORMAT_VERSION = 5
 
 # Safety limits for ZIP loading.
 _ZIP_MAX_MEMBERS      = 32
@@ -61,7 +62,7 @@ class ProjectState:
     All serialisable state for one project.
 
     Returned by :meth:`ProjectManager.open` so callers can unpack each piece
-    and wire it into the running ProxyAPI.
+    and wire it into the running ProtoPokeAPI.
 
     Attributes:
         forwarders:        List of named forwarder configurations.
@@ -256,31 +257,20 @@ class ProjectManager:
                     for fd in fdata.get("forwarders", [])
                 ]
                 if not self.forwarders:
-                    self.forwarders = [ForwarderConfig(name="Default", enabled=True, config=ProxyConfig())]
+                    self.forwarders = [ForwarderConfig(name="Default", enabled=True)]
             else:
                 # v3 migration: old projects stored a single config.json instead of
-                # forwarders.json.  Wrap it as a single "Default" forwarder so the
-                # rest of the code only needs to deal with the v4 multi-forwarder format.
-                # ProxyConfig.load() requires a file path, so we write the JSON to a
-                # temp file and immediately delete it after loading.
+                # forwarders.json.  Build a ForwarderConfig directly from the legacy
+                # dict so the rest of the code only needs to deal with the current
+                # multi-forwarder format.
                 config_raw = _read("config.json")
                 if config_raw:
-                    import tempfile, os
-                    with tempfile.NamedTemporaryFile(
-                        mode="w", suffix=".json", delete=False, encoding="utf-8"
-                    ) as tmp:
-                        tmp.write(config_raw)
-                        tmp_path = tmp.name
-                    try:
-                        legacy_config = ProxyConfig.load(Path(tmp_path))
-                    finally:
-                        try:
-                            os.unlink(tmp_path)
-                        except OSError:
-                            pass
+                    legacy_data = json.loads(config_raw)
+                    legacy_data.setdefault("name", "Default")
+                    legacy_data.setdefault("enabled", True)
+                    self.forwarders = [ForwarderConfig.from_dict(legacy_data)]
                 else:
-                    legacy_config = ProxyConfig()
-                self.forwarders = [ForwarderConfig(name="Default", enabled=True, config=legacy_config)]
+                    self.forwarders = [ForwarderConfig(name="Default", enabled=True)]
 
             # Rules
             rules_raw = _read("rules.json")
@@ -350,12 +340,17 @@ class ProjectManager:
                 ForwarderConfig.from_dict(fd) for fd in fdata.get("forwarders", [])
             ]
             if not self.forwarders:
-                self.forwarders = [ForwarderConfig(name="Default", enabled=True, config=ProxyConfig())]
+                self.forwarders = [ForwarderConfig(name="Default", enabled=True)]
         else:
             # v3 migration
             config_path = project_dir / "config.json"
-            legacy_config = ProxyConfig.load(config_path) if config_path.exists() else ProxyConfig()
-            self.forwarders = [ForwarderConfig(name="Default", enabled=True, config=legacy_config)]
+            if config_path.exists():
+                legacy_data = json.loads(config_path.read_text(encoding="utf-8"))
+                legacy_data.setdefault("name", "Default")
+                legacy_data.setdefault("enabled", True)
+                self.forwarders = [ForwarderConfig.from_dict(legacy_data)]
+            else:
+                self.forwarders = [ForwarderConfig(name="Default", enabled=True)]
 
         rules_path = project_dir / "rules.json"
         if rules_path.exists():

@@ -30,8 +30,8 @@ import logging
 import sys
 from pathlib import Path
 
-from protopoke.api import ProxyAPI
-from protopoke.config import ProxyConfig
+from protopoke.api import ProtoPokeAPI
+from protopoke.config import ForwarderConfig
 from protopoke.models import TamperedUnit, ParsedMessage
 from protopoke.protocol.display import (
     render_field_tree,
@@ -86,7 +86,7 @@ def coerce_field_value(value_str: str, current_value) -> object:
     return value_str
 
 
-async def intercept_loop(api: ProxyAPI, stop_event: asyncio.Event) -> None:
+async def intercept_loop(api: ProtoPokeAPI, stop_event: asyncio.Event) -> None:
     loop = asyncio.get_running_loop()
 
     while not stop_event.is_set():
@@ -181,7 +181,8 @@ async def intercept_loop(api: ProxyAPI, stop_event: asyncio.Event) -> None:
 async def main() -> None:
     proto_path = sys.argv[1] if len(sys.argv) > 1 else None
 
-    config = ProxyConfig(
+    config = ForwarderConfig(
+        name="Default",
         listen_host="127.0.0.1",
         listen_port=8080,
         upstream_host="127.0.0.1",
@@ -191,7 +192,7 @@ async def main() -> None:
         protocol_definition_path=proto_path,
     )
 
-    api = ProxyAPI(config)
+    api = ProtoPokeAPI([config])
     stop_event = asyncio.Event()
 
     if proto_path:

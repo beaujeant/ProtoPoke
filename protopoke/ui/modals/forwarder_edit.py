@@ -10,7 +10,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Switch, Static
 from textual.containers import Horizontal, Vertical, ScrollableContainer
 
-from ...config import ForwarderConfig, ProxyConfig
+from ...config import ForwarderConfig
 from .file_picker import FilePickerModal
 from .framer_edit import FramerEditModal, FramerSettings
 
@@ -194,24 +194,23 @@ class ForwarderEditModal(ModalScreen):
             self._original_name = forwarder.name
             self._is_new = False
         else:
-            self._forwarder = ForwarderConfig(name="Forwarder", enabled=True, config=ProxyConfig())
+            self._forwarder = ForwarderConfig(name="Forwarder", enabled=True)
             self._original_name = ""
             self._is_new = True
 
         self._existing_names = existing_names or set()
         self._is_running = is_running
-        cfg = self._forwarder.config
-        self._framer_name = cfg.framer_name
-        self._framer_kwargs = dict(cfg.framer_kwargs)
-        self._custom_framer_path = cfg.custom_framer_path
+        self._framer_name = self._forwarder.framer_name
+        self._framer_kwargs = dict(self._forwarder.framer_kwargs)
+        self._custom_framer_path = self._forwarder.custom_framer_path
 
     def compose(self) -> ComposeResult:
-        cfg = self._forwarder.config
+        fwd = self._forwarder
         title = "Add Forwarder" if self._is_new else "Edit Forwarder"
         ifaces = _get_listen_interfaces()
 
         # Determine which interface option to pre-select
-        listen_val = cfg.listen_host
+        listen_val = fwd.listen_host
         iface_values = {v for _, v in ifaces}
         if listen_val not in iface_values:
             # Add the current value as a custom entry
@@ -240,7 +239,7 @@ class ForwarderEditModal(ModalScreen):
                 with Horizontal(classes="field-row"):
                     yield Label("Listen port:", classes="field-label")
                     yield Input(
-                        value=str(cfg.listen_port),
+                        value=str(fwd.listen_port),
                         id="fm-listen-port",
                         restrict=r"\d*",
                         classes="field-input",
@@ -250,11 +249,11 @@ class ForwarderEditModal(ModalScreen):
                 yield Static("  Upstream", classes="section-header")
                 with Horizontal(classes="field-row"):
                     yield Label("Upstream host:", classes="field-label")
-                    yield Input(value=cfg.upstream_host, id="fm-upstream-host", classes="field-input")
+                    yield Input(value=fwd.upstream_host, id="fm-upstream-host", classes="field-input")
                 with Horizontal(classes="field-row"):
                     yield Label("Upstream port:", classes="field-label")
                     yield Input(
-                        value=str(cfg.upstream_port),
+                        value=str(fwd.upstream_port),
                         id="fm-upstream-port",
                         restrict=r"\d*",
                         classes="field-input",
@@ -265,7 +264,7 @@ class ForwarderEditModal(ModalScreen):
                 with Horizontal(classes="field-row"):
                     yield Label("Max sessions (0=∞):", classes="field-label")
                     yield Input(
-                        value=str(cfg.max_sessions),
+                        value=str(fwd.max_sessions),
                         id="fm-max-sessions",
                         restrict=r"\d*",
                         classes="field-input",
@@ -273,7 +272,7 @@ class ForwarderEditModal(ModalScreen):
                 with Horizontal(classes="field-row"):
                     yield Label("Buffer size (bytes):", classes="field-label")
                     yield Input(
-                        value=str(cfg.read_buffer_size),
+                        value=str(fwd.read_buffer_size),
                         id="fm-read-buffer",
                         restrict=r"\d*",
                         classes="field-input",
@@ -283,15 +282,15 @@ class ForwarderEditModal(ModalScreen):
                 yield Static("  SSL/TLS", classes="section-header")
                 with Horizontal(classes="field-row"):
                     yield Label("SSL/TLS client side:", classes="field-label")
-                    yield Switch(value=cfg.tls_listen, id="fm-tls-listen")
+                    yield Switch(value=fwd.tls_listen, id="fm-tls-listen")
                 with Horizontal(classes="field-row"):
                     yield Label("SSL/TLS upstream:", classes="field-label")
-                    yield Switch(value=cfg.tls_upstream, id="fm-tls-upstream")
+                    yield Switch(value=fwd.tls_upstream, id="fm-tls-upstream")
                 with Vertical(id="fm-tls-paths"):
                     with Horizontal(classes="field-row"):
                         yield Label("CA cert path:", classes="field-label")
                         yield Input(
-                            value=cfg.ca_cert_path or "",
+                            value=fwd.ca_cert_path or "",
                             id="fm-ca-cert",
                             placeholder="~/.protopoke/ca.crt",
                             classes="field-input",
@@ -300,7 +299,7 @@ class ForwarderEditModal(ModalScreen):
                     with Horizontal(classes="field-row"):
                         yield Label("CA key path:", classes="field-label")
                         yield Input(
-                            value=cfg.ca_key_path or "",
+                            value=fwd.ca_key_path or "",
                             id="fm-ca-key",
                             placeholder="~/.protopoke/ca.key",
                             classes="field-input",
@@ -309,7 +308,7 @@ class ForwarderEditModal(ModalScreen):
                     with Horizontal(classes="field-row"):
                         yield Label("Manual cert path:", classes="field-label")
                         yield Input(
-                            value=cfg.tls_cert_path or "",
+                            value=fwd.tls_cert_path or "",
                             id="fm-tls-cert",
                             placeholder="(optional override)",
                             classes="field-input",
@@ -318,7 +317,7 @@ class ForwarderEditModal(ModalScreen):
                     with Horizontal(classes="field-row"):
                         yield Label("Manual key path:", classes="field-label")
                         yield Input(
-                            value=cfg.tls_key_path or "",
+                            value=fwd.tls_key_path or "",
                             id="fm-tls-key",
                             placeholder="(optional override)",
                             classes="field-input",
@@ -341,7 +340,7 @@ class ForwarderEditModal(ModalScreen):
                 with Horizontal(classes="field-row"):
                     yield Label("Definition file:", classes="field-label")
                     yield Input(
-                        value=cfg.protocol_definition_path or "",
+                        value=fwd.protocol_definition_path or "",
                         id="fm-proto-def",
                         placeholder="/path/to/protocol.yaml",
                         classes="field-input",
@@ -355,7 +354,7 @@ class ForwarderEditModal(ModalScreen):
 
     def on_mount(self) -> None:
         # Show/hide TLS paths based on the client-side TLS toggle
-        self.query_one("#fm-tls-paths").display = self._forwarder.config.tls_listen
+        self.query_one("#fm-tls-paths").display = self._forwarder.tls_listen
 
         # Disable fields that require a restart when the forwarder is running
         if self._is_running:
@@ -458,22 +457,21 @@ class ForwarderEditModal(ModalScreen):
         fwd = self._forwarder
         fwd.name = name
 
-        cfg = fwd.config
-        cfg.listen_host = _sel("fm-listen-host") or "127.0.0.1"
-        cfg.listen_port = _int("fm-listen-port", 8080)
-        cfg.upstream_host = _str("fm-upstream-host") or "127.0.0.1"
-        cfg.upstream_port = _int("fm-upstream-port", 9090)
-        cfg.max_sessions = _int("fm-max-sessions", 0)
-        cfg.read_buffer_size = _int("fm-read-buffer", 4096)
-        cfg.tls_listen = _sw("fm-tls-listen")
-        cfg.tls_upstream = _sw("fm-tls-upstream")
-        cfg.ca_cert_path = _str("fm-ca-cert") or None
-        cfg.ca_key_path = _str("fm-ca-key") or None
-        cfg.tls_cert_path = _str("fm-tls-cert") or None
-        cfg.tls_key_path = _str("fm-tls-key") or None
-        cfg.framer_name = self._framer_name
-        cfg.framer_kwargs = dict(self._framer_kwargs)
-        cfg.custom_framer_path = self._custom_framer_path
-        cfg.protocol_definition_path = _str("fm-proto-def") or None
+        fwd.listen_host = _sel("fm-listen-host") or "127.0.0.1"
+        fwd.listen_port = _int("fm-listen-port", 8080)
+        fwd.upstream_host = _str("fm-upstream-host") or "127.0.0.1"
+        fwd.upstream_port = _int("fm-upstream-port", 9090)
+        fwd.max_sessions = _int("fm-max-sessions", 0)
+        fwd.read_buffer_size = _int("fm-read-buffer", 4096)
+        fwd.tls_listen = _sw("fm-tls-listen")
+        fwd.tls_upstream = _sw("fm-tls-upstream")
+        fwd.ca_cert_path = _str("fm-ca-cert") or None
+        fwd.ca_key_path = _str("fm-ca-key") or None
+        fwd.tls_cert_path = _str("fm-tls-cert") or None
+        fwd.tls_key_path = _str("fm-tls-key") or None
+        fwd.framer_name = self._framer_name
+        fwd.framer_kwargs = dict(self._framer_kwargs)
+        fwd.custom_framer_path = self._custom_framer_path
+        fwd.protocol_definition_path = _str("fm-proto-def") or None
 
         self.dismiss(fwd)
