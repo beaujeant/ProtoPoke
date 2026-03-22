@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Button, Static
 
 from ...models import Frame, ParsedMessage
@@ -45,9 +45,10 @@ class ParsedView(Vertical):
     ParsedView .view-toolbar Button {
         padding: 0;
     }
-    ParsedView #detail-content {
+    ParsedView #detail-scroll {
         height: 1fr;
-        overflow-y: auto;
+    }
+    ParsedView #detail-content {
         padding: 0 1;
     }
     """
@@ -64,7 +65,8 @@ class ParsedView(Vertical):
             yield Static(self._title, id="view-title")
             yield Button("Hex",    id="btn-hex",    variant="default", flat=True)
             yield Button("Parsed", id="btn-parsed", variant="primary", flat=True)
-        yield Static("", id="detail-content", markup=False)
+        with VerticalScroll(id="detail-scroll"):
+            yield Static("", id="detail-content", markup=False)
 
     def on_mount(self) -> None:
         self.query_one("#btn-parsed", Button).disabled = True
