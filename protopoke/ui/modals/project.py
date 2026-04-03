@@ -2,10 +2,27 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from textual.app import ComposeResult
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Static
 from textual.containers import Horizontal, Vertical
+
+from .file_picker import FilePickerModal
+
+
+def _expand(path: str) -> str:
+    """Expand a leading ~/ to the user's home directory."""
+    return str(Path(path).expanduser())
+
+
+def _expand_pp(path: str) -> str:
+    """Expand ~/ and ensure the path ends with .pp."""
+    p = Path(path).expanduser()
+    if p.suffix.lower() != ".pp":
+        p = p.with_suffix(".pp")
+    return str(p)
 
 
 class NewProjectModal(ModalScreen[str | None]):
@@ -82,12 +99,18 @@ class OpenProjectModal(ModalScreen[str | None]):
     OpenProjectModal Label {
         margin-bottom: 1;
     }
-    OpenProjectModal Input {
-        margin-bottom: 1;
+    OpenProjectModal .field-row {
+        height: 3;
+        margin-bottom: 0;
+        align: left middle;
     }
-    OpenProjectModal .hint {
-        color: $text-muted;
-        margin-bottom: 1;
+    OpenProjectModal .field-input {
+        width: 1fr;
+    }
+    OpenProjectModal .btn-browse {
+        width: 10;
+        min-width: 10;
+        margin-left: 1;
     }
     OpenProjectModal .buttons {
         height: 3;
@@ -104,8 +127,9 @@ class OpenProjectModal(ModalScreen[str | None]):
         with Vertical():
             yield Label("Open Project", classes="modal-title")
             yield Label("Path to .pp file (or legacy directory):")
-            yield Input(placeholder="/path/to/capture.pp", id="project-path")
-            yield Static("Tip: Tab-complete doesn't work here — paste the full path.", classes="hint")
+            with Horizontal(classes="field-row"):
+                yield Input(placeholder="/path/to/capture.pp", id="project-path", classes="field-input")
+                yield Button("Browse", id="btn-browse", classes="btn-browse")
             with Horizontal(classes="buttons"):
                 yield Button("Cancel", variant="default", id="btn-cancel")
                 yield Button("Open", variant="primary", id="btn-open")
@@ -114,15 +138,22 @@ class OpenProjectModal(ModalScreen[str | None]):
         self.query_one("#project-path", Input).focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-open":
-            path = self.query_one("#project-path", Input).value.strip()
-            self.dismiss(path or None)
+        btn_id = event.button.id
+        if btn_id == "btn-browse":
+            current = self.query_one("#project-path", Input).value.strip() or None
+            def _on_pick(path: str | None) -> None:
+                if path is not None:
+                    self.query_one("#project-path", Input).value = path
+            self.app.push_screen(FilePickerModal(current), _on_pick)
+        elif btn_id == "btn-open":
+            raw = self.query_one("#project-path", Input).value.strip()
+            self.dismiss(_expand(raw) if raw else None)
         else:
             self.dismiss(None)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        path = event.value.strip()
-        self.dismiss(path or None)
+        raw = event.value.strip()
+        self.dismiss(_expand(raw) if raw else None)
 
 
 class SaveAsModal(ModalScreen[str | None]):
@@ -143,12 +174,22 @@ class SaveAsModal(ModalScreen[str | None]):
     SaveAsModal Label {
         margin-bottom: 1;
     }
-    SaveAsModal Input {
-        margin-bottom: 1;
+    SaveAsModal .field-row {
+        height: 3;
+        margin-bottom: 0;
+        align: left middle;
+    }
+    SaveAsModal .field-input {
+        width: 1fr;
+    }
+    SaveAsModal .btn-browse {
+        width: 10;
+        min-width: 10;
+        margin-left: 1;
     }
     SaveAsModal .hint {
         color: $text-muted;
-        margin-bottom: 1;
+        margin-top: 1;
     }
     SaveAsModal .buttons {
         height: 3;
@@ -169,7 +210,14 @@ class SaveAsModal(ModalScreen[str | None]):
         with Vertical():
             yield Label("Save Project As", classes="modal-title")
             yield Label("Destination path (.pp file):")
-            yield Input(value=self._default_path, placeholder="~/captures/session1.pp", id="save-path")
+            with Horizontal(classes="field-row"):
+                yield Input(
+                    value=self._default_path,
+                    placeholder="~/captures/session1.pp",
+                    id="save-path",
+                    classes="field-input",
+                )
+                yield Button("Browse", id="btn-browse", classes="btn-browse")
             yield Static("The project is saved as a single ZIP file (.pp).", classes="hint")
             with Horizontal(classes="buttons"):
                 yield Button("Cancel", variant="default", id="btn-cancel")
@@ -179,12 +227,19 @@ class SaveAsModal(ModalScreen[str | None]):
         self.query_one("#save-path", Input).focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-save":
-            path = self.query_one("#save-path", Input).value.strip()
-            self.dismiss(path or None)
+        btn_id = event.button.id
+        if btn_id == "btn-browse":
+            current = self.query_one("#save-path", Input).value.strip() or None
+            def _on_pick(path: str | None) -> None:
+                if path is not None:
+                    self.query_one("#save-path", Input).value = path
+            self.app.push_screen(FilePickerModal(current), _on_pick)
+        elif btn_id == "btn-save":
+            raw = self.query_one("#save-path", Input).value.strip()
+            self.dismiss(_expand_pp(raw) if raw else None)
         else:
             self.dismiss(None)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        path = event.value.strip()
-        self.dismiss(path or None)
+        raw = event.value.strip()
+        self.dismiss(_expand_pp(raw) if raw else None)

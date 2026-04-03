@@ -167,9 +167,12 @@ class ConfigTab(Widget):
 
     def _refresh_table(self) -> None:
         dt = self.query_one("#cfg-table", DataTable)
+        saved_row = dt.cursor_row
         dt.clear()
         for fwd in self._forwarders:
             dt.add_row(*self._row_values(fwd), key=fwd.name)
+        if self._forwarders:
+            dt.move_cursor(row=min(saved_row, len(self._forwarders) - 1))
 
     def _selected_forwarder(self) -> ForwarderConfig | None:
         dt = self.query_one("#cfg-table", DataTable)
@@ -252,6 +255,12 @@ class ConfigTab(Widget):
         if result is None:
             return
         old_name = getattr(self, "_edit_old_name", result.name)
+        # If the forwarder was renamed, migrate running/error state to the new name
+        if result.name != old_name:
+            if old_name in self._running_fwds:
+                self._running_fwds[result.name] = self._running_fwds.pop(old_name)
+            if old_name in self._fwd_errors:
+                self._fwd_errors[result.name] = self._fwd_errors.pop(old_name)
         for i, fwd in enumerate(self._forwarders):
             if fwd.name == old_name:
                 self._forwarders[i] = result
@@ -266,16 +275,13 @@ class ConfigTab(Widget):
         fwd.enabled = not fwd.enabled
         self._refresh_table()
         self.post_message(self.ForwarderEnabled(fwd.name, fwd.enabled))
+        self.query_one("#cfg-table", DataTable).focus()
 
     def _remove_selected(self) -> None:
         fwd = self._selected_forwarder()
         if fwd is None:
             return
-        name = fwd.name
-        self._forwarders = [f for f in self._forwarders if f.name != name]
-        self._running_fwds.pop(name, None)
-        self._refresh_table()
-        self.post_message(self.ForwarderRemoved(name))
+        self.post_message(self.ForwarderRemoved(fwd.name))
 
     # ------------------------------------------------------------------
     # Log level change
@@ -296,6 +302,13 @@ class ConfigTab(Widget):
     # ------------------------------------------------------------------
     # Public API (called by app.py)
     # ------------------------------------------------------------------
+
+    def confirm_remove_forwarder(self, name: str) -> None:
+        """Remove a forwarder from the UI list after the user has confirmed deletion."""
+        self._forwarders = [f for f in self._forwarders if f.name != name]
+        self._running_fwds.pop(name, None)
+        self._fwd_errors.pop(name, None)
+        self._refresh_table()
 
     def load_forwarders(self, forwarders: list[ForwarderConfig]) -> None:
         """Replace the entire forwarder list (e.g. after project open/new)."""

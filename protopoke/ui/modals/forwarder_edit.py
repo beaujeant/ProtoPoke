@@ -155,6 +155,9 @@ class ForwarderEditModal(ModalScreen):
     ForwarderEditModal .buttons Button {
         margin-left: 1;
     }
+    ForwarderEditModal #fm-tls-paths {
+        height: auto;
+    }
     """
 
     # Widget IDs that require a restart and should be disabled while running.
@@ -352,9 +355,19 @@ class ForwarderEditModal(ModalScreen):
                 yield Button("Cancel", variant="default", id="fm-btn-cancel")
                 yield Button("Save", variant="primary", id="fm-btn-save")
 
+    def _set_tls_paths_enabled(self, enabled: bool) -> None:
+        """Enable or disable the TLS cert/key inputs and browse buttons."""
+        tls_ids = ["fm-ca-cert", "fm-ca-key", "fm-tls-cert", "fm-tls-key",
+                   "fm-browse-ca-cert", "fm-browse-ca-key", "fm-browse-tls-cert", "fm-browse-tls-key"]
+        for wid in tls_ids:
+            try:
+                self.query_one(f"#{wid}").disabled = not enabled
+            except Exception:
+                pass
+
     def on_mount(self) -> None:
-        # Show/hide TLS paths based on the client-side TLS toggle
-        self.query_one("#fm-tls-paths").display = self._forwarder.tls_listen
+        # Enable/disable TLS path fields based on the client-side TLS toggle
+        self._set_tls_paths_enabled(self._forwarder.tls_listen)
 
         # Disable fields that require a restart when the forwarder is running
         if self._is_running:
@@ -370,10 +383,7 @@ class ForwarderEditModal(ModalScreen):
 
     def on_switch_changed(self, event: Switch.Changed) -> None:
         if event.switch.id == "fm-tls-listen":
-            try:
-                self.query_one("#fm-tls-paths").display = event.value
-            except Exception:
-                pass
+            self._set_tls_paths_enabled(event.value)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id

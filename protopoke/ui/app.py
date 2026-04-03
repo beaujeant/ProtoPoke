@@ -16,6 +16,7 @@ from ..config import ForwarderConfig
 from ..models import Direction
 from ..events.bus import FrameCapturedEvent, SessionClosedEvent, SessionOpenedEvent, SessionUpdatedEvent, UpstreamConnectionFailedEvent
 from ..project.manager import ProjectManager, ProjectState
+from .modals.confirm import ConfirmModal
 from .modals.project import NewProjectModal, OpenProjectModal, SaveAsModal
 from .tabs.config import ConfigTab
 from .tabs.tamper import TamperTab
@@ -107,10 +108,10 @@ class ProtoPoke(App):
         Binding("f5",           "switch_tab('fuzzer')",    "Fuzzer",    show=True),
         Binding("f6",           "switch_tab('logs')",      "Logs",      show=True),
         Binding("ctrl+f",       "send_to_forge",           "→Forge",    show=False, priority=True),
-        Binding("ctrl+n",       "new_project",             "New",       show=False),
-        Binding("ctrl+o",       "open_project",            "Open",      show=False),
-        Binding("ctrl+s",       "save_project",            "Save",      show=False),
-        Binding("ctrl+shift+s", "save_project_as",         "Save As",   show=False),
+        Binding("ctrl+n",       "new_project",             "New",       show=False, priority=True),
+        Binding("ctrl+o",       "open_project",            "Open",      show=False, priority=True),
+        Binding("ctrl+s",       "save_project",            "Save",      show=False, priority=True),
+        Binding("ctrl+shift+s", "save_project_as",         "Save As",   show=False, priority=True),
         Binding("ctrl+q",       "quit",                    "Quit",      show=True),
     ]
 
@@ -264,6 +265,10 @@ class ProtoPoke(App):
 
     def on_config_tab_forwarder_applied(self, event: ConfigTab.ForwarderApplied) -> None:
         """User applied settings for a specific forwarder."""
+        # Hot-swap name/framer/protocol on the running engine first, while the
+        # engine is still registered under event.old_name.  update_forwarders()
+        # must come after so it finds the engine under its (possibly new) name.
+        self._apply_dynamic_config_for(event.old_name, event.forwarder)
         # Sync the project's forwarder list so that subsequent start/stop
         # cycles pick up the new config (host, port, TLS, etc.).
         for i, fwd in enumerate(self._project.forwarders):
@@ -273,7 +278,6 @@ class ProtoPoke(App):
         self.api.update_forwarders(self._project.forwarders)
         self._project.mark_dirty()
         self._update_title()
-        self._apply_dynamic_config_for(event.old_name, event.forwarder)
 
     def on_config_tab_forwarder_added(self, event: ConfigTab.ForwarderAdded) -> None:
         """User added a new forwarder — keep project in sync and auto-start if enabled."""
@@ -284,18 +288,58 @@ class ProtoPoke(App):
         self._update_title()
         if event.forwarder.enabled:
             self.run_worker(
-                self._start_forwarder(event.forwarder.name), exclusive=False, thread=False
+                self._add_and_start_forwarder(event.forwarder), exclusive=False, thread=False
             )
 
     def on_config_tab_forwarder_removed(self, event: ConfigTab.ForwarderRemoved) -> None:
-        """User removed a forwarder."""
-        self._project.forwarders = [
-            f for f in self._project.forwarders if f.name != event.forwarder_name
+        """User removed a forwarder — confirm if active sessions exist."""
+        name = event.forwarder_name
+        active = [
+            s for s in self.api.session_registry.active_sessions()
+            if s.info.forwarder_name == name
         ]
-        self._running_forwarders.discard(event.forwarder_name)
+        if active:
+            count = len(active)
+            noun = "connection" if count == 1 else "connections"
+            self.app.push_screen(
+                ConfirmModal(
+                    title="Active connections",
+                    body=(
+                        f"Forwarder '{name}' still has {count} active {noun}.\n"
+                        f"Delete anyway and close all {noun}?"
+                    ),
+                    confirm_label="Delete & close",
+                    confirm_variant="error",
+                ),
+                lambda confirmed, _name=name: self._on_remove_confirmed(confirmed, _name),
+            )
+        elif name in self._running_forwarders:
+            self.run_worker(
+                self._stop_and_remove_forwarder(name), exclusive=False, thread=False
+            )
+        else:
+            self._do_remove_forwarder(name)
+
+    def _on_remove_confirmed(self, confirmed: bool, name: str) -> None:
+        if not confirmed:
+            return
+        self.run_worker(
+            self._stop_and_remove_forwarder(name), exclusive=False, thread=False
+        )
+
+    def _do_remove_forwarder(self, name: str) -> None:
+        self.query_one("#config-tab", ConfigTab).confirm_remove_forwarder(name)
+        self._project.forwarders = [
+            f for f in self._project.forwarders if f.name != name
+        ]
+        self._running_forwarders.discard(name)
         self.api.update_forwarders(self._project.forwarders)
         self._project.mark_dirty()
         self._update_title()
+
+    async def _stop_and_remove_forwarder(self, name: str) -> None:
+        await self._stop_forwarder(name)
+        self._do_remove_forwarder(name)
 
     def on_config_tab_forwarder_enabled(self, event: ConfigTab.ForwarderEnabled) -> None:
         """User toggled a forwarder's enabled state — start or stop it."""
@@ -329,6 +373,35 @@ class ProtoPoke(App):
                 pass
         except Exception as exc:
             logger.error("Failed to start forwarder '%s': %s", name, exc)
+
+    async def _add_and_start_forwarder(self, forwarder: ForwarderConfig) -> None:
+        """Try to start a newly added forwarder; remove it on failure."""
+        name = forwarder.name
+        try:
+            self.api.update_forwarders(self._project.forwarders)
+            await self.api.start_forwarder(name)
+            self._running_forwarders.add(name)
+            self._update_title()
+            address = f"{forwarder.listen_host}:{forwarder.listen_port}"
+            self.query_one("#config-tab", ConfigTab).notify_forwarder_running(name, True, address)
+            try:
+                any_tamper = any(f.tamper_enabled for f in self._project.forwarders)
+                self.query_one("#tamper-tab", TamperTab).query_one(
+                    "#tamper-toggle", Switch
+                ).value = any_tamper
+            except Exception:
+                pass
+        except Exception as exc:
+            logger.warning(
+                "Forwarder '%s' could not start listening: %s — forwarder not created", name, exc
+            )
+            self._project.forwarders = [
+                f for f in self._project.forwarders if f.name != name
+            ]
+            self.api.update_forwarders(self._project.forwarders)
+            self.query_one("#config-tab", ConfigTab).confirm_remove_forwarder(name)
+            self._project.mark_dirty()
+            self._update_title()
 
     async def _stop_forwarder(self, name: str) -> None:
         try:
@@ -434,6 +507,12 @@ class ProtoPoke(App):
             return
         try:
             state = self._project.open(path)
+            # Remember which forwarders were enabled in the saved state, then
+            # disable all — _start_forwarders_on_open will re-enable those that
+            # successfully bind.
+            enabled_names = [fwd.name for fwd in state.forwarders if fwd.enabled]
+            for fwd in state.forwarders:
+                fwd.enabled = False
             self._rebuild_api_from_state(state)
             config_tab = self.query_one("#config-tab", ConfigTab)
             config_tab.load_forwarders(state.forwarders)
@@ -448,8 +527,41 @@ class ProtoPoke(App):
                 self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
             self._update_title()
             logger.info("Opened project: %s", state.name)
+            if enabled_names:
+                self.run_worker(
+                    self._start_forwarders_on_open(enabled_names), exclusive=False, thread=False
+                )
         except Exception as exc:
             logger.error("Could not open project: %s", exc)
+
+    async def _start_forwarders_on_open(self, names: list[str]) -> None:
+        """Try to start each forwarder that was enabled when the project was saved."""
+        self.api.update_forwarders(self._project.forwarders)
+        for name in names:
+            fwd = next((f for f in self._project.forwarders if f.name == name), None)
+            if fwd is None:
+                continue
+            try:
+                await self.api.start_forwarder(name)
+                fwd.enabled = True
+                self._running_forwarders.add(name)
+                address = f"{fwd.listen_host}:{fwd.listen_port}"
+                self.query_one("#config-tab", ConfigTab).notify_forwarder_running(
+                    name, True, address
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Could not start forwarder '%s' on project open: %s — left disabled",
+                    name, exc,
+                )
+        self._update_title()
+        try:
+            any_tamper = any(f.tamper_enabled for f in self._project.forwarders)
+            self.query_one("#tamper-tab", TamperTab).query_one(
+                "#tamper-toggle", Switch
+            ).value = any_tamper
+        except Exception:
+            pass
 
     def action_save_project(self) -> None:
         if self._project.path is None:
@@ -460,8 +572,10 @@ class ProtoPoke(App):
             self._project.save()
             self._update_title()
             logger.info("Project saved")
+            self.notify("Project saved", severity="information", timeout=2)
         except Exception as exc:
             logger.error("Save failed: %s", exc)
+            self.notify(f"Save failed: {exc}", severity="error")
 
     def action_save_project_as(self) -> None:
         default = str(self._project.path) if self._project.path else ""
@@ -470,6 +584,21 @@ class ProtoPoke(App):
     def _on_save_as(self, path: str | None) -> None:
         if not path:
             return
+        from pathlib import Path as _Path
+        if _Path(path).exists():
+            self.push_screen(
+                ConfirmModal(
+                    title="File already exists",
+                    body=f"'{path}' already exists.\nOverwrite it?",
+                    confirm_label="Overwrite",
+                    confirm_variant="warning",
+                ),
+                lambda confirmed, _p=path: self._do_save_as(_p) if confirmed else None,
+            )
+        else:
+            self._do_save_as(path)
+
+    def _do_save_as(self, path: str) -> None:
         try:
             self._sync_playbooks()
             self._project.save_as(path)
