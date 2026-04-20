@@ -84,6 +84,17 @@ def _build_regex(pattern: str) -> bytes:
     return bytes(result)
 
 
+def _consume_quantifier_suffix(s: str, i: int, tokens: list[str]) -> int:
+    """If the next non-space char is '+' or '*', fold it into the last token."""
+    j = i
+    while j < len(s) and s[j].isspace():
+        j += 1
+    if j < len(s) and s[j] in ("+", "*"):
+        tokens[-1] = tokens[-1] + s[j]
+        return j + 1
+    return i
+
+
 def _tokenize(pattern: str) -> list[str]:
     """
     Split a pattern string into a list of tokens.
@@ -106,6 +117,12 @@ def _tokenize(pattern: str) -> list[str]:
             i += 1
             continue
 
+        # Anchors: ^ (start of data) and $ (end of data)
+        if s[i] in ("^", "$"):
+            tokens.append(s[i])
+            i += 1
+            continue
+
         # Python regex escape: \xNN
         if s[i:i+2] in ("\\x", "\\X"):
             if i + 4 > len(s):
@@ -121,6 +138,7 @@ def _tokenize(pattern: str) -> list[str]:
                 raise PatternError(f"Unclosed '[' at position {i}")
             tokens.append(s[i:end + 1])
             i = end + 1
+            i = _consume_quantifier_suffix(s, i, tokens)
             continue
 
         # Alternation group: (AB|CD)
@@ -130,6 +148,7 @@ def _tokenize(pattern: str) -> list[str]:
                 raise PatternError(f"Unclosed '(' at position {i}")
             tokens.append(s[i:end + 1])
             i = end + 1
+            i = _consume_quantifier_suffix(s, i, tokens)
             continue
 
         # Quantifier: .{N} or .{N,M}
@@ -145,6 +164,7 @@ def _tokenize(pattern: str) -> list[str]:
         if s[i:i+2] == "??":
             tokens.append("??")
             i += 2
+            i = _consume_quantifier_suffix(s, i, tokens)
             continue
 
         # Hex byte: two hex chars
@@ -154,6 +174,7 @@ def _tokenize(pattern: str) -> list[str]:
         ):
             tokens.append(s[i:i+2].upper())
             i += 2
+            i = _consume_quantifier_suffix(s, i, tokens)
             continue
 
         raise PatternError(
@@ -165,6 +186,16 @@ def _tokenize(pattern: str) -> list[str]:
 
 def _token_to_regex(token: str) -> bytes:
     """Convert a single token string into its bytes-regex fragment."""
+
+    # Anchors
+    if token == "^":
+        return b"\\A"
+    if token == "$":
+        return b"\\Z"
+
+    # Quantifier suffix: recurse on the base token, then reattach + or *
+    if token and token[-1] in ("+", "*"):
+        return _token_to_regex(token[:-1]) + token[-1].encode("ascii")
 
     # Wildcard ??
     if token == "??":

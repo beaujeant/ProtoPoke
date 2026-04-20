@@ -43,13 +43,15 @@ from pathlib import Path
 from typing import Optional
 
 from ..config import ForwarderConfig
+from ..filters.frame_filter import FrameDisplayFilter
 from ..rules.engine import RulesEngine, InterceptFilter
 from ..forge.models import Playbook
 
 # Project format version — bump when the schema changes incompatibly.
 # v3 → v4: config.json (single ProxyConfig) replaced by forwarders.json (list of ForwarderConfig).
 # v4 → v5: flat ForwarderConfig (no nested ProxyConfig wrapper).
-_FORMAT_VERSION = 5
+# v5 → v6: added filters.json (frame display filters).
+_FORMAT_VERSION = 6
 
 # Safety limits for ZIP loading.
 _ZIP_MAX_MEMBERS      = 32
@@ -77,8 +79,9 @@ class ProjectState:
     rules_engine:      RulesEngine
     intercept_filter:  InterceptFilter
     playbooks:         list[Playbook]
-    captured_sessions: list[dict]            = field(default_factory=list)
-    name:              str                   = "Untitled"
+    captured_sessions: list[dict]               = field(default_factory=list)
+    name:              str                      = "Untitled"
+    frame_filters:     list[FrameDisplayFilter] = field(default_factory=list)
 
 
 class ProjectManager:
@@ -101,14 +104,15 @@ class ProjectManager:
     """
 
     def __init__(self) -> None:
-        self.forwarders:        list[ForwarderConfig] = []
-        self.rules_engine:      RulesEngine           = RulesEngine()
-        self.intercept_filter:  InterceptFilter       = InterceptFilter()
-        self.playbooks:         list[Playbook]        = []
-        self.captured_sessions: list[dict]            = []
-        self.name:              str                   = "Untitled"
-        self.path:              Optional[Path]        = None
-        self.is_dirty:          bool                  = False
+        self.forwarders:        list[ForwarderConfig]    = []
+        self.rules_engine:      RulesEngine              = RulesEngine()
+        self.intercept_filter:  InterceptFilter          = InterceptFilter()
+        self.playbooks:         list[Playbook]           = []
+        self.captured_sessions: list[dict]               = []
+        self.frame_filters:     list[FrameDisplayFilter] = []
+        self.name:              str                      = "Untitled"
+        self.path:              Optional[Path]           = None
+        self.is_dirty:          bool                     = False
 
         self._created_at: float = time.time()
         self._saved_at:   float = 0.0
@@ -124,6 +128,7 @@ class ProjectManager:
         self.intercept_filter  = InterceptFilter()
         self.playbooks         = []
         self.captured_sessions = []
+        self.frame_filters     = []
         self.name              = name
         self.path              = None
         self.is_dirty          = False
@@ -196,12 +201,15 @@ class ProjectManager:
 
         forwarders_data = {"forwarders": [f.to_dict() for f in self.forwarders]}
 
+        filters_data = {"filters": [f.to_dict() for f in self.frame_filters]}
+
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("project.json",    json.dumps(meta,             indent=2))
             zf.writestr("forwarders.json", json.dumps(forwarders_data,  indent=2))
             zf.writestr("rules.json",      json.dumps(rules_data,       indent=2))
             zf.writestr("forge.json",      json.dumps(forge_data,       indent=2))
             zf.writestr("logs.json",       json.dumps(logs_data,        indent=2))
+            zf.writestr("filters.json",    json.dumps(filters_data,     indent=2))
 
         self._saved_at = now
         self.is_dirty  = False
@@ -299,6 +307,16 @@ class ProjectManager:
             else:
                 self.captured_sessions = []
 
+            # Frame display filters (v6+) — default to [] for backward compat
+            filters_raw = _read("filters.json")
+            if filters_raw:
+                self.frame_filters = [
+                    FrameDisplayFilter.from_dict(fd)
+                    for fd in json.loads(filters_raw).get("filters", [])
+                ]
+            else:
+                self.frame_filters = []
+
         self.name      = meta.get("name", zip_path.stem)
         self.path      = zip_path
         self.is_dirty  = False
@@ -311,6 +329,7 @@ class ProjectManager:
             playbooks=self.playbooks,
             captured_sessions=self.captured_sessions,
             name=self.name,
+            frame_filters=self.frame_filters,
         )
 
     # ------------------------------------------------------------------
@@ -377,6 +396,15 @@ class ProjectManager:
         else:
             self.captured_sessions = []
 
+        filters_path = project_dir / "filters.json"
+        if filters_path.exists():
+            self.frame_filters = [
+                FrameDisplayFilter.from_dict(fd)
+                for fd in json.loads(filters_path.read_text(encoding="utf-8")).get("filters", [])
+            ]
+        else:
+            self.frame_filters = []
+
         self.name      = meta.get("name", project_dir.stem)
         self.path      = project_dir
         self.is_dirty  = False
@@ -389,6 +417,7 @@ class ProjectManager:
             playbooks=self.playbooks,
             captured_sessions=self.captured_sessions,
             name=self.name,
+            frame_filters=self.frame_filters,
         )
 
     # ------------------------------------------------------------------

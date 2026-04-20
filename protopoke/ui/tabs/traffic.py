@@ -12,8 +12,10 @@ from textual.containers import Horizontal, Vertical
 
 from rich.text import Text
 
+from ...filters.frame_filter import HIDE, SHOW, FrameDisplayFilter
 from ...models import Frame, Direction
 from ...core.session import Session
+from ..modals.frame_filter_modal import FrameFilterModal
 from ..widgets.parsed_view import ParsedView
 
 logger = logging.getLogger(__name__)
@@ -153,6 +155,12 @@ class TrafficTab(Widget):
         # compute the diff so we only update changed rows.
         self._prev_highlighted: set[str] = set()
 
+        # Active frame display filters.
+        self._frame_filters: list[FrameDisplayFilter] = []
+
+        # Reference to the Filters button for label updates.
+        self._filter_button: Button | None = None
+
     def compose(self) -> ComposeResult:
         # Sessions pane
         with Vertical(id="sessions-pane"):
@@ -168,6 +176,9 @@ class TrafficTab(Widget):
                 lbl = Static("  Frames  [Shift+↑↓ to multi-select]")
                 self._frames_label = lbl
                 yield lbl
+                btn = Button("Filters [0]", id="btn-frame-filters", variant="default", flat=True)
+                self._filter_button = btn
+                yield btn
                 yield Button("→ Forge", id="btn-to-forge", variant="default", flat=True)
             yield _FramesTable(id="frames-table", cursor_type="row")
 
@@ -244,13 +255,16 @@ class TrafficTab(Widget):
         self._update_frames_label()
 
         for frame in session.frames:
-            self._add_frame_row(dt, frame)
+            if self._passes_filters(frame):
+                self._add_frame_row(dt, frame)
 
     def add_frame_to_current(self, frame: Frame) -> None:
         """Append a new frame if it belongs to the currently displayed session."""
         if self._current_session_id != frame.session_id:
             return
         if frame.id in self._frame_rows:
+            return
+        if not self._passes_filters(frame):
             return
         dt = self.query_one("#frames-table", DataTable)
         is_first = dt.row_count == 0
@@ -403,6 +417,44 @@ class TrafficTab(Widget):
             self._update_frames_label()
             self._highlight_selection()
 
+    def _passes_filters(self, frame: Frame) -> bool:
+        """Return True if *frame* should be shown given the active filters.
+
+        Hide filters take priority: if any enabled hide-filter matches, the
+        frame is excluded regardless of show-filters.
+
+        Show filters use OR logic: if at least one enabled show-filter exists,
+        the frame must match at least one of them.
+
+        If no filters are enabled the frame is always shown.
+        """
+        active = [f for f in self._frame_filters if f.enabled]
+        if not active:
+            return True
+
+        hide_filters = [f for f in active if f.mode == HIDE]
+        show_filters = [f for f in active if f.mode == SHOW]
+
+        if any(f.matches(frame.raw_bytes) for f in hide_filters):
+            return False
+
+        if show_filters:
+            return any(f.matches(frame.raw_bytes) for f in show_filters)
+
+        return True
+
+    def _update_filter_button(self) -> None:
+        """Keep the Filters button label in sync with the active filter count."""
+        if self._filter_button is None:
+            return
+        n = sum(1 for f in self._frame_filters if f.enabled)
+        self._filter_button.label = f"Filters [{n}]"
+
+    def load_filters(self, filters: list[FrameDisplayFilter]) -> None:
+        """Load filters from a project state (called on project open / new)."""
+        self._frame_filters = list(filters)
+        self._update_filter_button()
+
     def clear_all(self) -> None:
         """Remove all sessions, frames, and reset the detail pane."""
         self.query_one("#sessions-table", DataTable).clear()
@@ -450,6 +502,18 @@ class TrafficTab(Widget):
                 self.app.delete_session(self._current_session_id)
             else:
                 logger.warning("Select a session first")
+
+        elif event.button.id == "btn-frame-filters":
+            event.stop()
+            def _on_filters_done(result: list[FrameDisplayFilter] | None) -> None:
+                if result is not None:
+                    self._frame_filters = result
+                    self._update_filter_button()
+                    if self._current_session_id:
+                        session = self.app.api.get_session(self._current_session_id)
+                        if session:
+                            self.show_frames(session)
+            self.app.push_screen(FrameFilterModal(list(self._frame_filters)), _on_filters_done)
 
         elif event.button.id == "btn-to-forge":
             event.stop()

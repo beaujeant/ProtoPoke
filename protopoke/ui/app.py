@@ -493,7 +493,9 @@ class ProtoPoke(App):
         self._rebuild_api()
         config_tab = self.query_one("#config-tab", ConfigTab)
         config_tab.load_forwarders(self._project.forwarders)
-        self.query_one("#traffic-tab", TrafficTab).clear_all()
+        traffic_tab = self.query_one("#traffic-tab", TrafficTab)
+        traffic_tab.clear_all()
+        traffic_tab.load_filters([])
         self.query_one("#forge-tab", ForgeTab).load_playbooks([])
         self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions([])
         self._update_title()
@@ -520,6 +522,7 @@ class ProtoPoke(App):
             # Restore logs: load sessions+frames into registry, then populate UI
             traffic_tab = self.query_one("#traffic-tab", TrafficTab)
             traffic_tab.clear_all()
+            traffic_tab.load_filters(state.frame_filters)
             if state.captured_sessions:
                 restored = self.api.load_sessions_from_dicts(state.captured_sessions)
                 for session in restored:
@@ -608,7 +611,7 @@ class ProtoPoke(App):
             logger.error("Save failed: %s", exc)
 
     def _sync_playbooks(self) -> None:
-        """Copy the current UI state (forge playbooks, traffic) into the project."""
+        """Copy the current UI state (forge playbooks, traffic, filters) into the project."""
         forge_tab = self.query_one("#forge-tab", ForgeTab)
         forge_tab._save_frame_editor()
         self._project.playbooks = list(forge_tab._playbooks)
@@ -616,6 +619,8 @@ class ProtoPoke(App):
             self.api.session_to_dict(session)
             for session in self.api.list_sessions()
         ]
+        traffic_tab = self.query_one("#traffic-tab", TrafficTab)
+        self._project.frame_filters = list(traffic_tab._frame_filters)
 
     def mark_dirty(self) -> None:
         """Mark the project as having unsaved changes."""

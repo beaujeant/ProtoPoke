@@ -134,7 +134,8 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
                     id="r-pattern",
                 )
                 yield Static(
-                    "Tokens: AB=literal  ??=any byte  [AB-CD]=range  .{N}=N bytes  (AB|CD)=alt",
+                    "AB=literal  ??=any byte  [AB-CD]=range  .{N}=N bytes  (AB|CD)=alt  "
+                    "^=start  $=end  XX+=one+  XX*=zero+",
                     classes="hint",
                 )
                 yield Label("Replacement (hex bytes, e.g. DEADBEEF):")
