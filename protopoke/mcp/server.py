@@ -49,12 +49,21 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
-def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # type: ignore[name-defined]
+def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":  # type: ignore[name-defined]
     """
     Construct and return a FastMCP server bound to *api*.
 
+    The bound API is held in a closure cell so it can be swapped without
+    tearing down the server. The returned server exposes a
+    ``_protopoke_rebind(new_api)`` attribute that callers (typically
+    :class:`~protopoke.mcp.host.MCPHost`) invoke when the UI rebuilds the
+    underlying :class:`~protopoke.api.ProtoPokeAPI` (e.g. after a project
+    reload). Every tool closure reads the current ``api`` from the enclosing
+    scope, so rebinding is a one-line pointer swap and AI clients do not have
+    to reconnect.
+
     Args:
-        api:  A :class:`~protopoke.api.ProxyAPI` instance.  The server does
+        api:  A :class:`~protopoke.api.ProtoPokeAPI` instance.  The server does
               **not** call ``start()`` — the caller is responsible for lifecycle.
         name: Human-readable name for the MCP server (shown to AI clients).
 
@@ -73,6 +82,11 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
     from protopoke.models import Direction
     from protopoke.rules.rule import ReplaceRule, InterceptRule, RuleAction
     from protopoke.forge.models import Playbook, PlaybookFrame, PlaybookRun, TrafficEntry
+
+    def _rebind(new_api: "ProtoPokeAPI") -> None:
+        """Swap the api bound to all tool closures. Called by MCPHost."""
+        nonlocal api
+        api = new_api
 
     mcp = FastMCP(name)
 
@@ -2058,4 +2072,7 @@ def build_mcp_server(api: "ProxyAPI", name: str = "ProtoPoke") -> "FastMCP":  # 
 
         return cfg.to_dict()
 
+    # Expose the rebind hook so MCPHost can swap the bound API without
+    # tearing down the server task.
+    mcp._protopoke_rebind = _rebind
     return mcp

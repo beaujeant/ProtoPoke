@@ -1,21 +1,33 @@
 # MCP Configuration
 
+The MCP server runs **embedded in the ProtoPoke UI process**, bound to the
+same `ProtoPokeAPI` instance. AI clients connect to it over HTTP
+(`streamable-http`) at `http://<host>:<port>/mcp` and share live state with
+the operator: sessions, frames, rules, playbooks, the tamper queue, and
+everything else visible in the TUI.
+
 ## CLI Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--listen-host HOST` | `127.0.0.1` | Proxy bind address |
-| `--listen-port PORT` | `8080` | Proxy listen port |
-| `--upstream-host HOST` | `127.0.0.1` | Target host to forward to |
-| `--upstream-port PORT` | `9090` | Target port to forward to |
-| `--tamper` | off | Enable tamper mode on startup |
-| `--tls-listen` | off | Terminate TLS on the client side (MITM) |
-| `--tls-upstream` | off | Connect to upstream over TLS |
-| `--framer NAME` | `raw` | Framer: `raw`, `delimiter`, or `length_prefix` |
-| `--protocol PATH` | — | Path to a `.yaml`/`.json` protocol definition |
-| `--config PATH` | — | Load a saved `ForwarderConfig` JSON file (CLI flags override file values) |
-| `--log-level LEVEL` | `WARNING` | Python logging level (logs go to stderr) |
-| `--name NAME` | `ProtoPoke` | MCP server name shown to AI clients |
+| `--mcp` | off | Enable the embedded MCP server on startup |
+| `--mcp-host HOST` | `127.0.0.1` | Bind host for the MCP HTTP endpoint |
+| `--mcp-port PORT` | `7878` | Bind port for the MCP HTTP endpoint |
+
+The same settings can be toggled at runtime from the Config tab (Enabled
+switch + Host / Port inputs). They are persisted per-project in the `.pp`
+file (see `mcp.json`).
+
+## Launch
+
+```bash
+pip install -e ".[mcp]"
+protopoke --mcp                          # 127.0.0.1:7878
+protopoke --mcp --mcp-port 7878          # explicit port
+```
+
+Once enabled, `http://127.0.0.1:7878/mcp` is the URL to register with an
+MCP client.
 
 ## Claude Desktop
 
@@ -24,121 +36,47 @@ Add a `protopoke` entry to your Claude Desktop MCP configuration:
 **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 
-### Basic setup
-
 ```json
 {
   "mcpServers": {
     "protopoke": {
-      "command": "protopoke-mcp",
-      "args": [
-        "--upstream-host", "10.0.0.1",
-        "--upstream-port", "9090",
-        "--listen-port", "8080"
-      ]
+      "url": "http://127.0.0.1:7878/mcp"
     }
   }
 }
 ```
 
-### With TLS and protocol definition
-
-```json
-{
-  "mcpServers": {
-    "protopoke": {
-      "command": "protopoke-mcp",
-      "args": [
-        "--upstream-host", "api.example.com",
-        "--upstream-port", "443",
-        "--tls-listen",
-        "--tls-upstream",
-        "--protocol", "/path/to/myproto.yaml",
-        "--tamper"
-      ]
-    }
-  }
-}
-```
-
-Restart Claude Desktop after editing. A hammer icon will appear in the chat input bar when the server is connected.
+Start the TUI first (`protopoke --mcp`), then restart Claude Desktop. A
+hammer icon will appear in the chat input bar when the server is connected.
 
 ## Claude Code
 
-Add ProtoPoke to your project's `.mcp.json` or `~/.claude/mcp.json`:
+```bash
+claude mcp add --transport http protopoke http://127.0.0.1:7878/mcp
+```
+
+Or add it directly to `.mcp.json` / `~/.claude/mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "protopoke": {
-      "command": "protopoke-mcp",
-      "args": ["--upstream-host", "10.0.0.1", "--upstream-port", "9090"]
+      "transport": "http",
+      "url": "http://127.0.0.1:7878/mcp"
     }
   }
 }
-```
-
-Or add it from the CLI:
-
-```bash
-claude mcp add protopoke -- protopoke-mcp --upstream-host 10.0.0.1 --upstream-port 9090
-```
-
-## OpenAI Agents SDK
-
-OpenAI's [Agents SDK](https://github.com/openai/openai-agents-python) has native MCP support:
-
-```bash
-pip install openai-agents "protopoke[mcp]"
-```
-
-```python
-import asyncio
-from agents import Agent, Runner
-from agents.mcp import MCPServerStdio
-
-async def main():
-    async with MCPServerStdio(
-        name="ProtoPoke",
-        params={
-            "command": "protopoke-mcp",
-            "args": [
-                "--upstream-host", "10.0.0.1",
-                "--upstream-port", "9090",
-                "--listen-port", "8080",
-                "--tamper",
-            ],
-        },
-    ) as mcp_server:
-        agent = Agent(
-            name="ProxyAnalyst",
-            instructions=(
-                "You are a security researcher analysing binary protocol traffic "
-                "captured by a ProtoPoke proxy. Use the available tools to inspect "
-                "sessions, decode frames, intercept and modify packets, and replay "
-                "traffic as needed."
-            ),
-            mcp_servers=[mcp_server],
-        )
-
-        result = await Runner.run(
-            agent,
-            "List all captured sessions and decode the frames in the first one."
-        )
-        print(result.final_output)
-
-asyncio.run(main())
 ```
 
 ## Programmatic Usage
 
-Build the MCP server directly in Python:
+Build and embed the MCP server yourself (e.g. for custom hosting):
 
 ```python
 import asyncio
 from protopoke.api import ProtoPokeAPI
 from protopoke.config import ForwarderConfig
-from protopoke.mcp.server import build_mcp_server
+from protopoke.mcp.host import MCPHost, MCPSettings
 
 async def main():
     fwd = ForwarderConfig(
@@ -151,8 +89,25 @@ async def main():
     api = ProtoPokeAPI([fwd])
     await api.start()
 
-    mcp = build_mcp_server(api, name="ProtoPoke")
-    await mcp.run_async()  # serves over stdio until disconnected
+    host = MCPHost(api, MCPSettings(enabled=True, host="127.0.0.1", port=7878))
+    await host.start()
+
+    try:
+        await asyncio.Event().wait()  # run forever
+    finally:
+        await host.stop()
+        await api.stop()
 
 asyncio.run(main())
+```
+
+If you just need the raw `FastMCP` instance (for example to mount it under
+another ASGI app), call `build_mcp_server(api)` directly:
+
+```python
+from protopoke.mcp.server import build_mcp_server
+
+mcp = build_mcp_server(api, name="ProtoPoke")
+# mcp is a FastMCP instance; call mcp.run_async(transport="streamable-http")
+# or embed it via mcp.settings.host / mcp.settings.port.
 ```

@@ -73,7 +73,8 @@ protopoke/
 │
 ├── mcp/
 │   ├── server.py       build_mcp_server() — 50+ MCP tools
-│   └── runner.py       CLI entry point for protopoke-mcp
+│   └── host.py         MCPHost — embedded server lifecycle (start/stop/
+│                       rebind) running inside the Textual app process
 │
 └── ui/
     ├── app.py          ProtoPoke(App) — Textual root + event bridge

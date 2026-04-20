@@ -31,13 +31,17 @@ pip install "protopoke[all]"
 
 ## Launching
 
-The MCP server starts the proxy and communicates over **stdio** (standard MCP transport):
+The MCP server runs **embedded inside the ProtoPoke TUI**, bound to the same
+`ProtoPokeAPI` instance the UI uses. It is served over **streamable-http**
+at `http://<host>:<port>/mcp`, so the AI client sees the same live state as
+the operator.
 
 ```bash
-protopoke-mcp \
-  --upstream-host 10.0.0.1 \
-  --upstream-port 9090 \
-  --listen-port 8080
+# Enable on startup (default 127.0.0.1:7878)
+protopoke --mcp
+
+# Or from the Config tab in the running TUI — toggle the "MCP" switch.
 ```
 
-See [Configuration](configuration.md) for all CLI flags and integration guides.
+Connect an AI client to `http://127.0.0.1:7878/mcp`. See
+[Configuration](configuration.md) for all CLI flags and integration guides.

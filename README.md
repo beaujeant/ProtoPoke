@@ -22,23 +22,32 @@ protopoke
 
 ## MCP Server
 
-Install with MCP support and launch:
+The MCP server is **embedded in the TUI process** and bound to the same
+`ProtoPokeAPI` instance that the UI uses, so an AI assistant sees and mutates
+the exact same sessions, rules, and traffic that the operator sees on screen.
+It is served over streamable-http on `http://<host>:<port>/mcp`.
+
+Install with MCP support and launch the TUI with the server enabled:
 
 ```bash
 pip install -e ".[mcp]"
-protopoke-mcp --upstream-host 10.0.0.1 --upstream-port 9090
+protopoke --mcp                          # 127.0.0.1:7878 by default
+protopoke --mcp --mcp-port 7878          # custom port
 ```
+
+The server can also be toggled at runtime from the Config tab (Switch +
+Host / Port inputs). The setting is persisted per-project in the `.pp` file.
 
 ### Claude Desktop
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
+or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 
 ```json
 {
   "mcpServers": {
     "protopoke": {
-      "command": "protopoke-mcp",
-      "args": ["--upstream-host", "10.0.0.1", "--upstream-port", "9090"]
+      "url": "http://127.0.0.1:7878/mcp"
     }
   }
 }
@@ -47,8 +56,10 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 ### Claude Code
 
 ```bash
-claude mcp add protopoke -- protopoke-mcp --upstream-host 10.0.0.1 --upstream-port 9090
+claude mcp add --transport http protopoke http://127.0.0.1:7878/mcp
 ```
+
+Start the TUI with `protopoke --mcp` before connecting.
 
 ## Quick Start
 

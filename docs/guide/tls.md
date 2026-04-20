@@ -32,12 +32,12 @@ Client ──TLS──▶ ProtoPoke ──TLS (optional)──▶ Upstream
     )
     ```
 
-=== "MCP CLI"
+=== "MCP"
 
-    ```bash
-    protopoke-mcp --tls-listen --tls-upstream \
-        --upstream-host api.example.com --upstream-port 443
-    ```
+    The MCP server runs embedded in the UI; configure TLS on the forwarder
+    in the Config tab (or via the ``update_forwarder`` MCP tool), then start
+    the forwarder. Launch with ``protopoke --mcp`` to expose the server at
+    ``http://127.0.0.1:7878/mcp``.
 
 ## Installing the CA Certificate
 
