@@ -113,6 +113,14 @@ class ConfigTab(Widget):
         width: auto;
         padding: 0 1;
     }
+    ConfigTab .mcp-row Switch {
+        padding: 0;
+        border: none;
+    }
+    ConfigTab .mcp-row Switch > .switch--slider {
+        color: dodgerblue;
+        background: darkslateblue;
+    }
     ConfigTab .mcp-row Input {
         width: 20;
         margin-right: 1;
@@ -120,7 +128,6 @@ class ConfigTab(Widget):
     ConfigTab #mcp-url {
         width: 1fr;
         color: $text-muted;
-        padding: 1 1 0 1;
     }
     """
 
@@ -164,9 +171,9 @@ class ConfigTab(Widget):
                 yield Label("Enabled:")
                 yield Switch(value=self._mcp_settings.enabled, id="mcp-enabled")
                 yield Label("Host:")
-                yield Input(value=self._mcp_settings.host, id="mcp-host")
+                yield Input(value=self._mcp_settings.host, id="mcp-host", compact=True)
                 yield Label("Port:")
-                yield Input(value=str(self._mcp_settings.port), id="mcp-port")
+                yield Input(value=str(self._mcp_settings.port), id="mcp-port", compact=True)
             yield Static(self._format_mcp_url(), id="mcp-url")
 
     def on_mount(self) -> None:
