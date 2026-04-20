@@ -36,9 +36,15 @@ pytest -k test_length_prefix    # one test
 # Launch the TUI
 protopoke
 
-# Launch the MCP server
-protopoke-mcp
+# Launch the TUI with the embedded MCP server enabled on 127.0.0.1:7878
+protopoke --mcp
+protopoke --mcp --mcp-host 127.0.0.1 --mcp-port 7878
 ```
+
+The MCP server runs inside the UI process and shares the same `ProtoPokeAPI`
+state, so an AI client connected to `http://127.0.0.1:7878/mcp` sees every
+session, rule, and frame visible in the UI and vice versa. The server can
+also be toggled at runtime from the Config tab.
 
 Tests use `pytest-asyncio` with `asyncio_mode = "auto"` (no `@pytest.mark.asyncio`
 needed — all `async def test_*` functions run automatically).
@@ -126,7 +132,9 @@ protopoke/
 │
 ├── mcp/
 │   ├── server.py       build_mcp_server() — 50+ MCP tools wrapping ProtoPokeAPI
-│   └── runner.py       CLI entry point for protopoke-mcp
+│   └── host.py         MCPHost — embedded MCP server lifecycle (start/stop/
+│                       rebind), used by the Textual app to serve tools over
+│                       streamable-http in the same process as the UI
 │
 └── ui/
     ├── app.py          ProtoPoke(App) — Textual root; event bridge between

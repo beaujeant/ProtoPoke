@@ -44,6 +44,7 @@ from typing import Optional
 
 from ..config import ForwarderConfig
 from ..filters.frame_filter import FrameDisplayFilter
+from ..mcp.host import MCPSettings
 from ..rules.engine import RulesEngine, InterceptFilter
 from ..forge.models import Playbook
 
@@ -51,7 +52,8 @@ from ..forge.models import Playbook
 # v3 → v4: config.json (single ProxyConfig) replaced by forwarders.json (list of ForwarderConfig).
 # v4 → v5: flat ForwarderConfig (no nested ProxyConfig wrapper).
 # v5 → v6: added filters.json (frame display filters).
-_FORMAT_VERSION = 6
+# v6 → v7: added mcp.json (embedded MCP server settings).
+_FORMAT_VERSION = 7
 
 # Safety limits for ZIP loading.
 _ZIP_MAX_MEMBERS      = 32
@@ -82,6 +84,7 @@ class ProjectState:
     captured_sessions: list[dict]               = field(default_factory=list)
     name:              str                      = "Untitled"
     frame_filters:     list[FrameDisplayFilter] = field(default_factory=list)
+    mcp_settings:      MCPSettings              = field(default_factory=MCPSettings)
 
 
 class ProjectManager:
@@ -110,6 +113,7 @@ class ProjectManager:
         self.playbooks:         list[Playbook]           = []
         self.captured_sessions: list[dict]               = []
         self.frame_filters:     list[FrameDisplayFilter] = []
+        self.mcp_settings:      MCPSettings              = MCPSettings()
         self.name:              str                      = "Untitled"
         self.path:              Optional[Path]           = None
         self.is_dirty:          bool                     = False
@@ -129,6 +133,7 @@ class ProjectManager:
         self.playbooks         = []
         self.captured_sessions = []
         self.frame_filters     = []
+        self.mcp_settings      = MCPSettings()
         self.name              = name
         self.path              = None
         self.is_dirty          = False
@@ -203,6 +208,8 @@ class ProjectManager:
 
         filters_data = {"filters": [f.to_dict() for f in self.frame_filters]}
 
+        mcp_data = self.mcp_settings.to_dict()
+
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("project.json",    json.dumps(meta,             indent=2))
             zf.writestr("forwarders.json", json.dumps(forwarders_data,  indent=2))
@@ -210,6 +217,7 @@ class ProjectManager:
             zf.writestr("forge.json",      json.dumps(forge_data,       indent=2))
             zf.writestr("logs.json",       json.dumps(logs_data,        indent=2))
             zf.writestr("filters.json",    json.dumps(filters_data,     indent=2))
+            zf.writestr("mcp.json",        json.dumps(mcp_data,         indent=2))
 
         self._saved_at = now
         self.is_dirty  = False
@@ -317,6 +325,13 @@ class ProjectManager:
             else:
                 self.frame_filters = []
 
+            # Embedded MCP server settings (v7+) — default disabled
+            mcp_raw = _read("mcp.json")
+            if mcp_raw:
+                self.mcp_settings = MCPSettings.from_dict(json.loads(mcp_raw))
+            else:
+                self.mcp_settings = MCPSettings()
+
         self.name      = meta.get("name", zip_path.stem)
         self.path      = zip_path
         self.is_dirty  = False
@@ -330,6 +345,7 @@ class ProjectManager:
             captured_sessions=self.captured_sessions,
             name=self.name,
             frame_filters=self.frame_filters,
+            mcp_settings=self.mcp_settings,
         )
 
     # ------------------------------------------------------------------
@@ -405,6 +421,14 @@ class ProjectManager:
         else:
             self.frame_filters = []
 
+        mcp_path = project_dir / "mcp.json"
+        if mcp_path.exists():
+            self.mcp_settings = MCPSettings.from_dict(
+                json.loads(mcp_path.read_text(encoding="utf-8"))
+            )
+        else:
+            self.mcp_settings = MCPSettings()
+
         self.name      = meta.get("name", project_dir.stem)
         self.path      = project_dir
         self.is_dirty  = False
@@ -418,6 +442,7 @@ class ProjectManager:
             captured_sessions=self.captured_sessions,
             name=self.name,
             frame_filters=self.frame_filters,
+            mcp_settings=self.mcp_settings,
         )
 
     # ------------------------------------------------------------------

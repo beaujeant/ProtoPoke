@@ -13,6 +13,7 @@ from textual.widgets import Footer, Header, Switch, TabbedContent, TabPane
 
 from ..api import ProtoPokeAPI
 from ..config import ForwarderConfig
+from ..mcp.host import MCPHost, MCPSettings
 from ..models import Direction
 from ..events.bus import FrameCapturedEvent, SessionClosedEvent, SessionOpenedEvent, SessionUpdatedEvent, UpstreamConnectionFailedEvent
 from ..project.manager import ProjectManager, ProjectState
@@ -131,6 +132,7 @@ class ProtoPoke(App):
     def __init__(
         self,
         project: Optional[ProjectManager] = None,
+        mcp_settings: Optional[MCPSettings] = None,
     ) -> None:
         super().__init__()
         self._project = project or ProjectManager()
@@ -143,6 +145,14 @@ class ProtoPoke(App):
         # Track which forwarder names are currently running
         self._running_forwarders: set[str] = set()
 
+        # Embedded MCP server bound to this app's ProtoPokeAPI.  The host
+        # closes over ``lambda: self.api`` so that project reloads (which
+        # reassign ``self.api``) propagate automatically via ``rebind``.
+        self._mcp_host = MCPHost(
+            lambda: self.api,
+            settings=mcp_settings or self._project_mcp_settings(),
+        )
+
     # ------------------------------------------------------------------
     # Compose
     # ------------------------------------------------------------------
@@ -151,7 +161,11 @@ class ProtoPoke(App):
         yield Header()
         with TabbedContent(id="tabs"):
             with TabPane("Config [F1]", id="config"):
-                yield ConfigTab(self._project.forwarders, id="config-tab")
+                yield ConfigTab(
+                    self._project.forwarders,
+                    self._mcp_host.settings,
+                    id="config-tab",
+                )
             with TabPane("Traffic [F2]", id="traffic"):
                 yield TrafficTab(id="traffic-tab")
             with TabPane("Tamper [F3]", id="tamper"):
@@ -169,6 +183,22 @@ class ProtoPoke(App):
         self._update_title()
         # Start polling the intercept queue in the background
         self.set_interval(0.2, self._poll_intercept_queue)
+        # Launch the embedded MCP server if it is enabled.  The host is a
+        # no-op when ``settings.enabled`` is False, so this is safe to call
+        # unconditionally.
+        self.run_worker(
+            self._mcp_host.start(),
+            name="mcp-host-start",
+            exclusive=False,
+            thread=False,
+        )
+
+    async def on_unmount(self) -> None:
+        """Stop the embedded MCP server cleanly on app shutdown."""
+        try:
+            await self._mcp_host.stop()
+        except Exception:
+            logger.exception("Failed to stop MCP host on app shutdown")
 
     # ------------------------------------------------------------------
     # Proxy event → Textual message bridge
@@ -350,6 +380,15 @@ class ProtoPoke(App):
         elif not event.enabled and name in self._running_forwarders:
             self.run_worker(self._stop_forwarder(name), exclusive=False, thread=False)
 
+    def on_config_tab_mcp_settings_changed(self, event: ConfigTab.MCPSettingsChanged) -> None:
+        """User edited the embedded MCP server settings — apply them."""
+        self.run_worker(
+            self.apply_mcp_settings(event.settings),
+            name="mcp-apply",
+            exclusive=False,
+            thread=False,
+        )
+
     async def _start_forwarder(self, name: str) -> None:
         try:
             # Sync the API's forwarder list (config may have changed since last start)
@@ -493,6 +532,7 @@ class ProtoPoke(App):
         self._rebuild_api()
         config_tab = self.query_one("#config-tab", ConfigTab)
         config_tab.load_forwarders(self._project.forwarders)
+        config_tab.load_mcp_settings(self._project_mcp_settings())
         traffic_tab = self.query_one("#traffic-tab", TrafficTab)
         traffic_tab.clear_all()
         traffic_tab.load_filters([])
@@ -516,8 +556,16 @@ class ProtoPoke(App):
             for fwd in state.forwarders:
                 fwd.enabled = False
             self._rebuild_api_from_state(state)
+            # Apply project-persisted MCP settings to the host if they changed.
+            self.run_worker(
+                self._mcp_host.apply(self._project_mcp_settings()),
+                name="mcp-apply-on-open",
+                exclusive=False,
+                thread=False,
+            )
             config_tab = self.query_one("#config-tab", ConfigTab)
             config_tab.load_forwarders(state.forwarders)
+            config_tab.load_mcp_settings(self._project_mcp_settings())
             self.query_one("#forge-tab", ForgeTab).load_playbooks(state.playbooks)
             # Restore logs: load sessions+frames into registry, then populate UI
             traffic_tab = self.query_one("#traffic-tab", TrafficTab)
@@ -766,6 +814,8 @@ class ProtoPoke(App):
         )
         self._register_event_handlers()
         self._running_forwarders.clear()
+        # Re-point the live MCP server (if any) at the new API instance.
+        self._mcp_host.rebind(self.api)
 
     def _rebuild_api_from_state(self, state: ProjectState) -> None:
         """Replace the ProtoPokeAPI from a loaded ProjectState."""
@@ -776,6 +826,19 @@ class ProtoPoke(App):
         )
         self._register_event_handlers()
         self._running_forwarders.clear()
+        self._mcp_host.rebind(self.api)
+
+    def _project_mcp_settings(self) -> MCPSettings:
+        """Read MCP settings from the current project (or defaults)."""
+        settings = getattr(self._project, "mcp_settings", None)
+        return settings if isinstance(settings, MCPSettings) else MCPSettings()
+
+    async def apply_mcp_settings(self, new_settings: MCPSettings) -> None:
+        """Persist and apply new MCP settings (called from the Config tab)."""
+        self._project.mcp_settings = new_settings
+        self._project.mark_dirty()
+        await self._mcp_host.apply(new_settings)
+        self._update_title()
 
 
 # ---------------------------------------------------------------------------
@@ -784,23 +847,52 @@ class ProtoPoke(App):
 
 def main() -> None:
     """
-    Launch the ProtoPoke TUI, or the MCP server when ``--mcp`` is passed.
+    Launch the ProtoPoke TUI with optional embedded MCP server.
 
-    When run as ``protopoke --mcp [options]`` the TUI is skipped and the
-    proxy + MCP server starts instead (identical to ``protopoke-mcp``).
-    Pass ``--help`` after ``--mcp`` to see MCP-specific options.
+    The MCP server runs as a background asyncio task inside the UI process
+    bound to the same :class:`~protopoke.api.ProtoPokeAPI` that the UI uses,
+    so an AI client connected over HTTP sees the same sessions, rules, and
+    traffic that the operator sees on screen.
+
+    Flags:
+        --mcp                  Enable the embedded MCP server on startup
+                               (overrides the project's persisted setting).
+        --mcp-host HOST        Bind host for the MCP server (default 127.0.0.1).
+        --mcp-port PORT        Bind port for the MCP server (default 7878).
+
+    The server can also be toggled at runtime from the Config tab.
     """
-    import sys
+    import argparse
 
-    if "--mcp" in sys.argv:
-        # Strip --mcp from argv and hand the rest to the MCP runner
-        mcp_argv = [a for a in sys.argv[1:] if a != "--mcp"]
-        from ..mcp.runner import main as mcp_main
-        mcp_main(mcp_argv)
-        return
+    parser = argparse.ArgumentParser(
+        prog="protopoke",
+        description="ProtoPoke — binary protocol proxy and analysis TUI.",
+    )
+    parser.add_argument(
+        "--mcp", action="store_true",
+        help="Enable the embedded MCP server on startup.",
+    )
+    parser.add_argument(
+        "--mcp-host", default=None, metavar="HOST",
+        help="MCP server bind host (default: 127.0.0.1).",
+    )
+    parser.add_argument(
+        "--mcp-port", type=int, default=None, metavar="PORT",
+        help="MCP server bind port (default: 7878).",
+    )
+    args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
-    app = ProtoPoke()
+
+    mcp_override: Optional[MCPSettings] = None
+    if args.mcp or args.mcp_host is not None or args.mcp_port is not None:
+        mcp_override = MCPSettings(
+            enabled=bool(args.mcp),
+            host=args.mcp_host if args.mcp_host is not None else "127.0.0.1",
+            port=args.mcp_port if args.mcp_port is not None else 7878,
+        )
+
+    app = ProtoPoke(mcp_settings=mcp_override)
     app.run()
 
 

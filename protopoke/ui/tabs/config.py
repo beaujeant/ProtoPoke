@@ -6,11 +6,12 @@ import logging
 
 from textual.app import ComposeResult
 from textual.widget import Widget
-from textual.widgets import Button, DataTable, Label, Select, Static
+from textual.widgets import Button, DataTable, Input, Label, Select, Static, Switch
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
 
 from ...config import ForwarderConfig
+from ...mcp.host import MCPSettings
 from ..modals.forwarder_edit import ForwarderEditModal
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,12 @@ class ConfigTab(Widget):
             self.forwarder_name = forwarder_name
             self.enabled = enabled
 
+    class MCPSettingsChanged(Message):
+        """User changed the embedded MCP server settings."""
+        def __init__(self, settings: MCPSettings) -> None:
+            super().__init__()
+            self.settings = settings
+
 
     # -- CSS ----------------------------------------------------------------
 
@@ -97,11 +104,30 @@ class ConfigTab(Widget):
     ConfigTab .cfg-buttons Select {
         width: 20;
     }
+    ConfigTab .mcp-row {
+        height: 3;
+        margin: 0 1;
+        align: left middle;
+    }
+    ConfigTab .mcp-row Label {
+        width: auto;
+        padding: 0 1;
+    }
+    ConfigTab .mcp-row Input {
+        width: 20;
+        margin-right: 1;
+    }
+    ConfigTab #mcp-url {
+        width: 1fr;
+        color: $text-muted;
+        padding: 1 1 0 1;
+    }
     """
 
     def __init__(
         self,
         forwarders: list[ForwarderConfig],
+        mcp_settings: MCPSettings | None = None,
         *,
         name: str | None = None,
         id: str | None = None,
@@ -113,6 +139,7 @@ class ConfigTab(Widget):
         self._running_fwds: dict[str, str] = {}
         # Track last upstream error per forwarder name (empty string = no error)
         self._fwd_errors: dict[str, str] = {}
+        self._mcp_settings: MCPSettings = mcp_settings or MCPSettings()
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -131,6 +158,16 @@ class ConfigTab(Widget):
                     value="INFO",
                     id="cfg-log-level",
                 )
+
+            yield Static("  MCP (AI control)", classes="pane-header")
+            with Horizontal(classes="mcp-row"):
+                yield Label("Enabled:")
+                yield Switch(value=self._mcp_settings.enabled, id="mcp-enabled")
+                yield Label("Host:")
+                yield Input(value=self._mcp_settings.host, id="mcp-host")
+                yield Label("Port:")
+                yield Input(value=str(self._mcp_settings.port), id="mcp-port")
+            yield Static(self._format_mcp_url(), id="mcp-url")
 
     def on_mount(self) -> None:
         dt = self.query_one("#cfg-table", DataTable)
@@ -300,8 +337,65 @@ class ConfigTab(Widget):
                 logger.info("Log level changed to %s", level)
 
     # ------------------------------------------------------------------
+    # MCP settings
+    # ------------------------------------------------------------------
+
+    def _format_mcp_url(self) -> str:
+        status = "[enabled]" if self._mcp_settings.enabled else "[disabled]"
+        return f"  URL: {self._mcp_settings.url()}   {status}"
+
+    def _refresh_mcp_url(self) -> None:
+        try:
+            self.query_one("#mcp-url", Static).update(self._format_mcp_url())
+        except Exception:
+            pass
+
+    def _emit_mcp_settings(self) -> None:
+        self.post_message(self.MCPSettingsChanged(self._mcp_settings))
+        self._refresh_mcp_url()
+
+    def on_switch_changed(self, event: Switch.Changed) -> None:
+        if event.switch.id == "mcp-enabled":
+            self._mcp_settings.enabled = event.value
+            self._emit_mcp_settings()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Apply host/port changes on Enter."""
+        if event.input.id == "mcp-host":
+            new_host = event.value.strip() or "127.0.0.1"
+            if new_host == self._mcp_settings.host:
+                return
+            self._mcp_settings.host = new_host
+            self._emit_mcp_settings()
+        elif event.input.id == "mcp-port":
+            try:
+                new_port = int(event.value.strip())
+            except ValueError:
+                logger.warning("Invalid MCP port: %r", event.value)
+                return
+            if not (1 <= new_port <= 65535):
+                logger.warning("MCP port out of range: %d", new_port)
+                return
+            if new_port == self._mcp_settings.port:
+                return
+            self._mcp_settings.port = new_port
+            self._emit_mcp_settings()
+
+    # ------------------------------------------------------------------
     # Public API (called by app.py)
     # ------------------------------------------------------------------
+
+    def load_mcp_settings(self, settings: MCPSettings) -> None:
+        """Replace the displayed MCP settings (e.g. after project open)."""
+        self._mcp_settings = settings
+        try:
+            self.query_one("#mcp-enabled", Switch).value = settings.enabled
+            self.query_one("#mcp-host",    Input).value  = settings.host
+            self.query_one("#mcp-port",    Input).value  = str(settings.port)
+        except Exception:
+            # Widgets not yet composed — _refresh_mcp_url runs after on_mount.
+            pass
+        self._refresh_mcp_url()
 
     def confirm_remove_forwarder(self, name: str) -> None:
         """Remove a forwarder from the UI list after the user has confirmed deletion."""
