@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from typing import Optional
 
 from textual.app import App, ComposeResult
@@ -163,7 +164,7 @@ class ProtoPoke(App):
             with TabPane("Config [F1]", id="config"):
                 yield ConfigTab(
                     self._project.forwarders,
-                    self._mcp_host.settings,
+                    replace(self._mcp_host.settings),
                     id="config-tab",
                 )
             with TabPane("Traffic [F2]", id="traffic"):
@@ -380,14 +381,13 @@ class ProtoPoke(App):
         elif not event.enabled and name in self._running_forwarders:
             self.run_worker(self._stop_forwarder(name), exclusive=False, thread=False)
 
-    def on_config_tab_mcp_settings_changed(self, event: ConfigTab.MCPSettingsChanged) -> None:
+    async def on_config_tab_mcpsettings_changed(self, event: ConfigTab.MCPSettingsChanged) -> None:
         """User edited the embedded MCP server settings — apply them."""
-        self.run_worker(
-            self.apply_mcp_settings(event.settings),
-            name="mcp-apply",
-            exclusive=False,
-            thread=False,
-        )
+        logger.debug("MCPSettingsChanged received: enabled=%s", event.settings.enabled)
+        try:
+            await self.apply_mcp_settings(event.settings)
+        except Exception:
+            logger.exception("apply_mcp_settings failed")
 
     async def _start_forwarder(self, name: str) -> None:
         try:
@@ -883,6 +883,7 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
+    logging.getLogger().setLevel(logging.INFO)
 
     mcp_override: Optional[MCPSettings] = None
     if args.mcp or args.mcp_host is not None or args.mcp_port is not None:

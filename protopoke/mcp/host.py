@@ -95,7 +95,7 @@ class MCPHost:
         settings: Optional[MCPSettings] = None,
     ) -> None:
         self._initial_provider = api_provider
-        self._settings: MCPSettings = settings or MCPSettings()
+        self._settings: MCPSettings = replace(settings) if settings else MCPSettings()
         self._server: Any = None
         self._task: Optional[asyncio.Task] = None
         self._current_api: Optional[ProtoPokeAPI] = None
@@ -141,12 +141,14 @@ class MCPHost:
         self._server.settings.host = self._settings.host
         self._server.settings.port = self._settings.port
 
+        logging.getLogger("mcp.server.streamable_http_manager").setLevel(logging.WARNING)
+
         logger.info(
-            "MCP server listening on %s (transport=streamable-http)",
+            "MCP server starting on %s (transport=streamable-http)",
             self._settings.url(),
         )
         self._task = asyncio.create_task(
-            self._server.run_streamable_http_async(),
+            self._run_server(),
             name="protopoke-mcp-server",
         )
 
@@ -182,6 +184,10 @@ class MCPHost:
             old.enabled != new_settings.enabled
             or old.host  != new_settings.host
             or old.port  != new_settings.port
+        )
+        logger.debug(
+            "MCPHost.apply: enabled=%s transport_changed=%s",
+            new_settings.enabled, transport_changed,
         )
         if not transport_changed:
             return
@@ -225,6 +231,14 @@ class MCPHost:
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    async def _run_server(self) -> None:
+        try:
+            await self._server.run_streamable_http_async()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("MCP server task crashed")
 
     def _resolve_api(self) -> ProtoPokeAPI:
         p = self._initial_provider

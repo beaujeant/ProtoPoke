@@ -125,9 +125,22 @@ class ConfigTab(Widget):
         width: 20;
         margin-right: 1;
     }
+    ConfigTab #mcp-url-btn {
+        min-width: 3;
+        width: 3;
+        height: 1;
+        border: none;
+        padding: 0;
+        background: transparent;
+        color: $text-muted;
+    }
+    ConfigTab #mcp-url-btn:hover {
+        background: $panel;
+    }
     ConfigTab #mcp-url {
         width: 1fr;
         color: $text-muted;
+        display: none;
     }
     """
 
@@ -174,6 +187,7 @@ class ConfigTab(Widget):
                 yield Input(value=self._mcp_settings.host, id="mcp-host", compact=True)
                 yield Label("Port:")
                 yield Input(value=str(self._mcp_settings.port), id="mcp-port", compact=True)
+                yield Button("?", id="mcp-url-btn")
             yield Static(self._format_mcp_url(), id="mcp-url")
 
     def on_mount(self) -> None:
@@ -248,6 +262,9 @@ class ConfigTab(Widget):
             self._toggle_selected()
         elif btn_id == "btn-cfg-remove":
             self._remove_selected()
+        elif btn_id == "mcp-url-btn":
+            url_widget = self.query_one("#mcp-url", Static)
+            url_widget.display = not url_widget.display
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Double-click or Enter on a row → open edit modal."""
@@ -348,8 +365,7 @@ class ConfigTab(Widget):
     # ------------------------------------------------------------------
 
     def _format_mcp_url(self) -> str:
-        status = "[enabled]" if self._mcp_settings.enabled else "[disabled]"
-        return f"  URL: {self._mcp_settings.url()}   {status}"
+        return f"  {self._mcp_settings.url()}"
 
     def _refresh_mcp_url(self) -> None:
         try:
@@ -358,7 +374,8 @@ class ConfigTab(Widget):
             pass
 
     def _emit_mcp_settings(self) -> None:
-        self.post_message(self.MCPSettingsChanged(self._mcp_settings))
+        from dataclasses import replace
+        self.post_message(self.MCPSettingsChanged(replace(self._mcp_settings)))
         self._refresh_mcp_url()
 
     def on_switch_changed(self, event: Switch.Changed) -> None:
