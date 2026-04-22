@@ -197,6 +197,7 @@ class TamperTab(Widget):
                 on_remove=self._remove_intercept_rule,
                 on_move_up=self._move_intercept_rule_up,
                 on_move_down=self._move_intercept_rule_down,
+                on_toggle=self._toggle_intercept_rule,
                 on_edit=self._edit_intercept_rule,
                 id="intercept-rules",
             )
@@ -204,7 +205,7 @@ class TamperTab(Widget):
         # Global replace rules
         with Vertical(id="replace-rules-pane"):
             yield Static(
-                "  Global Replace Rules  [applied in order — scopes: I=Intercept F=Forge S=Sequence]",
+                "  Global Replace Rules  [applied in order — scopes: T=Traffic M=Tamper F=Forge]",
                 classes="pane-header",
                 markup=False,
             )
@@ -335,6 +336,13 @@ class TamperTab(Widget):
             self.app.api.intercept_filter.move_rule(rule_id, idx + 1)
             self.refresh_intercept_rules(self.app.api.list_intercept_rules())
 
+    def _toggle_intercept_rule(self, rule_id: str) -> None:
+        """Toggle the enabled state of an intercept rule."""
+        rule = self.app.api.intercept_filter.get_rule(rule_id)
+        if rule is not None:
+            rule.enabled = not rule.enabled
+            self.refresh_intercept_rules(self.app.api.list_intercept_rules())
+
     # ------------------------------------------------------------------
     # Replace rule helpers
     # ------------------------------------------------------------------
@@ -362,11 +370,11 @@ class TamperTab(Widget):
             import os
             detail = os.path.basename(rule.script_path) if rule.script_path else "(no path)"
 
-        # Scope column: I=intercept F=forge S=sequence
+        # Scope column: T=traffic M=tamper F=forge
         scope = ""
-        scope += "I" if rule.apply_to_intercept else "·"
-        scope += "F" if rule.apply_to_forge  else "·"
-        scope += "S" if rule.apply_to_sequence  else "·"
+        scope += "T" if rule.apply_to_traffic else "·"
+        scope += "M" if rule.apply_to_tamper  else "·"
+        scope += "F" if rule.apply_to_forge   else "·"
 
         return (enabled, type_label, rule.label, detail, scope, direction)
 

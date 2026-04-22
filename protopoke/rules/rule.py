@@ -408,14 +408,17 @@ class ReplaceRule:
         ``apply(data: bytes, variables: dict) -> bytes`` function.
         ``variables`` is the shared global variable store; scripts can read
         from or write to it to pass state between pipelines (e.g. save a
-        captured token in traffic, then use it in a sequence via
+        captured token in traffic, then use it in a forge playbook via
         ``{{VAR}}``).
 
     Scope flags control which pipeline stages apply the rule:
 
-        ``apply_to_intercept``  — relay (before intercept/forward)
-        ``apply_to_forge``      — Forge tab (before send)
-        ``apply_to_sequence``   — Sequence tab (before each step send)
+        ``apply_to_traffic`` — relay pipeline (every frame flowing through the
+                               proxy, before the tamper controller).  Visible
+                               in the Traffic tab.
+        ``apply_to_tamper``  — bytes an operator just modified in the Tamper
+                               tab, applied after ``Modify+Forward``.
+        ``apply_to_forge``   — Forge tab / playbook send (before each send).
 
     All three default to ``True``.
     """
@@ -441,9 +444,9 @@ class ReplaceRule:
     created_at:         float            = field(default_factory=time.time)
 
     # ---- Scope flags -------------------------------------------------------
-    apply_to_intercept: bool = True
-    apply_to_forge:     bool = True
-    apply_to_sequence:  bool = True
+    apply_to_traffic: bool = True
+    apply_to_tamper:  bool = True
+    apply_to_forge:   bool = True
 
     # ---- Runtime (not serialised) -----------------------------------------
     compiled:       Optional["re.Pattern[bytes]"] = field(default=None, repr=False)
@@ -467,13 +470,13 @@ class ReplaceRule:
         direction:   Optional[Direction] = None,
         enabled:     bool = True,
         *,
-        rule_type:          str  = "binary",
-        regex_pattern:      str  = "",
-        regex_replacement:  str  = "",
-        script_path:        str  = "",
-        apply_to_intercept: bool = True,
-        apply_to_forge:     bool = True,
-        apply_to_sequence:  bool = True,
+        rule_type:         str  = "binary",
+        regex_pattern:     str  = "",
+        regex_replacement: str  = "",
+        script_path:       str  = "",
+        apply_to_traffic:  bool = True,
+        apply_to_tamper:   bool = True,
+        apply_to_forge:    bool = True,
     ) -> "ReplaceRule":
         """Factory: generates a unique ID and compiles the pattern."""
         return cls(
@@ -487,9 +490,9 @@ class ReplaceRule:
             script_path=script_path,
             direction=direction,
             enabled=enabled,
-            apply_to_intercept=apply_to_intercept,
+            apply_to_traffic=apply_to_traffic,
+            apply_to_tamper=apply_to_tamper,
             apply_to_forge=apply_to_forge,
-            apply_to_sequence=apply_to_sequence,
         )
 
     # ------------------------------------------------------------------
@@ -503,10 +506,11 @@ class ReplaceRule:
 
         Args:
             data:      The bytes to transform.
-            scope:     Optional scope name — ``"intercept"`` (relay pipeline),
-                       ``"forge"``, or ``"sequence"``.  When set and the
-                       corresponding ``apply_to_*`` flag is ``False``, the rule
-                       is skipped.
+            scope:     Optional scope name — ``"traffic"`` (relay pipeline),
+                       ``"tamper"`` (after operator Modify+Forward), or
+                       ``"forge"`` (Forge/playbook pipeline).  When set and
+                       the corresponding ``apply_to_*`` flag is ``False``,
+                       the rule is skipped.
             variables: Optional shared global variable store.  Passed to
                        script-type rules so that ``apply(data, variables)``
                        hooks can read and write cross-pipeline state.
@@ -516,11 +520,11 @@ class ReplaceRule:
         """
         if not self.enabled:
             return data
-        if scope in ("tamper", "intercept") and not self.apply_to_intercept:
+        if scope == "traffic" and not self.apply_to_traffic:
+            return data
+        if scope == "tamper" and not self.apply_to_tamper:
             return data
         if scope == "forge" and not self.apply_to_forge:
-            return data
-        if scope == "sequence" and not self.apply_to_sequence:
             return data
 
         if self.rule_type == "binary":
@@ -633,9 +637,9 @@ class ReplaceRule:
             "direction":         self.direction.value if self.direction else None,
             "enabled":           self.enabled,
             "created_at":        self.created_at,
-            "apply_to_intercept": self.apply_to_intercept,
-            "apply_to_forge":     self.apply_to_forge,
-            "apply_to_sequence":  self.apply_to_sequence,
+            "apply_to_traffic": self.apply_to_traffic,
+            "apply_to_tamper":  self.apply_to_tamper,
+            "apply_to_forge":   self.apply_to_forge,
         }
 
     @classmethod
@@ -658,9 +662,9 @@ class ReplaceRule:
             direction=direction,
             enabled=d.get("enabled", True),
             created_at=d.get("created_at", time.time()),
-            apply_to_intercept=d.get("apply_to_intercept", d.get("apply_to_tamper", True)),
+            apply_to_traffic=d.get("apply_to_traffic", d.get("apply_to_intercept", True)),
+            apply_to_tamper=d.get("apply_to_tamper", d.get("apply_to_sequence", True)),
             apply_to_forge=d.get("apply_to_forge", d.get("apply_to_repeater", True)),
-            apply_to_sequence=d.get("apply_to_sequence", d.get("apply_to_sequencer", True)),
         )
 
 

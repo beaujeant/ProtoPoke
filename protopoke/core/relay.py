@@ -191,7 +191,7 @@ class DirectionalRelay:
         # Apply replace rules (no-op when no engine is set)
         effective_frame = frame
         if self._rules_engine is not None:
-            modified_bytes = self._rules_engine.apply(frame)
+            modified_bytes = self._rules_engine.apply(frame, scope="traffic")
             if modified_bytes != frame.raw_bytes:
                 # Create a new Frame for tampering/forwarding so the
                 # original capture is preserved in the session unchanged.
@@ -217,6 +217,14 @@ class DirectionalRelay:
             return
 
         data_to_send = unit.effective_bytes()
+
+        # If the operator modified the frame in the Tamper tab, run the
+        # operator-edited bytes back through the rules engine under the
+        # "tamper" scope so rules that target post-edit bytes fire.
+        if unit.action is InterceptAction.MODIFIED and self._rules_engine is not None:
+            data_to_send = self._rules_engine.apply_bytes(
+                data_to_send, frame.direction, scope="tamper"
+            )
 
         # If the operator modified the frame in the Tamper tab, log the
         # modified bytes as a separate frame so the Traffic tab shows what was

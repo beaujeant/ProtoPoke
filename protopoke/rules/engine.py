@@ -49,7 +49,7 @@ class RulesEngine:
         self._rules: list[ReplaceRule] = []
         # Shared global variable store.  Script-type rules receive this dict
         # and may read from or write to it.  Mutations are visible across all
-        # pipelines (intercept, forge, sequence) immediately.
+        # pipelines (traffic, tamper, forge) immediately.
         self._variables: dict = variables if variables is not None else {}
 
     @property
@@ -89,15 +89,16 @@ class RulesEngine:
                 return True
         return False
 
-    def apply(self, frame: Frame, scope: str = "tamper") -> bytes:
+    def apply(self, frame: Frame, scope: str = "traffic") -> bytes:
         """
         Apply all matching rules to *frame* and return the resulting bytes.
 
         Args:
             frame: The frame whose bytes will be transformed.
-            scope: Pipeline stage — ``"tamper"`` (default), ``"forge"``,
-                   or ``"sequence"``.  Rules whose corresponding
-                   ``apply_to_*`` flag is ``False`` are skipped.
+            scope: Pipeline stage — ``"traffic"`` (default, relay),
+                   ``"tamper"`` (operator edited bytes), or ``"forge"``.
+                   Rules whose corresponding ``apply_to_*`` flag is
+                   ``False`` are skipped.
 
         Returns the original ``frame.raw_bytes`` if no enabled rule matches.
         """
@@ -125,15 +126,15 @@ class RulesEngine:
         """
         Apply all matching rules to raw *data* (no Frame object).
 
-        Used by the Forge and Sequence pipelines where frames are
-        not yet (or not) tracked in a session.
+        Used by the Forge / playbook pipeline where frames are not yet
+        (or not) tracked in a session.
 
         Args:
             data:      Bytes to transform.
             direction: Direction the data will be sent in, used for
                        per-direction rule filters.  Pass ``None`` to
                        match rules that have no direction filter.
-            scope:     ``"forge"`` or ``"sequence"``.
+            scope:     ``"traffic"``, ``"tamper"`` or ``"forge"``.
 
         Returns the (possibly modified) bytes.
         """
