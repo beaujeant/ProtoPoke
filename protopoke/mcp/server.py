@@ -1385,7 +1385,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
             host=session.info.server_host,
             port=session.info.server_port,
             tls=tls_upstream,
-            source_session_id=session_id,
+            source_session_id=session_id if session.is_active() else None,
         )
         hex_str = " ".join(frame.raw_bytes.hex()[i:i+2] for i in range(0, len(frame.raw_bytes.hex()), 2))
         pb.frames.append(PlaybookFrame.create(label=f"frame-{frame.sequence_number}", raw_hex=hex_str, direction=direction))

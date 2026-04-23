@@ -709,6 +709,21 @@ class ProtoPoke(App):
                 return fwd.tls_upstream
         return False
 
+    def _switch_to_forge(self, forge_tab: ForgeTab) -> None:
+        """Activate the Forge tab and move focus into it.
+
+        Why: when triggered from a button click, the clicked button (inside the
+        Traffic pane) keeps focus, and TabbedContent reactivates whichever pane
+        contains the focused widget — snapping the user back to Traffic.
+        """
+        def _do_switch() -> None:
+            self.action_switch_tab("forge")
+            try:
+                forge_tab.query_one("#playbook-table").focus()
+            except Exception:
+                pass
+        self.call_after_refresh(_do_switch)
+
     def send_frame_to_forge(self, session_id: str, frame_id: str) -> None:
         """Called by TrafficTab (Ctrl+F) — create a single-frame playbook in Forge."""
         session = self.api.get_session(session_id)
@@ -729,15 +744,11 @@ class ProtoPoke(App):
             host=session.info.server_host,
             port=session.info.server_port,
             tls=self._tls_upstream_for_session(session_id),
-            source_session_id=session_id,
+            source_session_id=session_id if session.is_active() else None,
             direction=direction,
         )
         self._project.mark_dirty()
-        def _do_switch_forge() -> None:
-            self.action_switch_tab("forge")
-        def _schedule_switch_forge() -> None:
-            self.call_after_refresh(_do_switch_forge)
-        self.call_after_refresh(_schedule_switch_forge)
+        self._switch_to_forge(forge_tab)
         logger.info("Frame sent to Forge: %s", frame_id[:8])
 
     def send_frames_to_forge(self, session_id: str, frame_ids: list[str]) -> None:
@@ -778,15 +789,11 @@ class ProtoPoke(App):
             host=session.info.server_host,
             port=session.info.server_port,
             tls=self._tls_upstream_for_session(session_id),
-            source_session_id=session_id,
+            source_session_id=session_id if session.is_active() else None,
             playbook_label=f"Playbook {len(forge_tab._playbooks)+1}",
         )
         self._project.mark_dirty()
-        def _do_switch_forge() -> None:
-            self.action_switch_tab("forge")
-        def _schedule_switch_forge() -> None:
-            self.call_after_refresh(_do_switch_forge)
-        self.call_after_refresh(_schedule_switch_forge)
+        self._switch_to_forge(forge_tab)
         skipped = len(frame_ids) - len(selected_frames)
         msg = f"{len(selected_frames)} frame(s) added to Forge"
         if skipped:
