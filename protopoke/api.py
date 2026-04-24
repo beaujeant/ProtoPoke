@@ -430,14 +430,18 @@ class ProtoPokeAPI:
         """
         Forcefully close an active session.
 
-        Cancels the session's relay task, which closes both the client and
-        server TCP connections and marks the session CLOSED.  If the session
-        is already closed (or not found) this is a no-op and returns ``False``.
+        Works on both proxy (forwarder-captured) sessions and forge sessions
+        (opened by :meth:`open_forge_session` or a custom playbook run).  The
+        underlying TCP connection is closed and the session is marked CLOSED.
+        If the session is already closed (or not found) this is a no-op and
+        returns ``False``.
 
         Returns:
-            ``True``  if the session was active and has been cancelled.
+            ``True``  if the session was active and has been closed.
             ``False`` if the session is already closed or does not exist.
         """
+        if self.forge_engine.is_forge_session(session_id):
+            return await self.forge_engine.close_forge_session(session_id)
         engine = self._engine_for_session(session_id)
         if engine is None:
             return False
@@ -922,8 +926,11 @@ class ProtoPokeAPI:
 
         Registers the connection as a session in the session registry so it
         appears in the Traffic tab and the "From session" dropdown.  The
-        connection is kept alive between sends; it is closed (and the session
-        marked CLOSED) automatically when the server drops the connection.
+        connection is kept alive between sends and across playbook runs; it
+        is closed (and the session marked CLOSED) automatically when the
+        server drops the connection or an I/O error occurs.  A
+        :class:`SessionClosedEvent` is published in both cases so the UI
+        updates even between runs.
 
         Returns:
             The new session's ID.
@@ -931,7 +938,15 @@ class ProtoPokeAPI:
         Raises:
             ConnectionError: if the connection cannot be established.
         """
-        session = await self.forge_engine.open_forge_session(host, port, tls)
+        async def _on_forge_close(session_id: str, reason: str) -> None:
+            session = self.session_registry.get(session_id)
+            if session is None:
+                return
+            await self.event_bus.publish(SessionClosedEvent(session=session.info))
+
+        session = await self.forge_engine.open_forge_session(
+            host, port, tls, close_callback=_on_forge_close,
+        )
         await self.event_bus.publish(
             SessionOpenedEvent(session=session.info)
         )
@@ -961,8 +976,6 @@ class ProtoPokeAPI:
             :class:`~protopoke.forge.engine.SendResult` with the response.
         """
         recv_timeout = receive_timeout if receive_timeout is not None else self.config.connect_timeout
-        session_before = self.session_registry.get(session_id)
-        was_active     = session_before is not None and session_before.is_active()
 
         record = await self.forge_engine.send_on_forge_session(
             session_id=session_id,
@@ -971,15 +984,18 @@ class ProtoPokeAPI:
             packet_callback=packet_callback,
         )
 
-        # Add sent and received frames to the session so they appear in the Traffic tab.
-        forge_engine = self._engine_for_session(session_id)
+        # Add sent and received frames to the session so they appear in the
+        # Traffic tab.  The engine's close_callback (set by open_forge_session)
+        # is the single source of SessionClosedEvent, so this wrapper only
+        # handles frame capture.
+        proxy_engine = self._engine_for_session(session_id)
         session = self.session_registry.get(session_id)
         if session and record.sent_bytes:
             sent_frame = Frame.create(
                 session_id=session_id,
                 direction=Direction.CLIENT_TO_SERVER,
                 raw_bytes=record.sent_bytes,
-                sequence_number=forge_engine.next_sequence_number(session_id, Direction.CLIENT_TO_SERVER) if forge_engine else len(session.frames_for_direction(Direction.CLIENT_TO_SERVER)),
+                sequence_number=proxy_engine.next_sequence_number(session_id, Direction.CLIENT_TO_SERVER) if proxy_engine else len(session.frames_for_direction(Direction.CLIENT_TO_SERVER)),
                 framer_name="forge",
             )
             session.add_frame(sent_frame)
@@ -993,20 +1009,13 @@ class ProtoPokeAPI:
                     session_id=session_id,
                     direction=Direction.SERVER_TO_CLIENT,
                     raw_bytes=pkt,
-                    sequence_number=forge_engine.next_sequence_number(session_id, Direction.SERVER_TO_CLIENT) if forge_engine else len(session.frames_for_direction(Direction.SERVER_TO_CLIENT)),
+                    sequence_number=proxy_engine.next_sequence_number(session_id, Direction.SERVER_TO_CLIENT) if proxy_engine else len(session.frames_for_direction(Direction.SERVER_TO_CLIENT)),
                     framer_name="forge",
                 )
                 session.add_frame(recv_frame)
                 await self.event_bus.publish(
                     FrameCapturedEvent(frame=recv_frame, session=session.info)
                 )
-
-        # If the session transitioned to CLOSED during the send, fire the event
-        session_after = self.session_registry.get(session_id)
-        if was_active and session_after is not None and not session_after.is_active():
-            await self.event_bus.publish(
-                SessionClosedEvent(session=session_after.info)
-            )
 
         return record
 
@@ -1164,10 +1173,23 @@ class ProtoPokeAPI:
 
         Connection mode is determined by ``playbook.source_session_id``:
 
-        - **Set**: inject bytes into the named existing proxy session and
-          capture response frames within the configured ``response_window``.
-        - **Not set**: open (or reuse) a persistent TCP connection to
-          ``playbook.host:playbook.port`` and use the forge session mechanism.
+        - **Set**: send over the named existing session.  Two session kinds
+          are supported transparently:
+
+          * Proxy sessions (forwarder-captured) — frames are injected with
+            :meth:`inject_to_server` / :meth:`inject_to_client`.
+          * Forge sessions (opened by a previous custom run) — frames are
+            sent over the persistent TCP connection managed by
+            :class:`~protopoke.forge.engine.ForgeEngine`.
+
+          If the session is closed, ``source_session_id`` is cleared and the
+          playbook falls back to custom mode, opening a fresh connection.
+
+        - **Not set**: open a persistent TCP connection to
+          ``playbook.host:playbook.port``.  When the connection is
+          established ``source_session_id`` is set on the playbook so the
+          same TCP session is reused on subsequent runs — the connection is
+          only closed when the server drops it.
 
         Global replace rules (scope="forge") are applied before each send.
 
@@ -1186,92 +1208,130 @@ class ProtoPokeAPI:
 
         engine = PlaybookEngine()
 
-        if playbook.source_session_id:
-            _src_id = playbook.source_session_id
+        # A single-slot mutable cell so the nested send_fn can record the
+        # forge-session id it opens and the outer method can persist it on
+        # the playbook after the run.
+        _conn_id: list[Optional[str]] = [playbook.source_session_id]
 
-            async def send_fn(data: bytes, direction: str = "client_to_server") -> list[bytes]:
-                _dir = (
-                    Direction.CLIENT_TO_SERVER
-                    if direction == "client_to_server"
-                    else Direction.SERVER_TO_CLIENT
+        async def _send_via_forge(session_id: str, data: bytes) -> list[bytes]:
+            result = await self.send_on_forge_session(
+                session_id=session_id,
+                data=data,
+                receive_timeout=playbook.response_window,
+            )
+            return result.response_packets
+
+        async def _send_via_proxy_inject(
+            session_id: str, data: bytes, direction: str
+        ) -> list[bytes]:
+            send_time = _time.time()
+            if direction == "server_to_client":
+                ok = await self.inject_to_client(session_id, data)
+                resp_dir = Direction.CLIENT_TO_SERVER
+            else:
+                ok = await self.inject_to_server(session_id, data)
+                resp_dir = Direction.SERVER_TO_CLIENT
+            if not ok:
+                logger.warning(
+                    "Playbook: inject_to_%s failed on session %s — connection gone",
+                    "client" if direction == "server_to_client" else "server",
+                    session_id[:8],
                 )
-                data = self.rules_engine.apply_bytes(data, _dir, scope="forge")
-                send_time = _time.time()
-                if direction == "server_to_client":
-                    ok = await self.inject_to_client(_src_id, data)
-                    if not ok:
-                        logger.warning("Playbook: inject_to_client on %s failed", _src_id[:8])
-                        return []
-                    await _asyncio.sleep(playbook.response_window)
-                    session = self.get_session(_src_id)
-                    if not session:
-                        return []
-                    return [
-                        f.raw_bytes for f in session.frames
-                        if f.direction is Direction.CLIENT_TO_SERVER
-                        and f.timestamp >= send_time
-                    ]
-                else:
-                    ok = await self.inject_to_server(_src_id, data)
-                    if not ok:
-                        logger.warning("Playbook: inject_to_server on %s failed", _src_id[:8])
-                        return []
-                    await _asyncio.sleep(playbook.response_window)
-                    session = self.get_session(_src_id)
-                    if not session:
-                        return []
-                    return [
-                        f.raw_bytes for f in session.frames
-                        if f.direction is Direction.SERVER_TO_CLIENT
-                        and f.timestamp >= send_time
-                    ]
+                return []
+            await _asyncio.sleep(playbook.response_window)
+            session = self.get_session(session_id)
+            if not session:
+                return []
+            return [
+                f.raw_bytes for f in session.frames
+                if f.direction is resp_dir and f.timestamp >= send_time
+            ]
 
-        else:
-            _conn_id: list[Optional[str]] = [None]
+        async def send_fn(data: bytes, direction: str = "client_to_server") -> list[bytes]:
+            # Drop stale session_id — if the server closed the connection
+            # between runs it's been marked CLOSED by the background reader.
+            if _conn_id[0]:
+                session = self.get_session(_conn_id[0])
+                if not (session and session.is_active()):
+                    logger.info(
+                        "Playbook: session %s is closed — reopening connection",
+                        _conn_id[0][:8],
+                    )
+                    _conn_id[0] = None
 
-            async def send_fn(data: bytes, direction: str = "client_to_server") -> list[bytes]:  # type: ignore[misc]
+            # Resolve the direction enum and apply forge-scope rules.
+            _dir = (
+                Direction.CLIENT_TO_SERVER
+                if direction == "client_to_server"
+                else Direction.SERVER_TO_CLIENT
+            )
+            data = self.rules_engine.apply_bytes(data, _dir, scope="forge")
+
+            # Route to the appropriate send mechanism based on session kind.
+            if _conn_id[0] and self.forge_engine.is_forge_session(_conn_id[0]):
+                # Forge session: single TCP socket owned by the ForgeEngine.
+                # server_to_client is meaningless here (forge IS the client),
+                # so log and skip.
                 if direction == "server_to_client":
                     logger.warning(
-                        "Playbook: server_to_client frame requires a linked proxy "
-                        "session (set Session ID in the playbook); skipping frame."
+                        "Playbook: server_to_client frame ignored — forge "
+                        "session %s is a client-only TCP connection.",
+                        _conn_id[0][:8],
                     )
                     return []
+                return await _send_via_forge(_conn_id[0], data)
 
-                data = self.rules_engine.apply_bytes(
-                    data, Direction.CLIENT_TO_SERVER, scope="forge"
+            if _conn_id[0]:
+                # Proxy session: inject into the existing forwarder session.
+                return await _send_via_proxy_inject(_conn_id[0], data, direction)
+
+            # No session — open a new forge connection to host:port.
+            if direction == "server_to_client":
+                logger.warning(
+                    "Playbook: server_to_client frame requires an existing "
+                    "proxy session; skipping frame."
                 )
-
-                if _conn_id[0]:
-                    session = self.get_session(_conn_id[0])
-                    if not (session and session.is_active()):
-                        _conn_id[0] = None
-
-                if _conn_id[0] is None:
-                    try:
-                        _conn_id[0] = await self.open_forge_session(
-                            playbook.host, playbook.port, playbook.tls
-                        )
-                    except ConnectionError as exc:
-                        logger.error("Playbook: cannot connect: %s", exc)
-                        return []
-
-                result = await self.send_on_forge_session(
-                    session_id=_conn_id[0],
-                    data=data,
-                    receive_timeout=playbook.response_window,
+                return []
+            if not playbook.host or not playbook.port:
+                logger.error(
+                    "Playbook: no host/port configured and no active session — "
+                    "cannot send frame."
                 )
+                return []
+            try:
+                _conn_id[0] = await self.open_forge_session(
+                    playbook.host, playbook.port, playbook.tls
+                )
+            except ConnectionError as exc:
+                logger.error(
+                    "Playbook: cannot connect to %s:%d: %s",
+                    playbook.host, playbook.port, exc,
+                )
+                return []
+            logger.info(
+                "Playbook: opened forge session %s — reusable for future runs",
+                _conn_id[0][:8],
+            )
+            return await _send_via_forge(_conn_id[0], data)
 
-                if _conn_id[0]:
-                    s = self.get_session(_conn_id[0])
-                    if s and not s.is_active():
-                        _conn_id[0] = None
-
-                return result.response_packets
-
-        return await engine.run(
-            playbook, send_fn=send_fn, on_entry=on_entry,
-            global_variables=self.variables,
-        )
+        try:
+            return await engine.run(
+                playbook, send_fn=send_fn, on_entry=on_entry,
+                global_variables=self.variables,
+            )
+        finally:
+            # Persist the connection we opened (or kept) so the next run
+            # reuses the same TCP session.  If the reader task closed the
+            # connection during the run, skip — _conn_id was already cleared.
+            final_id = _conn_id[0]
+            if final_id:
+                session = self.get_session(final_id)
+                if session is not None and session.is_active():
+                    playbook.source_session_id = final_id
+                else:
+                    playbook.source_session_id = None
+            else:
+                playbook.source_session_id = None
 
     # ------------------------------------------------------------------
     # Replace rules management

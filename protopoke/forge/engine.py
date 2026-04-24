@@ -202,6 +202,40 @@ class ForgeResult:
 
 
 # ---------------------------------------------------------------------------
+# ForgeConnection  (persistent connection bookkeeping)
+# ---------------------------------------------------------------------------
+
+CloseCallback = Callable[[str, str], Awaitable[None]]
+
+
+@dataclass
+class ForgeConnection:
+    """Bookkeeping for a single persistent forge TCP connection.
+
+    Attributes:
+        writer:         StreamWriter for the outbound side.
+        tls:            Whether TLS is in use.
+        queue:          Queue that the background reader drops chunks into.
+                        ``b""`` means EOF and an ``Exception`` means I/O error.
+        reader_task:    The asyncio.Task running ``_background_reader``.
+        host:           Target host (for logging).
+        port:           Target port (for logging).
+        close_callback: Optional async callable invoked exactly once when the
+                        connection ends — used by the API to publish the
+                        :class:`SessionClosedEvent`.
+        closed:         True once the connection has been cleaned up.
+    """
+    writer:         asyncio.StreamWriter
+    tls:            bool
+    queue:          asyncio.Queue
+    reader_task:    asyncio.Task
+    host:           str
+    port:           int
+    close_callback: Optional[CloseCallback] = None
+    closed:         bool = False
+
+
+# ---------------------------------------------------------------------------
 # ForgeEngine  (used by FuzzerEngine and API replay methods)
 # ---------------------------------------------------------------------------
 
@@ -224,10 +258,14 @@ class ForgeEngine:
         self._connect_timeout  = connect_timeout
         self._framer_name      = framer_name
         self._framer_kwargs    = framer_kwargs or {}
-        # Persistent connections: session_id → (writer, tls, reader_queue, reader_task)
+        # Persistent connections keyed by session_id.  Each entry holds the
+        # writer, TLS flag, inbound chunk queue, the background reader task,
+        # and an optional close-callback invoked exactly once when the
+        # connection terminates (whether the server closed it, an I/O error
+        # occurred, or the operator terminated it).
         self._open_connections: dict[
             str,
-            tuple[asyncio.StreamWriter, bool, asyncio.Queue, asyncio.Task]
+            "ForgeConnection"
         ] = {}
 
     def update_framer(self, framer_name: str, framer_kwargs: dict) -> None:
@@ -404,10 +442,22 @@ class ForgeEngine:
         host: str,
         port: int,
         tls:  bool = False,
+        close_callback: Optional[CloseCallback] = None,
     ) -> "Session":
         """
         Open a persistent TCP connection and register it as a session.
         The connection is kept alive between sends.
+
+        Args:
+            host: Target host.
+            port: Target port.
+            tls:  Whether to use TLS.
+            close_callback: Optional async callable invoked exactly once when
+                            the session is closed.  The callback receives
+                            ``(session_id, reason)`` where *reason* is a short
+                            human-readable string (``"server_eof"``,
+                            ``"io_error: …"``, ``"terminated"``).  Used by
+                            the API to publish :class:`SessionClosedEvent`.
 
         Returns:
             The newly created Session (state=ACTIVE).
@@ -448,29 +498,108 @@ class ForgeEngine:
         self._session_registry.mark_active(session.id)
 
         reader_queue: asyncio.Queue = asyncio.Queue()
+        conn = ForgeConnection(
+            writer=writer,
+            tls=tls,
+            queue=reader_queue,
+            reader_task=None,  # filled in below
+            host=host,
+            port=port,
+            close_callback=close_callback,
+        )
         reader_task = asyncio.get_event_loop().create_task(
-            self._background_reader(reader, reader_queue),
+            self._background_reader(session.id, reader, reader_queue),
             name=f"forge-reader-{session.id[:8]}",
         )
-        self._open_connections[session.id] = (writer, tls, reader_queue, reader_task)
+        conn.reader_task = reader_task
+        self._open_connections[session.id] = conn
+        logger.info(
+            "Forge connection established: %s:%d%s session=%s",
+            host, port, " [TLS]" if tls else "", session.id[:8],
+        )
         return session
+
+    def is_forge_session(self, session_id: str) -> bool:
+        """Return True if *session_id* refers to a live forge connection."""
+        return session_id in self._open_connections
 
     async def _background_reader(
         self,
-        reader: asyncio.StreamReader,
-        queue:  asyncio.Queue,
+        session_id: str,
+        reader:     asyncio.StreamReader,
+        queue:      asyncio.Queue,
     ) -> None:
-        """Background task — sole consumer of *reader*. Puts b"" on EOF."""
+        """Background task — sole consumer of *reader*.
+
+        Puts chunks on *queue* for the send path to consume.  On EOF or I/O
+        error the task *also* triggers proactive session close so state in
+        the registry tracks the wire even when no send is in flight.
+        """
         try:
             while True:
                 chunk = await reader.read(4096)
                 await queue.put(chunk)
                 if not chunk:
+                    # Server EOF — close the session proactively.  This runs
+                    # even if no send is currently waiting on the queue, so
+                    # the Traffic tab flips to CLOSED as soon as the server
+                    # drops the connection.
+                    await self._close_forge_session(session_id, reason="server_eof")
                     break
         except asyncio.CancelledError:
-            pass
+            # Cancellation happens only when the session is being torn down
+            # elsewhere — don't double-close.
+            raise
         except Exception as exc:
             await queue.put(exc)
+            await self._close_forge_session(session_id, reason=f"io_error: {exc}")
+
+    async def _close_forge_session(self, session_id: str, reason: str) -> None:
+        """Close a persistent forge session idempotently.
+
+        Cancels the reader task, closes the writer, marks the session CLOSED,
+        and invokes the stored close_callback (once).  Safe to call from the
+        reader task, from send_on_forge_session, or from the API.
+        """
+        conn = self._open_connections.pop(session_id, None)
+        if conn is None or conn.closed:
+            return
+        conn.closed = True
+
+        # Cancel the reader unless we *are* the reader (it exits naturally).
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        if conn.reader_task is not None and conn.reader_task is not current:
+            conn.reader_task.cancel()
+
+        # Close the writer — suppress errors since it may already be torn down.
+        try:
+            conn.writer.close()
+        except Exception:
+            pass
+
+        self._session_registry.mark_closed(session_id)
+        logger.info(
+            "Forge connection closed: %s:%d session=%s reason=%s",
+            conn.host, conn.port, session_id[:8], reason,
+        )
+
+        if conn.close_callback is not None:
+            try:
+                await conn.close_callback(session_id, reason)
+            except Exception:
+                logger.exception(
+                    "Forge close_callback failed for session %s", session_id[:8]
+                )
+
+    async def close_forge_session(self, session_id: str) -> bool:
+        """Public API: tear down a forge session (operator-initiated)."""
+        if session_id not in self._open_connections:
+            return False
+        await self._close_forge_session(session_id, reason="terminated")
+        return True
 
     async def send_on_forge_session(
         self,
@@ -483,6 +612,9 @@ class ForgeEngine:
         Send *data* through a persistent forge session and collect the response.
 
         Does not signal EOF — the TCP connection stays alive for subsequent sends.
+        A plain receive-timeout (no server EOF, no I/O error) does NOT close
+        the connection: the operator may want to send follow-up frames on the
+        same TCP socket.
 
         Returns:
             A SendResult with the sent bytes and received response.
@@ -496,9 +628,11 @@ class ForgeEngine:
                 error=f"Forge session {session_id[:8]} not found or not open",
             )
 
-        writer, tls, queue, reader_task = conn
-        host = session.info.server_host
-        port = session.info.server_port
+        writer = conn.writer
+        queue  = conn.queue
+        tls    = conn.tls
+        host   = session.info.server_host
+        port   = session.info.server_port
 
         response_framer = create_framer(
             self._framer_name,
@@ -549,9 +683,8 @@ class ForgeEngine:
                     packet_callback(frame.raw_bytes)
 
         if server_closed:
-            reader_task.cancel()
-            self._open_connections.pop(session_id, None)
-            self._session_registry.mark_closed(session_id)
+            reason = f"io_error: {io_error}" if io_error is not None else "server_eof"
+            await self._close_forge_session(session_id, reason=reason)
             if io_error:
                 return SendResult.failure(
                     sent_bytes=data,

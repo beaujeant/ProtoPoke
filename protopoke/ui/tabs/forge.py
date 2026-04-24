@@ -1086,6 +1086,7 @@ class ForgeTab(Widget):
             if self._running:
                 self._append_traffic_row(entry)
 
+        pre_session_id = pb.source_session_id
         try:
             run = await self.app.api.run_playbook(pb, on_entry=on_entry)
             pb.runs.append(run)
@@ -1095,6 +1096,18 @@ class ForgeTab(Widget):
             logger.error("Playbook error: %s", exc)
         finally:
             self._running = False
+            # run_playbook may have attached or cleared the reusable session
+            # (custom mode opens a persistent forge session on first run and
+            # stores it on the playbook so subsequent runs reuse it).  Refresh
+            # the row so the Session column reflects reality.
+            if pb.source_session_id != pre_session_id:
+                idx = next(
+                    (i for i, p in enumerate(self._playbooks) if p.id == pb.id), -1
+                )
+                if idx >= 0:
+                    self._update_playbook_list_row(idx)
+                if hasattr(self.app, "mark_dirty"):
+                    self.app.mark_dirty()
 
     # ------------------------------------------------------------------
     # Button handlers
