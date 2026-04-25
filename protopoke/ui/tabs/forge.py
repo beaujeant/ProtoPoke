@@ -258,11 +258,11 @@ class ForgeTab(Widget):
             yield DataTable(id="playbook-table", cursor_type="row")
 
         with Horizontal(classes="playbook-controls"):
-            yield Button("+ New",    id="btn-new-pb",    variant="success")
-            yield Button("✖ Remove", id="btn-delete-pb", variant="error")
-            yield Button("✎ Edit",   id="btn-edit-pb",   variant="primary")
-            yield Button("Import",   id="btn-import-pb")
-            yield Button("Export",   id="btn-export-pb")
+            yield Button("+ New",    id="btn-new-pb",    variant="success", flat=True)
+            yield Button("✖ Remove", id="btn-delete-pb", variant="error",   flat=True)
+            yield Button("✎ Edit",   id="btn-edit-pb",   variant="primary", flat=True)
+            yield Button("Import",   id="btn-import-pb", flat=True)
+            yield Button("Export",   id="btn-export-pb", flat=True)
 
         with Horizontal(id="middle-pane"):
             with Vertical(id="left-col"):
@@ -272,13 +272,13 @@ class ForgeTab(Widget):
                     yield lbl
                     yield _ForgeFramesTable(id="frames-table", cursor_type="row")
                     with Horizontal(classes="frame-controls"):
-                        yield Button("↑", id="btn-frame-up", classes="btn-tiny")
-                        yield Button("↓", id="btn-frame-down", classes="btn-tiny")
-                        yield Button("+",     id="btn-frame-add", classes="btn-tiny", variant="success")
-                        yield Button("✖", id="btn-frame-remove", classes="btn-tiny", variant="error")
-                        yield Button("✎",   id="btn-frame-edit", classes="btn-tiny",  variant="primary")
-                        yield Button("⧉", id="btn-frame-copy", classes="btn-tiny")
-                        yield Button("▶", id="btn-frame-send", classes="btn-tiny", variant="success")
+                        yield Button("↑", id="btn-frame-up", classes="btn-tiny", flat=True)
+                        yield Button("↓", id="btn-frame-down", classes="btn-tiny", flat=True)
+                        yield Button("+",     id="btn-frame-add", classes="btn-tiny", variant="success", flat=True)
+                        yield Button("✖", id="btn-frame-remove", classes="btn-tiny", variant="error",   flat=True)
+                        yield Button("✎",   id="btn-frame-edit", classes="btn-tiny",  variant="primary", flat=True)
+                        yield Button("⧉", id="btn-frame-copy", classes="btn-tiny",  flat=True)
+                        yield Button("▶", id="btn-frame-send", classes="btn-tiny", variant="success", flat=True)
                 with Vertical(id="frame-editor-pane"):
                     with Horizontal(classes="pane-header"):
                         yield Static(
@@ -302,9 +302,9 @@ class ForgeTab(Widget):
                     yield TextArea("", id="frame-view", read_only=True)
 
         with Horizontal(classes="run-bar"):
-            yield Button("▶ Run Playbook", id="btn-run",          variant="success")
-            yield Button("■ Stop",         id="btn-stop",         variant="error")
-            yield Button("Clear Traffic",  id="btn-clear-traffic")
+            yield Button("▶ Run Playbook", id="btn-run",          variant="success", flat=True)
+            yield Button("■ Stop",         id="btn-stop",         variant="error",   flat=True)
+            yield Button("Clear Traffic",  id="btn-clear-traffic",                   flat=True)
 
         with Vertical(id="history-pane"):
             yield Static("  Playbook History", classes="pane-header")

@@ -167,9 +167,9 @@ class TrafficTab(Widget):
         with Vertical(id="sessions-pane"):
             with Horizontal(classes="toolbar"):
                 yield Static("  Sessions")
-                yield Button("+ Create",    id="btn-create-session",    variant="success")
-                yield Button("✖ Terminate", id="btn-terminate-session", variant="warning")
-                yield Button("✖ Remove",    id="btn-delete-session",    variant="error")
+                yield Button("+ Create",    id="btn-create-session",    variant="success", flat=True)
+                yield Button("✖ Terminate", id="btn-terminate-session", variant="warning", flat=True)
+                yield Button("✖ Remove",    id="btn-delete-session",    variant="error", flat=True)
             yield DataTable(id="sessions-table", cursor_type="row")
 
         # Frames pane
@@ -178,10 +178,10 @@ class TrafficTab(Widget):
                 lbl = Static("  Frames  [Shift+↑↓ to multi-select]")
                 self._frames_label = lbl
                 yield lbl
-                btn = Button("Filters [0]", id="btn-frame-filters", variant="primary")
+                btn = Button("Filters [0]", id="btn-frame-filters", variant="primary", flat=True)
                 self._filter_button = btn
                 yield btn
-                yield Button("→ Forge", id="btn-to-forge", variant="primary")
+                yield Button("→ Forge", id="btn-to-forge", variant="primary", flat=True)
             yield _FramesTable(id="frames-table", cursor_type="row")
 
         # Detail pane with hex↔parsed toggle
