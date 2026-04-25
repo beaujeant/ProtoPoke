@@ -273,6 +273,7 @@ class ForgeTab(Widget):
                         yield Button("✖", id="btn-frame-remove", classes="btn-tiny", variant="error",   flat=True)
                         yield Button("✎",   id="btn-frame-edit", classes="btn-tiny",  variant="primary", flat=True)
                         yield Button("⧉", id="btn-frame-copy", classes="btn-tiny",  flat=True)
+                        yield Button("▶", id="btn-frame-send", classes="btn-tiny", variant="success", flat=True)
                 with Vertical(id="frame-editor-pane"):
                     with Horizontal(classes="pane-header"):
                         yield Static(
@@ -1109,6 +1110,77 @@ class ForgeTab(Widget):
                 if hasattr(self.app, "mark_dirty"):
                     self.app.mark_dirty()
 
+    def _send_selected_frame(self) -> None:
+        """Send only the currently selected frame, reusing the playbook's connection settings."""
+        if self._current_idx < 0:
+            logger.warning("Create a playbook first")
+            return
+        if self._selected_frame_idx < 0:
+            logger.warning("Select a frame to send")
+            return
+        if self._running:
+            logger.warning("A playbook is already running")
+            return
+        self._save_frame_editor()
+        pb = self._playbooks[self._current_idx]
+        if self._selected_frame_idx >= len(pb.frames):
+            return
+        frame = pb.frames[self._selected_frame_idx]
+        if pb.source_session_id:
+            try:
+                session = self.app.api.get_session(pb.source_session_id)
+            except Exception:
+                session = None
+            if session is None or not session.is_active():
+                logger.error(
+                    "Session is closed — cannot send frame. "
+                    "Edit the playbook to select an active session or use a custom destination"
+                )
+                return
+        self._history_view_mode = False
+        self._running = True
+        self._clear_traffic()
+        self._clear_frame_view()
+        self.run_worker(self._async_send_frame(pb, frame), exclusive=True)
+
+    async def _async_send_frame(self, pb: Playbook, frame: PlaybookFrame) -> None:
+        def on_entry(entry: TrafficEntry) -> None:
+            if self._running:
+                self._append_traffic_row(entry)
+
+        pre_session_id = pb.source_session_id
+        # Run a one-frame playbook that mirrors the parent's connection
+        # settings.  Sharing variables is safe (PlaybookEngine only reads them).
+        # The run is intentionally not appended to pb.runs — single-frame sends
+        # are a repeater-style debugging aid, not playbook executions.
+        temp_pb = Playbook(
+            id=pb.id,
+            label=pb.label,
+            host=pb.host,
+            port=pb.port,
+            tls=pb.tls,
+            source_session_id=pb.source_session_id,
+            response_window=pb.response_window,
+            variables=pb.variables,
+            frames=[frame],
+        )
+        try:
+            await self.app.api.run_playbook(temp_pb, on_entry=on_entry)
+            logger.info("Sent frame '%s'", frame.label or f"Frame {self._selected_frame_idx + 1}")
+        except Exception as exc:
+            logger.error("Send frame error: %s", exc)
+        finally:
+            self._running = False
+            if temp_pb.source_session_id != pre_session_id:
+                pb.source_session_id = temp_pb.source_session_id
+                idx = next(
+                    (i for i, p in enumerate(self._playbooks) if p.id == pb.id), -1
+                )
+                if idx >= 0:
+                    self._update_playbook_list_row(idx)
+                if hasattr(self.app, "mark_dirty"):
+                    self.app.mark_dirty()
+
     # ------------------------------------------------------------------
     # Button handlers
     # ------------------------------------------------------------------
@@ -1159,6 +1231,10 @@ class ForgeTab(Widget):
         elif bid == "btn-frame-copy":
             event.stop()
             self._open_copy_frame_modal()
+
+        elif bid == "btn-frame-send":
+            event.stop()
+            self._send_selected_frame()
 
         elif bid in ("btn-frame-hex", "btn-frame-str"):
             event.stop()
