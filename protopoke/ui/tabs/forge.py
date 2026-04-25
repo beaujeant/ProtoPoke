@@ -370,6 +370,11 @@ class ForgeTab(Widget):
         self._current_idx        = idx
         self._selected_frame_idx = -1
         self._history_view_mode  = False
+        # A playbook run in progress belongs to the previous playbook context.
+        # Resetting here lets the user immediately send frames on the newly
+        # selected playbook; exclusive=True in run_worker will cancel the old
+        # worker when the next send starts.
+        self._running            = False
 
         self._refresh_frames_list()
         self._clear_frame_editor()
