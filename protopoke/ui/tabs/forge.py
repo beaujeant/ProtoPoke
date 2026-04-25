@@ -19,6 +19,7 @@ from ..modals.playbook_modal import PlaybookModal, PlaybookResult
 from ..modals.frame_edit import FrameEditModal
 from ..modals.copy_frame_modal import CopyFrameModal
 from ..modals.format_help import FormatHelpModal
+from ..widgets.segmented_control import SegmentedControl
 from ..utils.frame_codec import (
     hex_template_to_str, str_to_hex_template, hex_pairs_to_str,
 )
@@ -145,11 +146,6 @@ class ForgeTab(Widget):
     ForgeTab #frame-editor-pane .pane-header Static {
         width: 1fr;
     }
-    ForgeTab #frame-editor-pane .pane-header Button {
-        width: 9;
-        min-width: 9;
-        margin: 0;
-    }
     ForgeTab #frame-editor-pane .pane-header Button.btn-help {
         width: 5;
         min-width: 5;
@@ -157,33 +153,12 @@ class ForgeTab(Widget):
         color: $text-muted;
         margin-right: 1;
     }
-    ForgeTab #frame-editor-pane .pane-header Button.mode-active {
-        background: $surface;
-        color: $text;
-    }
-    ForgeTab #frame-editor-pane .pane-header Button.mode-inactive {
-        background: $primary;
-        color: $text-muted;
-    }
     ForgeTab #frame-view-pane .pane-header {
         height: 1;
         align: left middle;
     }
     ForgeTab #frame-view-pane .pane-header Static {
         width: 1fr;
-    }
-    ForgeTab #frame-view-pane .pane-header Button {
-        width: 9;
-        min-width: 9;
-        margin: 0;
-    }
-    ForgeTab #frame-view-pane .pane-header Button.mode-active {
-        background: $surface;
-        color: $text;
-    }
-    ForgeTab #frame-view-pane .pane-header Button.mode-inactive {
-        background: $primary;
-        color: $text-muted;
     }
     ForgeTab #frame-editor {
         height: 1fr;
@@ -285,9 +260,13 @@ class ForgeTab(Widget):
                             "  Frame Editor  ({{VAR}} · {{VAR:uint32be_add(1)}} · {{VAR:xor(ff)}})",
                             markup=False,
                         )
-                        yield Button("?",   id="btn-frame-help", classes="btn-help",     compact=True)
-                        yield Button("HEX", id="btn-frame-hex", classes="mode-active",   compact=True)
-                        yield Button("STR", id="btn-frame-str", classes="mode-inactive", compact=True)
+                        yield Button("?", id="btn-frame-help", classes="btn-help", compact=True)
+                        yield SegmentedControl(
+                            [("HEX", "hex"), ("STR", "str")],
+                            value=self._frame_editor_mode,
+                            id="forge-edit-mode",
+                            name="forge_edit_mode",
+                        )
                     yield TextArea("", id="frame-editor")
 
             with Vertical(id="right-col"):
@@ -297,8 +276,12 @@ class ForgeTab(Widget):
                 with Vertical(id="frame-view-pane"):
                     with Horizontal(classes="pane-header"):
                         yield Static("  Frame View")
-                        yield Button("HEX", id="btn-view-hex", classes="mode-active",   compact=True)
-                        yield Button("STR", id="btn-view-str", classes="mode-inactive", compact=True)
+                        yield SegmentedControl(
+                            [("HEX", "hex"), ("STR", "str")],
+                            value=self._frame_view_mode,
+                            id="forge-view-mode",
+                            name="forge_view_mode",
+                        )
                     yield TextArea("", id="frame-view", read_only=True)
 
         with Horizontal(classes="run-bar"):
@@ -545,15 +528,7 @@ class ForgeTab(Widget):
                 return
         self._frame_editor_mode = mode
         editor.load_text(new_text)
-        self._update_frame_mode_buttons()
-
-    def _update_frame_mode_buttons(self) -> None:
-        btn_hex = self.query_one("#btn-frame-hex", Button)
-        btn_str = self.query_one("#btn-frame-str", Button)
-        for btn, is_active in [(btn_hex, self._frame_editor_mode == "hex"),
-                               (btn_str, self._frame_editor_mode == "str")]:
-            btn.set_class(is_active,  "mode-active")
-            btn.set_class(not is_active, "mode-inactive")
+        self.query_one("#forge-edit-mode", SegmentedControl).value = mode
 
     # ------------------------------------------------------------------
     # Frame multi-select
@@ -619,18 +594,10 @@ class ForgeTab(Widget):
         if mode == self._frame_view_mode:
             return
         self._frame_view_mode = mode
-        self._update_frame_view_mode_buttons()
+        self.query_one("#forge-view-mode", SegmentedControl).value = mode
         # Re-render the current traffic entry if any
         if self._current_traffic_entry is not None:
             self._render_frame_view(self._current_traffic_entry)
-
-    def _update_frame_view_mode_buttons(self) -> None:
-        btn_hex = self.query_one("#btn-view-hex", Button)
-        btn_str = self.query_one("#btn-view-str", Button)
-        for btn, is_active in [(btn_hex, self._frame_view_mode == "hex"),
-                               (btn_str, self._frame_view_mode == "str")]:
-            btn.set_class(is_active,  "mode-active")
-            btn.set_class(not is_active, "mode-inactive")
 
     def _render_frame_view(self, entry: TrafficEntry) -> None:
         """Display a traffic entry in the frame view using current mode."""
@@ -1258,17 +1225,9 @@ class ForgeTab(Widget):
             event.stop()
             self._send_selected_frame()
 
-        elif bid in ("btn-frame-hex", "btn-frame-str"):
-            event.stop()
-            self._set_frame_editor_mode("hex" if bid == "btn-frame-hex" else "str")
-
         elif bid == "btn-frame-help":
             event.stop()
             self.app.push_screen(FormatHelpModal())
-
-        elif bid in ("btn-view-hex", "btn-view-str"):
-            event.stop()
-            self._set_frame_view_mode("hex" if bid == "btn-view-hex" else "str")
 
         elif bid == "btn-run":
             event.stop()
@@ -1282,6 +1241,12 @@ class ForgeTab(Widget):
             event.stop()
             self._clear_traffic()
             self._clear_frame_view()
+
+    def on_segmented_control_changed(self, event: SegmentedControl.Changed) -> None:
+        if event.control_name == "forge_edit_mode":
+            self._set_frame_editor_mode(event.value)
+        elif event.control_name == "forge_view_mode":
+            self._set_frame_view_mode(event.value)
 
     # ------------------------------------------------------------------
     # DataTable events

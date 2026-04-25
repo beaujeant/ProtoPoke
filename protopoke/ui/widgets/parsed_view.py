@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import Button, Static
+from textual.widgets import Static
 
 from ...models import Frame, ParsedMessage
 from ...protocol.display.hexdump import highlights_from_message, render_hexdump
 from ...protocol.display.tree import render_field_tree, render_frame_header
+from .segmented_control import SegmentedControl
 
 
 class ParsedView(Vertical):
@@ -42,9 +43,6 @@ class ParsedView(Vertical):
         content-align-horizontal: left;
         content-align-vertical: middle;
     }
-    ParsedView .view-toolbar Button {
-        padding: 0;
-    }
     ParsedView #detail-scroll {
         height: 1fr;
     }
@@ -63,13 +61,15 @@ class ParsedView(Vertical):
     def compose(self) -> ComposeResult:
         with Horizontal(classes="view-toolbar"):
             yield Static(self._title, id="view-title")
-            yield Button("Hex",    id="btn-hex",    variant="default", flat=True)
-            yield Button("Parsed", id="btn-parsed", variant="primary", flat=True)
+            yield SegmentedControl(
+                [("Hex", "hex"), ("Parsed", "parsed")],
+                value=self._mode,
+                disabled_values={"parsed"},
+                id="parsed-mode",
+                name="parsed_view_mode",
+            )
         with VerticalScroll(id="detail-scroll"):
             yield Static("", id="detail-content", markup=False)
-
-    def on_mount(self) -> None:
-        self.query_one("#btn-parsed", Button).disabled = True
 
     # ------------------------------------------------------------------
     # Public API
@@ -83,9 +83,11 @@ class ParsedView(Vertical):
         """Display *frame*.  If *message* is provided, the Parsed button is available."""
         self._frame = frame
         self._message = message
-        self.query_one("#btn-parsed", Button).disabled = message is None
+        sc = self.query_one("#parsed-mode", SegmentedControl)
+        sc.set_disabled_values({"parsed"} if message is None else set())
         if message is None and self._mode == "parsed":
             self._mode = "hex"
+            sc.value = "hex"
         self._refresh_content()
 
     def clear(self) -> None:
@@ -93,23 +95,17 @@ class ParsedView(Vertical):
         self._frame = None
         self._message = None
         self.query_one("#detail-content", Static).update("")
-        self.query_one("#btn-parsed", Button).disabled = True
+        self.query_one("#parsed-mode", SegmentedControl).set_disabled_values({"parsed"})
 
     # ------------------------------------------------------------------
     # Mode toggle
     # ------------------------------------------------------------------
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-hex":
-            self._mode = "hex"
-            self.query_one("#btn-hex",    Button).variant = "default"
-            self.query_one("#btn-parsed", Button).variant = "primary"
-            self._refresh_content()
-        elif event.button.id == "btn-parsed":
-            self._mode = "parsed"
-            self.query_one("#btn-hex",    Button).variant = "primary"
-            self.query_one("#btn-parsed", Button).variant = "default"
-            self._refresh_content()
+    def on_segmented_control_changed(self, event: SegmentedControl.Changed) -> None:
+        if event.control_name != "parsed_view_mode":
+            return
+        self._mode = event.value
+        self._refresh_content()
 
     def _refresh_content(self) -> None:
         """Update the detail-content Static with the current mode's text."""

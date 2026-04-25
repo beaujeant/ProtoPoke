@@ -13,6 +13,7 @@ from textual.message import Message
 from ...models import TamperedUnit, Direction
 from ...rules.rule import InterceptRule, ReplaceRule, RuleAction
 from ..widgets.rule_table import RuleTable
+from ..widgets.segmented_control import SegmentedControl
 from ..modals.add_rule import AddInterceptRuleModal, AddReplaceRuleModal
 from ..modals.format_help import FormatHelpModal
 from ..utils.frame_codec import bytes_to_str, str_to_bytes, hex_pairs_to_str, str_to_hex_pairs
@@ -56,7 +57,7 @@ class TamperTab(Widget):
     TamperTab .top-bar Switch {
         margin-right: 2;
     }
-    TamperTab .top-bar Button {
+    TamperTab .top-bar SegmentedControl {
         margin-right: 1;
     }
     TamperTab #intercept-queue-pane {
@@ -100,25 +101,12 @@ class TamperTab(Widget):
     TamperTab #hex-editor-pane .pane-header Static {
         width: 1fr;
     }
-    TamperTab #hex-editor-pane .pane-header Button {
-        width: 9;
-        min-width: 9;
-        margin: 0;
-    }
     TamperTab #hex-editor-pane .pane-header Button.btn-help {
         width: 5;
         min-width: 5;
         background: $surface-darken-1;
         color: $text-muted;
         margin-right: 1;
-    }
-    TamperTab #hex-editor-pane .pane-header Button.mode-active {
-        background: $surface;
-        color: $text;
-    }
-    TamperTab #hex-editor-pane .pane-header Button.mode-inactive {
-        background: $primary;
-        color: $text-muted;
     }
     TamperTab TextArea {
         height: 1fr;
@@ -148,9 +136,14 @@ class TamperTab(Widget):
             yield Label("Intercept:")
             yield Switch(id="tamper-toggle", value=False)
             yield Label("Direction:")
-            yield Button("Both",  id="dir-both", variant="default", compact=True)
-            yield Button("C → S", id="dir-c2s",  variant="default", compact=True)
-            yield Button("C ← S", id="dir-s2c",  variant="default", compact=True)
+            yield SegmentedControl(
+                [("Both", None),
+                 ("C → S", Direction.CLIENT_TO_SERVER),
+                 ("C ← S", Direction.SERVER_TO_CLIENT)],
+                value=None,
+                id="tamper-direction",
+                name="tamper_direction",
+            )
             yield Label("", id="pending-label")
 
         # Intercept queue
@@ -172,9 +165,13 @@ class TamperTab(Widget):
                     "  Edit — modify before forwarding",
                     markup=False,
                 )
-                yield Button("?",   id="btn-tamper-help", classes="btn-help",     compact=True)
-                yield Button("HEX", id="btn-tamper-hex", classes="mode-active",   compact=True)
-                yield Button("STR", id="btn-tamper-str", classes="mode-inactive", compact=True)
+                yield Button("?", id="btn-tamper-help", classes="btn-help", compact=True)
+                yield SegmentedControl(
+                    [("HEX", "hex"), ("STR", "str")],
+                    value=self._editor_mode,
+                    id="tamper-edit-mode",
+                    name="tamper_edit_mode",
+                )
             yield TextArea(id="hex-editor", language=None)
 
         # Intercept rules
@@ -236,7 +233,9 @@ class TamperTab(Widget):
         dt.add_column("Dir",      key="dir")
         dt.add_column("Len",      key="len")
         dt.add_column("Preview",  key="preview")
-        self._update_direction_buttons()
+        self.query_one("#tamper-direction", SegmentedControl).value = (
+            self.app.api.tamper_direction_filter
+        )
 
     # ------------------------------------------------------------------
     # Queue management (called by the app)
@@ -436,25 +435,6 @@ class TamperTab(Widget):
         logger.info("Script state reset for rule '%s'", rule.label)
 
     # ------------------------------------------------------------------
-    # Direction button state
-    # ------------------------------------------------------------------
-
-    def _update_direction_buttons(self) -> None:
-        """Disable the active direction button; enable the other two with a distinct colour."""
-        current = self.app.api.tamper_direction_filter
-        active_id = {
-            None: "dir-both",
-            Direction.CLIENT_TO_SERVER: "dir-c2s",
-            Direction.SERVER_TO_CLIENT: "dir-s2c",
-        }[current]
-
-        for bid in ("dir-both", "dir-c2s", "dir-s2c"):
-            btn = self.query_one(f"#{bid}", Button)
-            is_active = bid == active_id
-            btn.disabled = is_active
-            btn.variant = "default" if is_active else "primary"
-
-    # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
 
@@ -514,42 +494,23 @@ class TamperTab(Widget):
 
         self._editor_mode = mode
         editor.load_text(new_text)
-        self._update_tamper_mode_buttons()
+        self.query_one("#tamper-edit-mode", SegmentedControl).value = mode
 
-    def _update_tamper_mode_buttons(self) -> None:
-        btn_hex = self.query_one("#btn-tamper-hex", Button)
-        btn_str = self.query_one("#btn-tamper-str", Button)
-        for btn, is_active in [(btn_hex, self._editor_mode == "hex"),
-                               (btn_str, self._editor_mode == "str")]:
-            btn.set_class(is_active,  "mode-active")
-            btn.set_class(not is_active, "mode-inactive")
+    def on_segmented_control_changed(self, event: SegmentedControl.Changed) -> None:
+        if event.control_name == "tamper_direction":
+            self.app.api.tamper_direction_filter = event.value
+        elif event.control_name == "tamper_edit_mode":
+            self._set_editor_mode(event.value)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         bid = event.button.id
 
-        if bid == "btn-tamper-hex":
-            event.stop()
-            self._set_editor_mode("hex")
-            return
-        if bid == "btn-tamper-str":
-            event.stop()
-            self._set_editor_mode("str")
-            return
         if bid == "btn-tamper-help":
             event.stop()
             self.app.push_screen(FormatHelpModal())
             return
 
-        if bid == "dir-both":
-            self.app.api.tamper_direction_filter = None
-            self._update_direction_buttons()
-        elif bid == "dir-c2s":
-            self.app.api.tamper_direction_filter = Direction.CLIENT_TO_SERVER
-            self._update_direction_buttons()
-        elif bid == "dir-s2c":
-            self.app.api.tamper_direction_filter = Direction.SERVER_TO_CLIENT
-            self._update_direction_buttons()
-        elif bid == "btn-forward":
+        if bid == "btn-forward":
             self._do_forward()
         elif bid == "btn-drop":
             self._do_drop()
