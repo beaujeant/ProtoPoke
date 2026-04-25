@@ -242,6 +242,11 @@ class ForgeTab(Widget):
 
         # Currently displayed traffic entry (for frame-view hex/str toggle)
         self._current_traffic_entry: TrafficEntry | None = None
+        # Entries currently visible in the traffic table, indexed by id.
+        # Populated as rows are added (live or from history) so the Frame View
+        # can resolve a selection even before the parent PlaybookRun has been
+        # appended to pb.runs (or for single-frame sends in flight).
+        self._traffic_entries: dict[str, TrafficEntry] = {}
 
     # ------------------------------------------------------------------
     # Compose
@@ -648,6 +653,7 @@ class ForgeTab(Widget):
 
     def _clear_traffic(self) -> None:
         self.query_one("#traffic-table", DataTable).clear()
+        self._traffic_entries.clear()
 
     def _clear_frame_view(self) -> None:
         self._current_traffic_entry = None
@@ -663,6 +669,7 @@ class ForgeTab(Widget):
         _preview = entry.raw_bytes[:16].hex()
         if len(entry.raw_bytes) > 16:
             _preview += "…"
+        self._traffic_entries[entry.id] = entry
         tt.add_row(
             str(num),
             direction,
@@ -687,6 +694,7 @@ class ForgeTab(Widget):
             _preview = entry.raw_bytes[:16].hex()
             if len(entry.raw_bytes) > 16:
                 _preview += "…"
+            self._traffic_entries[entry.id] = entry
             tt.add_row(
                 str(i + 1),
                 direction,
@@ -701,15 +709,18 @@ class ForgeTab(Widget):
         """Display a traffic entry's bytes in the frame view."""
         if self._current_idx < 0:
             return
-        pb = self._playbooks[self._current_idx]
-        entry = None
-        for run in pb.runs:
-            for e in run.traffic:
-                if e.id == entry_id:
-                    entry = e
+        entry = self._traffic_entries.get(entry_id)
+        if entry is None:
+            # Fall back to scanning persisted runs (defensive — covers any
+            # caller path that hasn't populated the live index yet).
+            pb = self._playbooks[self._current_idx]
+            for run in pb.runs:
+                for e in run.traffic:
+                    if e.id == entry_id:
+                        entry = e
+                        break
+                if entry:
                     break
-            if entry:
-                break
         if entry is None:
             return
         self._current_traffic_entry = entry
@@ -1157,8 +1168,9 @@ class ForgeTab(Widget):
         pre_session_id = pb.source_session_id
         # Run a one-frame playbook that mirrors the parent's connection
         # settings.  Sharing variables is safe (PlaybookEngine only reads them).
-        # The run is intentionally not appended to pb.runs — single-frame sends
-        # are a repeater-style debugging aid, not playbook executions.
+        # The resulting PlaybookRun is appended to pb.runs so the send appears
+        # in the history list and the captured traffic remains inspectable in
+        # the Frame View after later interactions.
         temp_pb = Playbook(
             id=pb.id,
             label=pb.label,
@@ -1171,7 +1183,11 @@ class ForgeTab(Widget):
             frames=[frame],
         )
         try:
-            await self.app.api.run_playbook(temp_pb, on_entry=self._append_traffic_row)
+            run = await self.app.api.run_playbook(temp_pb, on_entry=self._append_traffic_row)
+            pb.runs.append(run)
+            self._refresh_history_table()
+            if hasattr(self.app, "mark_dirty"):
+                self.app.mark_dirty()
             logger.info("Sent frame '%s'", frame.label or f"Frame {self._selected_frame_idx + 1}")
         except Exception as exc:
             logger.error("Send frame error: %s", exc)
