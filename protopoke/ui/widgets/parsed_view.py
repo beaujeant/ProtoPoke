@@ -43,6 +43,13 @@ class ParsedView(Vertical):
         content-align-horizontal: left;
         content-align-vertical: middle;
     }
+    ParsedView .view-toolbar SegmentedControl {
+        height: 100%;
+    }
+    ParsedView .view-toolbar SegmentedControl Button.segment {
+        height: 100%;
+        content-align: center middle;
+    }
     ParsedView #detail-scroll {
         height: 1fr;
     }
@@ -67,6 +74,7 @@ class ParsedView(Vertical):
                 disabled_values={"parsed"},
                 id="parsed-mode",
                 name="parsed_view_mode",
+                compact=False,
             )
         with VerticalScroll(id="detail-scroll"):
             yield Static("", id="detail-content", markup=False)
