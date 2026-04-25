@@ -48,6 +48,8 @@ class SegmentedControl(Horizontal):
     }
     SegmentedControl Button.segment:hover {
         background: $accent 30%;
+        border: none;
+        padding: 0 1;
     }
     SegmentedControl Button.segment:disabled {
         color: $text-disabled;
