@@ -15,6 +15,7 @@ from rich.text import Text
 from ...filters.frame_filter import HIDE, SHOW, FrameDisplayFilter
 from ...models import Frame, Direction
 from ...core.session import Session
+from ..modals.create_session import CreateSessionModal, CreateSessionResult
 from ..modals.frame_filter_modal import FrameFilterModal
 from ..widgets.parsed_view import ParsedView
 
@@ -166,6 +167,7 @@ class TrafficTab(Widget):
         with Vertical(id="sessions-pane"):
             with Horizontal(classes="toolbar"):
                 yield Static("  Sessions")
+                yield Button("+ Create",    id="btn-create-session",    variant="primary", flat=True)
                 yield Button("✖ Terminate", id="btn-terminate-session", variant="warning", flat=True)
                 yield Button("✖ Remove",    id="btn-delete-session",    variant="error", flat=True)
             yield DataTable(id="sessions-table", cursor_type="row")
@@ -489,7 +491,11 @@ class TrafficTab(Widget):
             self._update_frames_label()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-terminate-session":
+        if event.button.id == "btn-create-session":
+            event.stop()
+            self.app.push_screen(CreateSessionModal(), self._on_create_session_done)
+
+        elif event.button.id == "btn-terminate-session":
             event.stop()
             if self._current_session_id:
                 self.app.terminate_session(self._current_session_id)
@@ -529,3 +535,26 @@ class TrafficTab(Widget):
                 )
             else:
                 logger.warning("Select a frame first")
+
+    def _on_create_session_done(self, result: CreateSessionResult | None) -> None:
+        """Handle the CreateSessionModal result by opening a forge session."""
+        if result is None:
+            return
+        self.run_worker(self._open_session(result), exclusive=False, thread=False)
+
+    async def _open_session(self, result: CreateSessionResult) -> None:
+        try:
+            session_id = await self.app.api.open_forge_session(
+                result.host, result.port, result.tls
+            )
+            logger.info(
+                "Created session %s -> %s:%d%s",
+                session_id[:8], result.host, result.port,
+                " [TLS]" if result.tls else "",
+            )
+        except ConnectionError as exc:
+            logger.error("Could not create session: %s", exc)
+            self.app.notify(f"Connection failed: {exc}", severity="error")
+        except Exception as exc:
+            logger.exception("Create session failed")
+            self.app.notify(f"Create session failed: {exc}", severity="error")
