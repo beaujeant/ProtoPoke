@@ -1118,8 +1118,12 @@ class ForgeTab(Widget):
         if self._selected_frame_idx < 0:
             logger.warning("Select a frame to send")
             return
+        # Only block if a full playbook run is active.  Single-frame sends must
+        # NOT set self._running — that flag belongs to _do_run/_async_run.
+        # Using exclusive=True lets rapid successive sends cancel-and-restart
+        # instead of producing a spurious "already running" error.
         if self._running:
-            logger.warning("A playbook is already running")
+            logger.warning("A playbook is already running — stop it first")
             return
         self._save_frame_editor()
         pb = self._playbooks[self._current_idx]
@@ -1138,16 +1142,13 @@ class ForgeTab(Widget):
                 )
                 return
         self._history_view_mode = False
-        self._running = True
         self._clear_traffic()
         self._clear_frame_view()
+        # exclusive=True cancels any in-flight single-frame send from a previous
+        # click, so repeated rapid sends work instead of getting blocked.
         self.run_worker(self._async_send_frame(pb, frame), exclusive=True)
 
     async def _async_send_frame(self, pb: Playbook, frame: PlaybookFrame) -> None:
-        def on_entry(entry: TrafficEntry) -> None:
-            if self._running:
-                self._append_traffic_row(entry)
-
         pre_session_id = pb.source_session_id
         # Run a one-frame playbook that mirrors the parent's connection
         # settings.  Sharing variables is safe (PlaybookEngine only reads them).
@@ -1165,12 +1166,12 @@ class ForgeTab(Widget):
             frames=[frame],
         )
         try:
-            await self.app.api.run_playbook(temp_pb, on_entry=on_entry)
+            await self.app.api.run_playbook(temp_pb, on_entry=self._append_traffic_row)
             logger.info("Sent frame '%s'", frame.label or f"Frame {self._selected_frame_idx + 1}")
         except Exception as exc:
             logger.error("Send frame error: %s", exc)
         finally:
-            self._running = False
+            # Never touch self._running here — that flag is owned by _async_run.
             if temp_pb.source_session_id != pre_session_id:
                 pb.source_session_id = temp_pb.source_session_id
                 idx = next(
