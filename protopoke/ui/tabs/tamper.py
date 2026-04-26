@@ -60,6 +60,13 @@ class TamperTab(Widget):
     TamperTab .top-bar SegmentedControl {
         margin-right: 1;
     }
+    TamperTab .top-bar SegmentedControl.selector-control Button.segment {
+        margin: 0 1;
+        color: goldenrod;
+    }
+    TamperTab .top-bar SegmentedControl.selector-control Button.segment.active {
+        color: $text;
+    }
     TamperTab #intercept-queue-pane {
         height: 30%;
     }
@@ -143,6 +150,7 @@ class TamperTab(Widget):
                 value=None,
                 id="tamper-direction",
                 name="tamper_direction",
+                classes="selector-control",
             )
             yield Label("", id="pending-label")
 
