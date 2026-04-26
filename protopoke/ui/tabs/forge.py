@@ -671,6 +671,13 @@ class ForgeTab(Widget):
                 _preview,
                 key=entry.id,
             )
+        # Auto-select the first traffic entry so Frame View is populated
+        if run.traffic:
+            self._show_traffic_entry(run.traffic[0].id)
+            try:
+                tt.move_cursor(row=0)
+            except Exception:
+                pass
 
     def _show_traffic_entry(self, entry_id: str) -> None:
         """Display a traffic entry's bytes in the frame view."""
@@ -722,8 +729,6 @@ class ForgeTab(Widget):
         pb = self._playbooks[self._current_idx]
         for run in pb.runs:
             if run.id == run_id:
-                self._selected_frame_idx = -1
-                self._clear_frame_editor()
                 self._populate_traffic_from_run(run)
                 self._history_view_mode = True
                 break
@@ -745,6 +750,37 @@ class ForgeTab(Widget):
         # the same logical row (e.g. cleared+repopulated).  Load explicitly so
         # the traffic view is always consistent with the auto-selected row.
         self._load_history_run(pb.runs[last_idx].id)
+
+    def _append_history_run(self, run: PlaybookRun) -> None:
+        """Append one completed run to the history table and select it.
+
+        Unlike _refresh_history_table (clear + repopulate), this only adds
+        the new row, so no spurious RowHighlighted(row=0) event is posted
+        that would overwrite the traffic view with an older run's data.
+        """
+        if self._current_idx < 0:
+            return
+        pb = self._playbooks[self._current_idx]
+        num = len(pb.runs)  # run already appended before this call
+        t = _time.strftime("%H:%M:%S", _time.localtime(run.timestamp))
+        ht = self.query_one("#history-table", DataTable)
+        ht.add_row(
+            str(num),
+            run.playbook_label,
+            t,
+            str(len(run.traffic)),
+            str(run.sent_bytes_total()),
+            str(run.received_bytes_total()),
+            key=run.id,
+        )
+        # Move cursor to the new row; RowHighlighted will fire and call
+        # _load_history_run which repopulates traffic from the stored run.
+        last_idx = num - 1
+        try:
+            ht.move_cursor(row=last_idx)
+        except Exception:
+            pass
+        self._history_view_mode = True
 
     # ------------------------------------------------------------------
     # Frame operations
@@ -1105,8 +1141,7 @@ class ForgeTab(Widget):
         try:
             run = await self.app.api.run_playbook(pb, on_entry=on_entry)
             pb.runs.append(run)
-            self._refresh_history_table()
-            self._select_latest_history()
+            self._append_history_run(run)
             logger.info("Playbook complete — %d traffic entries", len(run.traffic))
         except Exception as exc:
             logger.error("Playbook error: %s", exc)
@@ -1184,7 +1219,7 @@ class ForgeTab(Widget):
         try:
             run = await self.app.api.run_playbook(temp_pb, on_entry=self._append_traffic_row)
             pb.runs.append(run)
-            self._refresh_history_table()
+            self._append_history_run(run)
             if hasattr(self.app, "mark_dirty"):
                 self.app.mark_dirty()
             logger.info("Sent frame '%s'", frame.label or f"Frame {self._selected_frame_idx + 1}")
@@ -1298,7 +1333,7 @@ class ForgeTab(Widget):
                     break
 
         elif dt_id == "frames-table":
-            if self._current_idx < 0 or self._history_view_mode:
+            if self._current_idx < 0:
                 self._extending_selection = False
                 return
             pb = self._playbooks[self._current_idx]
@@ -1323,8 +1358,6 @@ class ForgeTab(Widget):
                     self._save_frame_editor()
                     self._selected_frame_idx = current_idx
                     self._load_frame_into_editor(pb.frames[current_idx])
-                    self._clear_traffic()
-                    self._clear_frame_view()
 
             self._extending_selection = False
             self._update_frames_label()
@@ -1353,9 +1386,6 @@ class ForgeTab(Widget):
                     self._save_frame_editor()
                     self._selected_frame_idx = i
                     self._load_frame_into_editor(frame)
-                    self._history_view_mode = False
-                    self._clear_traffic()
-                    self._clear_frame_view()
                     break
 
     # ------------------------------------------------------------------
