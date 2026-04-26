@@ -131,7 +131,7 @@ protopoke/
 │   └── sqlite.py       SqliteStorageBackend — SQLite persistence
 │
 ├── mcp/
-│   ├── server.py       build_mcp_server() — 50+ MCP tools wrapping ProtoPokeAPI
+│   ├── server.py       build_mcp_server() — 70 MCP tools wrapping ProtoPokeAPI
 │   └── host.py         MCPHost — embedded MCP server lifecycle (start/stop/
 │                       rebind), used by the Textual app to serve tools over
 │                       streamable-http in the same process as the UI

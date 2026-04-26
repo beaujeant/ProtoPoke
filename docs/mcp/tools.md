@@ -1,6 +1,6 @@
 # MCP Tool Reference
 
-ProtoPoke exposes 50+ tools through MCP. All tools return JSON-serialisable dicts; bytes fields are hex-encoded strings.
+ProtoPoke exposes 70 tools through MCP. All tools return JSON-serialisable dicts; bytes fields are hex-encoded strings.
 
 ## Proxy Lifecycle
 
@@ -17,6 +17,7 @@ ProtoPoke exposes 50+ tools through MCP. All tools return JSON-serialisable dict
 | `list_forwarders` | All configured forwarders with status |
 | `start_forwarder` | Start a specific forwarder by name |
 | `stop_forwarder` | Stop a specific forwarder by name |
+| `update_forwarder_config` | Hot-swap name, framer, and/or protocol definition on a running forwarder |
 
 ## Session Management
 
@@ -113,7 +114,7 @@ ProtoPoke exposes 50+ tools through MCP. All tools return JSON-serialisable dict
 
 | Tool | Description |
 |------|-------------|
-| `set_framer` | Change the active framer at runtime |
+| `set_framer` | Hot-swap the active framer on all running sessions without restart |
 
 ## Variables
 
