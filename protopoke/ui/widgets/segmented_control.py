@@ -47,7 +47,12 @@ class SegmentedControl(Horizontal):
         text-style: bold;
     }
     SegmentedControl Button.segment:hover {
-        background: $accent 30%;
+        background: $primary 50%;
+        border: none;
+        padding: 0 1;
+    }
+    SegmentedControl Button.segment.active:hover {
+        background: $accent;
         border: none;
         padding: 0 1;
     }
