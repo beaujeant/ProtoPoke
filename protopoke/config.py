@@ -163,19 +163,7 @@ class ForwarderConfig:
 
     @classmethod
     def from_dict(cls, d: dict) -> "ForwarderConfig":
-        """
-        Deserialise from a dict (as produced by to_dict()).
-
-        Also handles legacy v4 format where networking/framing/TLS fields
-        were nested inside a ``"config"`` sub-dict.
-        """
-        # v4 migration: flatten nested "config" dict into top-level
-        if "config" in d and isinstance(d["config"], dict):
-            flat = dict(d["config"])
-            flat["name"] = d.get("name", "Forwarder")
-            flat["enabled"] = d.get("enabled", True)
-            d = flat
-
+        """Deserialise from a dict (as produced by to_dict())."""
         kwargs = {}
         for f_name, f_obj in cls.__dataclass_fields__.items():
             if f_name not in d:

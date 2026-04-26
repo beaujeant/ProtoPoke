@@ -12,14 +12,9 @@ Design:
     - No queues, no guaranteed delivery — this is for observation, not commands
       (the intercept controller handles the command path separately)
 
-Future UI integration:
-    A UI layer subscribes to FrameCapturedEvent and SessionOpenedEvent to
-    update its display. It doesn't touch the relay or the intercept controller
-    directly — it goes through ProtoPokeAPI.
-
-Future persistence:
-    A StorageBackend can subscribe to events and write frames/sessions
-    to SQLite as they arrive, without touching the proxy core.
+The UI layer subscribes to FrameCapturedEvent / SessionOpenedEvent / etc.
+to update its display.  It goes through ProtoPokeAPI rather than touching
+the relay or the intercept controller directly.
 """
 
 from __future__ import annotations

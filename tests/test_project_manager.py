@@ -117,13 +117,6 @@ class TestProjectManager:
         with pytest.raises(FileNotFoundError):
             pm.open("/tmp/does_not_exist_12345.pp")
 
-    def test_open_missing_project_json_raises(self, tmp_path):
-        pm = ProjectManager()
-        bad_dir = tmp_path / "bad.pp"
-        bad_dir.mkdir()
-        with pytest.raises(ValueError, match="project.json"):
-            pm.open(bad_dir)
-
     def test_open_returns_project_state(self, tmp_path):
         pm = ProjectManager()
         pm.name = "MyProj"
@@ -184,18 +177,6 @@ class TestProjectManager:
         assert state.captured_sessions[0]["id"] == "sess-1"
         assert len(state.captured_sessions[0]["frames"]) == 1
         assert state.captured_sessions[0]["frames"][0]["raw_bytes"] == "deadbeef"
-
-    def test_legacy_directory_format_still_opens(self, tmp_path):
-        """Backward compat: old directory-based projects can still be opened."""
-        import time
-        old_dir = tmp_path / "old.pp"
-        old_dir.mkdir()
-        meta = {"format_version": 1, "name": "Old", "created_at": time.time(), "saved_at": 0.0}
-        (old_dir / "project.json").write_text(json.dumps(meta))
-
-        pm = ProjectManager()
-        state = pm.open(old_dir)
-        assert state.name == "Old"
 
     def test_zip_too_many_members_rejected(self, tmp_path):
         """ZIP with more than _ZIP_MAX_MEMBERS entries raises ValueError."""

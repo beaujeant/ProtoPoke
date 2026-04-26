@@ -662,9 +662,9 @@ class ReplaceRule:
             direction=direction,
             enabled=d.get("enabled", True),
             created_at=d.get("created_at", time.time()),
-            apply_to_traffic=d.get("apply_to_traffic", d.get("apply_to_intercept", True)),
-            apply_to_tamper=d.get("apply_to_tamper", d.get("apply_to_sequence", True)),
-            apply_to_forge=d.get("apply_to_forge", d.get("apply_to_repeater", True)),
+            apply_to_traffic=d.get("apply_to_traffic", True),
+            apply_to_tamper=d.get("apply_to_tamper", True),
+            apply_to_forge=d.get("apply_to_forge", True),
         )
 
 

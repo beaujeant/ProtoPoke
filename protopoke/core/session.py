@@ -6,18 +6,11 @@ single place to create, look up, and track all sessions.
 
 Design:
     Session     — holds SessionInfo metadata + list of captured Frames
-    SessionRegistry — dict-backed store; no database yet
+    SessionRegistry — dict-backed in-memory store
 
 Memory:
-    Frames are kept in Session.frames in memory. For long-running captures
-    with high traffic, you'd want to flush frames to the storage backend
-    periodically. That's a future concern; for a personal research tool,
-    in-memory is fine.
-
-Persistence path:
-    When you add a SqliteStorageBackend, the storage layer subscribes to
-    FrameCapturedEvent and SessionClosedEvent and writes to disk. The in-memory
-    Session.frames list remains as a fast cache; the DB is the durable record.
+    All sessions and frames live in memory for the lifetime of the process.
+    The project save/load path serialises them to a .pp file when requested.
 """
 
 from __future__ import annotations

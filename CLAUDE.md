@@ -126,10 +126,6 @@ protopoke/
 │   └── manager.py      ProjectManager — save/load .pp ZIP files
 │                       (project.json, forwarders.json, rules.json, forge.json)
 │
-├── storage/
-│   ├── base.py         StorageBackend ABC, NullStorageBackend, MemoryStorageBackend
-│   └── sqlite.py       SqliteStorageBackend — SQLite persistence
-│
 ├── mcp/
 │   ├── server.py       build_mcp_server() — 70 MCP tools wrapping ProtoPokeAPI
 │   └── host.py         MCPHost — embedded MCP server lifecycle (start/stop/
@@ -187,11 +183,11 @@ plain dataclasses — immutable IDs, serialisable to JSON via `.to_dict()`.
 | Principle | How it manifests |
 |-----------|-----------------|
 | **No global state** | Every component receives its dependencies (config, event_bus, registry, …) as constructor args. ProtoPokeAPI wires them together. |
-| **Async-only I/O** | Everything is `asyncio`. No threads except the SQLite executor bridge (`_run()` in sqlite.py). |
+| **Async-only I/O** | Everything is `asyncio`. No threads. |
 | **Single event loop** | All tasks share one loop. Session registry and intercept queue need no locks. |
 | **Immutable IDs** | Frame/Session/Rule IDs are UUID4 strings, set at creation, never changed. |
 | **Layered isolation** | Transport (relay) knows nothing about framing details. Framer knows nothing about protocol semantics. Parser knows nothing about network I/O. |
-| **Pluggable via ABC** | Framers, decoders/encoders, mutators, storage backends all expose abstract interfaces. Swap implementations without touching callers. |
+| **Pluggable via ABC** | Framers, decoders/encoders, and mutators all expose abstract interfaces. Swap implementations without touching callers. |
 | **Explicit over magic** | No metaclasses, no auto-discovery of plugins. Registration (e.g. `FRAMER_REGISTRY`) is explicit. |
 
 ---
@@ -237,12 +233,6 @@ api.set_protocol_file("my_protocol.yaml")
 ```
 Or implement the `ProtocolDecoder` / `ProtocolEncoder` ABCs for fully custom
 parsing logic and call `api.set_protocol(decoder, encoder)`.
-
-### Add a storage backend
-
-Subclass `protopoke.storage.base.StorageBackend`, implement the five async
-methods (`save_session`, `load_session`, `list_sessions`, `save_frame`,
-`load_frames`), and pass it to `ProtoPokeAPI(forwarders, storage=MyBackend())`.
 
 ---
 
@@ -330,7 +320,6 @@ tests/
 ├── test_send_frame.py            api.send_frame() direct send
 ├── test_inject_to_server.py      api.inject_to_server() into live session
 ├── test_mcp_server.py            MCP tool coverage
-├── test_sqlite_storage.py        SqliteStorageBackend
 ├── test_to_dict_serialisation.py .to_dict() / .from_dict() round-trips
 └── test_sequence.py              SEQUENCE match strategy
 ```
@@ -356,10 +345,9 @@ tests/
 
 ## Things that are intentionally simple / not there
 
-- **No ORM** — models are dataclasses, storage is explicit SQL or dicts.
+- **No ORM, no database** — models are dataclasses; project save/load is plain JSON in a ZIP archive.
 - **No configuration file auto-discovery** — config is always passed explicitly.
 - **No dependency injection framework** — dependencies are constructor arguments.
-- **No threading** — single asyncio event loop throughout; SQLite uses a thread
-  pool executor but serialises access with an asyncio lock.
+- **No threading** — single asyncio event loop throughout.
 - **No HTTP API** — control surface is `ProtoPokeAPI` (Python) and MCP (AI tools).
   Adding an HTTP layer would wrap `ProtoPokeAPI` methods with no core changes.

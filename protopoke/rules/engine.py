@@ -12,7 +12,7 @@ Evaluates an ordered list of InterceptRules against a frame and returns a
 RuleAction decision.  The first matching rule wins (firewall semantics).
 
     - If no rules are configured:  ``should_intercept()`` returns ``True``
-      (intercept everything — identical to the legacy behaviour).
+      (intercept everything — the default).
     - If rules are configured but none match: returns ``False``
       (auto-forward — rules are an allow-list for what to intercept).
     - If a rule matches: use the rule's action (INTERCEPT or FORWARD).
@@ -254,12 +254,12 @@ class InterceptFilter:
         """
         Return ``True`` if *frame* should be held in the intercept queue.
 
-        When no rules are configured, returns ``True`` (intercept everything,
-        classic behaviour).  When rules are configured but none match,
-        returns ``False`` (auto-forward — rules define what to intercept).
+        When no rules are configured, returns ``True`` (intercept everything).
+        When rules are configured but none match, returns ``False``
+        (auto-forward — rules define what to intercept).
         """
         if not self._rules:
-            # No rules → intercept everything (backward-compatible default)
+            # No rules → intercept everything (the default).
             return True
         action = self.evaluate(frame)
         if action is None:
