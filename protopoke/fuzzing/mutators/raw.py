@@ -269,7 +269,7 @@ class ChainMutator(FrameMutator):
         frame:  "Frame",
         parsed: Optional["ParsedMessage"],
     ) -> Optional[bytes]:
-        from ...models import Frame as _Frame, Direction
+        from ...models import Frame as _Frame
 
         current = frame.raw_bytes
         mutated_at_least_once = False

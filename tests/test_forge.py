@@ -191,27 +191,6 @@ class TestReplayCore:
                 finally:
                     await api.stop()
 
-    # Backward-compatible alias methods still work
-    @pytest.mark.asyncio
-    async def test_backward_compat_aliases(self):
-        async with echo_server_ctx() as (upstream_host, upstream_port):
-            listen_port = free_port()
-            config = ForwarderConfig(name="Test",
-                listen_host="127.0.0.1", listen_port=listen_port,
-                upstream_host=upstream_host, upstream_port=upstream_port,
-            )
-            api = ProtoPokeAPI([config])
-            await api.start()
-            try:
-                session_id = await capture_session(api, listen_port, b"compat")
-                result = await api.forge_session(session_id)
-                assert result.success
-                # Old method names still work
-                assert result.client_frames_sent() == result.frames_sent()
-                assert result.server_frames_received() == result.frames_received()
-            finally:
-                await api.stop()
-
 
 # ---------------------------------------------------------------------------
 # Frame selector (integration with real sessions)

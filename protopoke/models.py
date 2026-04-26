@@ -5,16 +5,11 @@ These are the fundamental data structures used throughout the entire system.
 Everything from the transport layer to the UI passes these objects around.
 
 Design decisions:
-- dataclasses throughout: explicit, readable, easy to serialize to dict/JSON/SQLite
+- dataclasses throughout: explicit, readable, easy to serialize to dict/JSON
 - Enums for state: prevents typos and enables exhaustive matching
 - Immutable IDs: set at creation, never changed
 - Optional fields have defaults so creation is ergonomic
 - ParsedMessage keeps a reference to its source Frame (raw bytes always accessible)
-
-Persistence note:
-    All fields here are primitive types (str, int, float, bytes, Enum).
-    Converting to SQLite rows or JSON is straightforward. A future
-    SqliteStorageBackend can persist/restore these without schema changes.
 """
 
 from __future__ import annotations
@@ -107,7 +102,7 @@ class Frame:
 
     Attributes:
         id:              Unique ID — used to reference this frame in the UI,
-                         the intercept queue, replay, and storage.
+                         the intercept queue, and replay.
         session_id:      Which session this frame belongs to.
         direction:       Which way the bytes are flowing.
         raw_bytes:       The actual bytes captured from the network.
@@ -148,7 +143,7 @@ class Frame:
         Serialise to a JSON-compatible dict.
 
         ``raw_bytes`` is encoded as a hex string so it survives JSON
-        serialisation.  MCP tool handlers and storage adapters use this.
+        serialisation.  MCP tool handlers and project save/load use this.
         """
         return {
             "id":              self.id,

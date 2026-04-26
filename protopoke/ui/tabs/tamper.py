@@ -8,10 +8,9 @@ from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import DataTable, TextArea, Button, Label, Static, Switch
 from textual.containers import Horizontal, Vertical
-from textual.message import Message
 
 from ...models import TamperedUnit, Direction
-from ...rules.rule import InterceptRule, ReplaceRule, RuleAction
+from ...rules.rule import InterceptRule, ReplaceRule
 from ..widgets.rule_table import RuleTable
 from ..widgets.segmented_control import SegmentedControl
 from ..modals.add_rule import AddInterceptRuleModal, AddReplaceRuleModal

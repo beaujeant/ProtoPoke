@@ -82,7 +82,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     from protopoke.models import Direction
     from protopoke.rules.rule import ReplaceRule, InterceptRule, RuleAction
-    from protopoke.forge.models import Playbook, PlaybookFrame, PlaybookRun, TrafficEntry
+    from protopoke.forge.models import Playbook, PlaybookFrame
 
     def _rebind(new_api: "ProtoPokeAPI") -> None:
         """Swap the api bound to all tool closures. Called by MCPHost."""
@@ -391,7 +391,6 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         Returns:
             List of frame dicts for all frames that match the pattern.
         """
-        import re as _re
         from protopoke.rules.rule import compile_binary_pattern, PatternError
 
         try:
@@ -1558,7 +1557,6 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
             BitFlipMutator,
             ByteDeleteMutator,
             ByteInsertMutator,
-            ChainMutator,
             FieldBoundaryMutator,
             FieldOverflowMutator,
             KnownBadMutator,

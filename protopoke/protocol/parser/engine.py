@@ -39,7 +39,6 @@ from ..definition.schema import (
     FieldType,
     ProtocolDefinition,
 )
-from .expression import evaluate
 from .fields import ParseError, encode_field, parse_field
 from .matcher import MessageMatcher
 

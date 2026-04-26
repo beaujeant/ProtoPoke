@@ -83,7 +83,7 @@ class NewProjectModal(ModalScreen[str | None]):
 
 class OpenProjectModal(ModalScreen[str | None]):
     """
-    Modal dialog to open an existing project file or legacy directory.
+    Modal dialog to open an existing project file.
 
     Dismisses with the path string, or None if cancelled.
     """
@@ -126,7 +126,7 @@ class OpenProjectModal(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label("Open Project", classes="modal-title")
-            yield Label("Path to .pp file (or legacy directory):")
+            yield Label("Path to .pp file:")
             with Horizontal(classes="field-row"):
                 yield Input(placeholder="/path/to/capture.pp", id="project-path", classes="field-input")
                 yield Button("Browse", id="btn-browse", classes="btn-browse")

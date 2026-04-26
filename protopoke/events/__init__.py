@@ -4,6 +4,5 @@ from .bus import (
     SessionOpenedEvent,
     SessionClosedEvent,
     FrameCapturedEvent,
-    InterceptStartedEvent,
     InterceptCompletedEvent,
 )

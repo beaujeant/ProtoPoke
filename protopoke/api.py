@@ -59,7 +59,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .config import ForwarderConfig
@@ -81,7 +80,6 @@ from .forge.engine import ForgeEngine, ForgeResult, PlaybookEngine, SendResult
 from .forge.models import Playbook, PlaybookRun, TrafficEntry
 from .rules.engine import RulesEngine, InterceptFilter
 from .rules.rule import ReplaceRule, InterceptRule
-from .storage.base import StorageBackend, NullStorageBackend
 from .protocol.base import ProtocolDecoder, ProtocolEncoder, PassthroughDecoder
 from .fuzzing.models import FuzzCampaign, FuzzResult
 from .fuzzing.engine import FuzzerEngine
@@ -104,7 +102,6 @@ class ProtoPokeAPI:
     def __init__(
         self,
         forwarders:       list[ForwarderConfig],
-        storage:          Optional[StorageBackend] = None,
         rules_engine:      Optional[RulesEngine]     = None,
         intercept_filter:  Optional[InterceptFilter] = None,
     ) -> None:
@@ -113,7 +110,6 @@ class ProtoPokeAPI:
         # Shared infrastructure
         self.event_bus        = EventBus()
         self.session_registry = SessionRegistry()
-        self.storage          = storage or NullStorageBackend()
 
         # Global variable store — shared across all pipelines (intercept,
         # forge, sequence).  Script-type replace rules receive this dict and
@@ -242,7 +238,6 @@ class ProtoPokeAPI:
         for name, engine in list(self._engines.items()):
             if engine._server is not None:
                 await engine.stop()
-        await self.storage.close()
         if self._serve_event is not None:
             self._serve_event.set()
         logger.info("ProtoPokeAPI stopped")

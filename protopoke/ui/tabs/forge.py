@@ -1040,7 +1040,6 @@ class ForgeTab(Widget):
 
         class _ExportModal(_SaveModal):
             def compose(self):
-                from textual.app import ComposeResult as CR
                 from textual.widgets import Button as Btn, Input as Inp, Label as Lbl, Static as Sta
                 from textual.containers import Horizontal as H, Vertical as V
                 with V():

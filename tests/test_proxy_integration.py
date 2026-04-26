@@ -459,12 +459,10 @@ class TestForwarderConfigUpdate:
             listen_port = free_port()
             fwd = ForwarderConfig(
                 name="test",
-                config=ProxyConfig(
-                    listen_host="127.0.0.1", listen_port=listen_port,
-                    upstream_host=host_a, upstream_port=port_a,
-                ),
+                listen_host="127.0.0.1", listen_port=listen_port,
+                upstream_host=host_a, upstream_port=port_a,
             )
-            api = ProxyAPI([fwd])
+            api = ProtoPokeAPI([fwd])
             await api.start_forwarder("test")
             try:
                 # Verify initial routing
@@ -478,10 +476,8 @@ class TestForwarderConfigUpdate:
                 new_listen = free_port()
                 fwd_updated = ForwarderConfig(
                     name="test",
-                    config=ProxyConfig(
-                        listen_host="127.0.0.1", listen_port=new_listen,
-                        upstream_host=host_b, upstream_port=port_b,
-                    ),
+                    listen_host="127.0.0.1", listen_port=new_listen,
+                    upstream_host=host_b, upstream_port=port_b,
                 )
                 api.update_forwarders([fwd_updated])
                 await api.start_forwarder("test")

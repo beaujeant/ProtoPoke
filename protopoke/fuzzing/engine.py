@@ -39,7 +39,7 @@ import time
 from typing import Callable, Optional, TYPE_CHECKING
 
 from ..models import Direction, Frame
-from ..core.session import Session, SessionRegistry
+from ..core.session import SessionRegistry
 from ..forge.engine import ForgeEngine, parse_frame_selector
 from .models import CampaignStatus, FuzzCampaign, FuzzResult
 from .mutators.base import FrameMutator

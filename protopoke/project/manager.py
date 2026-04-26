@@ -4,13 +4,12 @@ ProjectManager — save/load a named ProtoPoke project.
 A *project* is a single ``.pp`` ZIP file that bundles:
 
     project.json      — metadata (name, version, timestamps)
-    forwarders.json   — list of ForwarderConfig objects (format v4+)
+    forwarders.json   — list of ForwarderConfig objects
     rules.json        — replace rules + intercept rules
     forge.json        — playbooks (frames, runs/history, connection config)
     logs.json         — captured sessions and frames (the traffic tab content)
-
-Legacy format v3 projects store a single ``config.json``; these are
-automatically migrated to a single "Default" forwarder on open.
+    filters.json      — frame display filters
+    mcp.json          — embedded MCP server settings
 
 The file is a standard ZIP archive (no extra dependencies needed — Python's
 built-in ``zipfile`` module is used).
@@ -23,7 +22,7 @@ Usage::
 
     pm = ProjectManager()
     pm.new("My Capture")
-    pm.forwarders[0].config.listen_port = 9000
+    pm.forwarders[0].listen_port = 9000
     pm.save_as("/tmp/capture.pp")
 
     pm2 = ProjectManager()
@@ -34,7 +33,6 @@ Usage::
 
 from __future__ import annotations
 
-import io
 import json
 import time
 import zipfile
@@ -49,10 +47,6 @@ from ..rules.engine import RulesEngine, InterceptFilter
 from ..forge.models import Playbook
 
 # Project format version — bump when the schema changes incompatibly.
-# v3 → v4: config.json (single ProxyConfig) replaced by forwarders.json (list of ForwarderConfig).
-# v4 → v5: flat ForwarderConfig (no nested ProxyConfig wrapper).
-# v5 → v6: added filters.json (frame display filters).
-# v6 → v7: added mcp.json (embedded MCP server settings).
 _FORMAT_VERSION = 7
 
 # Safety limits for ZIP loading.
@@ -142,22 +136,16 @@ class ProjectManager:
 
     def open(self, path: str | Path) -> ProjectState:
         """
-        Load a project from *path* (ZIP file or legacy directory).
+        Load a project from *path* (a ``.pp`` ZIP file).
 
         Raises:
             FileNotFoundError: Path does not exist.
             ValueError:        Project file is invalid or too new.
         """
         p = Path(path)
-        if not p.exists():
+        if not p.is_file():
             raise FileNotFoundError(f"Project not found: {path}")
-
-        if p.is_file():
-            return self._open_zip(p)
-        elif p.is_dir():
-            return self._open_directory(p)
-        else:
-            raise FileNotFoundError(f"Project path is neither a file nor a directory: {path}")
+        return self._open_zip(p)
 
     def save(self) -> Path:
         """Write the current project to :attr:`path`."""
@@ -264,29 +252,17 @@ class ProjectManager:
                     f"(format_version={meta['format_version']}). Please upgrade."
                 )
 
-            # Forwarders (v4+) — or migrate from legacy config.json (v3)
             forwarders_raw = _read("forwarders.json")
-            if forwarders_raw:
-                fdata = json.loads(forwarders_raw)
-                self.forwarders = [
-                    ForwarderConfig.from_dict(fd)
-                    for fd in fdata.get("forwarders", [])
-                ]
-                if not self.forwarders:
-                    self.forwarders = [ForwarderConfig(name="Default", enabled=True)]
-            else:
-                # v3 migration: old projects stored a single config.json instead of
-                # forwarders.json.  Build a ForwarderConfig directly from the legacy
-                # dict so the rest of the code only needs to deal with the current
-                # multi-forwarder format.
-                config_raw = _read("config.json")
-                if config_raw:
-                    legacy_data = json.loads(config_raw)
-                    legacy_data.setdefault("name", "Default")
-                    legacy_data.setdefault("enabled", True)
-                    self.forwarders = [ForwarderConfig.from_dict(legacy_data)]
-                else:
-                    self.forwarders = [ForwarderConfig(name="Default", enabled=True)]
+            if forwarders_raw is None:
+                raise ValueError(
+                    f"Not a valid project file (missing forwarders.json): {zip_path}"
+                )
+            fdata = json.loads(forwarders_raw)
+            self.forwarders = [
+                ForwarderConfig.from_dict(fd) for fd in fdata.get("forwarders", [])
+            ]
+            if not self.forwarders:
+                self.forwarders = [ForwarderConfig(name="Default", enabled=True)]
 
             # Rules
             rules_raw = _read("rules.json")
@@ -315,122 +291,21 @@ class ProjectManager:
             else:
                 self.captured_sessions = []
 
-            # Frame display filters (v6+) — default to [] for backward compat
             filters_raw = _read("filters.json")
-            if filters_raw:
-                self.frame_filters = [
-                    FrameDisplayFilter.from_dict(fd)
-                    for fd in json.loads(filters_raw).get("filters", [])
-                ]
-            else:
-                self.frame_filters = []
+            self.frame_filters = (
+                [FrameDisplayFilter.from_dict(fd)
+                 for fd in json.loads(filters_raw).get("filters", [])]
+                if filters_raw else []
+            )
 
-            # Embedded MCP server settings (v7+) — default disabled
             mcp_raw = _read("mcp.json")
-            if mcp_raw:
-                self.mcp_settings = MCPSettings.from_dict(json.loads(mcp_raw))
-            else:
-                self.mcp_settings = MCPSettings()
+            self.mcp_settings = (
+                MCPSettings.from_dict(json.loads(mcp_raw))
+                if mcp_raw else MCPSettings()
+            )
 
         self.name      = meta.get("name", zip_path.stem)
         self.path      = zip_path
-        self.is_dirty  = False
-        self._saved_at = meta.get("saved_at", 0.0)
-
-        return ProjectState(
-            forwarders=self.forwarders,
-            rules_engine=self.rules_engine,
-            intercept_filter=self.intercept_filter,
-            playbooks=self.playbooks,
-            captured_sessions=self.captured_sessions,
-            name=self.name,
-            frame_filters=self.frame_filters,
-            mcp_settings=self.mcp_settings,
-        )
-
-    # ------------------------------------------------------------------
-    # Internal: legacy directory-based open
-    # ------------------------------------------------------------------
-
-    def _open_directory(self, project_dir: Path) -> ProjectState:
-        """Load a project from the legacy directory format."""
-        meta_path = project_dir / "project.json"
-        if not meta_path.exists():
-            raise ValueError(
-                f"Not a valid project directory (missing project.json): {project_dir}"
-            )
-
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        if meta.get("format_version", 1) > _FORMAT_VERSION:
-            raise ValueError(
-                f"Project was created with a newer version of ProtoPoke "
-                f"(format_version={meta['format_version']}). Please upgrade."
-            )
-
-        # Forwarders (v4+) or migrate legacy config.json (v3)
-        forwarders_path = project_dir / "forwarders.json"
-        if forwarders_path.exists():
-            fdata = json.loads(forwarders_path.read_text(encoding="utf-8"))
-            self.forwarders = [
-                ForwarderConfig.from_dict(fd) for fd in fdata.get("forwarders", [])
-            ]
-            if not self.forwarders:
-                self.forwarders = [ForwarderConfig(name="Default", enabled=True)]
-        else:
-            # v3 migration
-            config_path = project_dir / "config.json"
-            if config_path.exists():
-                legacy_data = json.loads(config_path.read_text(encoding="utf-8"))
-                legacy_data.setdefault("name", "Default")
-                legacy_data.setdefault("enabled", True)
-                self.forwarders = [ForwarderConfig.from_dict(legacy_data)]
-            else:
-                self.forwarders = [ForwarderConfig(name="Default", enabled=True)]
-
-        rules_path = project_dir / "rules.json"
-        if rules_path.exists():
-            rules_data = json.loads(rules_path.read_text(encoding="utf-8"))
-            self.rules_engine     = RulesEngine.from_list(rules_data.get("replace", []))
-            self.intercept_filter = InterceptFilter.from_list(rules_data.get("intercept", []))
-        else:
-            self.rules_engine     = RulesEngine()
-            self.intercept_filter = InterceptFilter()
-
-        # New forge.json format
-        forge_path = project_dir / "forge.json"
-        if forge_path.exists():
-            forge_data = json.loads(forge_path.read_text(encoding="utf-8"))
-            self.playbooks = [
-                Playbook.from_dict(p) for p in forge_data.get("playbooks", [])
-            ]
-        else:
-            self.playbooks = []
-
-        logs_path = project_dir / "logs.json"
-        if logs_path.exists():
-            self.captured_sessions = json.loads(logs_path.read_text(encoding="utf-8")).get("sessions", [])
-        else:
-            self.captured_sessions = []
-
-        filters_path = project_dir / "filters.json"
-        if filters_path.exists():
-            self.frame_filters = [
-                FrameDisplayFilter.from_dict(fd)
-                for fd in json.loads(filters_path.read_text(encoding="utf-8")).get("filters", [])
-            ]
-        else:
-            self.frame_filters = []
-
-        mcp_path = project_dir / "mcp.json"
-        if mcp_path.exists():
-            self.mcp_settings = MCPSettings.from_dict(
-                json.loads(mcp_path.read_text(encoding="utf-8"))
-            )
-        else:
-            self.mcp_settings = MCPSettings()
-
-        self.name      = meta.get("name", project_dir.stem)
-        self.path      = project_dir
         self.is_dirty  = False
         self._saved_at = meta.get("saved_at", 0.0)
 
