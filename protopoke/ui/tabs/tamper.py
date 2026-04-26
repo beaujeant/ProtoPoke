@@ -170,7 +170,7 @@ class TamperTab(Widget):
         with Vertical(id="hex-editor-pane"):
             with Horizontal(classes="pane-header"):
                 yield Static(
-                    "  Edit — modify before forwarding",
+                    "  Frame Editor",
                     markup=False,
                 )
                 yield Button("?", id="btn-tamper-help", classes="btn-help", compact=True)
@@ -210,7 +210,7 @@ class TamperTab(Widget):
         # Global replace rules
         with Vertical(id="replace-rules-pane"):
             yield Static(
-                "  Global Replace Rules  [applied in order — scopes: T=Traffic M=Tamper F=Forge]",
+                "  Global Replace Rules  [applied in order · scopes: T=Traffic M=Tamper F=Forge]",
                 classes="pane-header",
                 markup=False,
             )

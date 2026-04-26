@@ -257,7 +257,7 @@ class ForgeTab(Widget):
                 with Vertical(id="frame-editor-pane"):
                     with Horizontal(classes="pane-header"):
                         yield Static(
-                            "  Frame Editor  ({{VAR}} · {{VAR:uint32be_add(1)}} · {{VAR:xor(ff)}})",
+                            "  Frame Editor",
                             markup=False,
                         )
                         yield Button("?", id="btn-frame-help", classes="btn-help", compact=True)
