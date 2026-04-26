@@ -715,6 +715,37 @@ class ForgeTab(Widget):
                 key=run.id,
             )
 
+    def _load_history_run(self, run_id: str) -> None:
+        """Load a historical run into the traffic view (history view mode)."""
+        if self._current_idx < 0:
+            return
+        pb = self._playbooks[self._current_idx]
+        for run in pb.runs:
+            if run.id == run_id:
+                self._selected_frame_idx = -1
+                self._clear_frame_editor()
+                self._populate_traffic_from_run(run)
+                self._history_view_mode = True
+                break
+
+    def _select_latest_history(self) -> None:
+        """Move cursor to the newest history row so it's auto-selected."""
+        if self._current_idx < 0:
+            return
+        pb = self._playbooks[self._current_idx]
+        if not pb.runs:
+            return
+        last_idx = len(pb.runs) - 1
+        try:
+            ht = self.query_one("#history-table", DataTable)
+            ht.move_cursor(row=last_idx)
+        except Exception:
+            pass
+        # move_cursor may not fire RowHighlighted if the cursor was already on
+        # the same logical row (e.g. cleared+repopulated).  Load explicitly so
+        # the traffic view is always consistent with the auto-selected row.
+        self._load_history_run(pb.runs[last_idx].id)
+
     # ------------------------------------------------------------------
     # Frame operations
     # ------------------------------------------------------------------
@@ -1075,6 +1106,7 @@ class ForgeTab(Widget):
             run = await self.app.api.run_playbook(pb, on_entry=on_entry)
             pb.runs.append(run)
             self._refresh_history_table()
+            self._select_latest_history()
             logger.info("Playbook complete — %d traffic entries", len(run.traffic))
         except Exception as exc:
             logger.error("Playbook error: %s", exc)
@@ -1302,25 +1334,16 @@ class ForgeTab(Widget):
             entry_id = str(event.row_key.value)
             self._show_traffic_entry(entry_id)
 
+        elif dt_id == "history-table":
+            run_id = str(event.row_key.value)
+            self._load_history_run(run_id)
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.row_key is None:
             return
         dt_id = event.data_table.id
 
-        if dt_id == "history-table":
-            if self._current_idx < 0:
-                return
-            pb = self._playbooks[self._current_idx]
-            run_id = str(event.row_key.value)
-            for run in pb.runs:
-                if run.id == run_id:
-                    self._selected_frame_idx = -1
-                    self._clear_frame_editor()
-                    self._populate_traffic_from_run(run)
-                    self._history_view_mode = True
-                    break
-
-        elif dt_id == "frames-table":
+        if dt_id == "frames-table":
             if self._current_idx < 0:
                 return
             pb = self._playbooks[self._current_idx]
