@@ -14,6 +14,7 @@ ProtoPoke exposes all proxy operations as [Model Context Protocol](https://model
 | **Forge** | "Send hex 01 02 03 to 10.0.0.1:9090", "Create a forge session and send a login packet" |
 | **Protocol** | "Load the protocol definition from myproto.yaml", "Decode frame Y and explain each field" |
 | **Fuzzing** | "Start a fuzzing campaign with bit_flip and known_bad mutators", "Show results with anomalies only" |
+| **Forwarders** | "Start the game-server forwarder", "Switch the active framer to length-prefix with a 4-byte header", "Load the auth.yaml protocol on the login forwarder without restarting" |
 | **TLS** | "Give me the CA certificate" |
 | **Config** | "What port is the proxy listening on?", "Enable TLS on the upstream side" |
 

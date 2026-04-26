@@ -4,7 +4,8 @@ All tools return JSON-serialisable dicts.  Bytes fields are hex-encoded strings.
 Tools are grouped by concern:
 
     Proxy lifecycle         : proxy_status, proxy_start, proxy_stop
-    Forwarder management    : list_forwarders, start_forwarder, stop_forwarder
+    Forwarder management    : list_forwarders, start_forwarder, stop_forwarder,
+                              update_forwarder_config
     Session management      : list_sessions, get_session, get_frames,
                               get_frame, get_session_summary, decode_frames,
                               decode_frame_by_id, search_frames,
