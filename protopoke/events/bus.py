@@ -63,13 +63,6 @@ class FrameCapturedEvent:
 
 
 @dataclass
-class InterceptStartedEvent:
-    """Emitted when a frame enters the intercept queue (awaiting verdict)."""
-    unit:    TamperedUnit
-    session: SessionInfo
-
-
-@dataclass
 class InterceptCompletedEvent:
     """Emitted when a verdict is set and the frame leaves the intercept queue."""
     unit:    TamperedUnit

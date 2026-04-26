@@ -22,7 +22,6 @@ is available or when no suitable fields are found.
 from __future__ import annotations
 
 import random
-import struct
 from typing import TYPE_CHECKING, Optional
 
 from .base import FrameMutator

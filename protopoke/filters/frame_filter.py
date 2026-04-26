@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
-from ..rules.rule import PatternError, compile_binary_pattern
+from ..rules.rule import compile_binary_pattern
 
 SHOW = "show"
 HIDE = "hide"

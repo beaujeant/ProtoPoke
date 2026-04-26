@@ -143,6 +143,19 @@ class SendResult:
             error=error,
         )
 
+    def to_dict(self) -> dict:
+        """Serialise to a JSON-compatible dict (bytes are hex-encoded)."""
+        return {
+            "sent_bytes_hex":     self.sent_bytes.hex(),
+            "received_bytes_hex": self.received_bytes.hex(),
+            "response_packets":   [p.hex() for p in self.response_packets],
+            "host":               self.host,
+            "port":               self.port,
+            "tls":                self.tls,
+            "success":            self.success,
+            "error":              self.error,
+        }
+
 
 # ---------------------------------------------------------------------------
 # ForgeResult  (returned by session replay operations)

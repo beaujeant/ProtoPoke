@@ -6,7 +6,6 @@ proxy restarts. The interface is defined here as an abstract base class.
 
 Included backends:
     NullStorageBackend   — no-op; drops everything (default for in-memory use)
-    MemoryStorageBackend — in-memory dict; survives within one process run
     SqliteStorageBackend — persists sessions and frames to a local SQLite file
                            (see storage/sqlite.py)
 
@@ -120,41 +119,3 @@ class NullStorageBackend(StorageBackend):
 
     async def load_frames(self, session_id: str) -> list[Frame]:
         return []
-
-
-class MemoryStorageBackend(StorageBackend):
-    """
-    In-memory backend. Keeps everything in dicts; no disk writes.
-
-    Useful for:
-    - Testing the persistence interface without a real DB
-    - Short-lived proxy runs where you want to query history via the
-      storage API but don't need cross-restart persistence
-
-    Note: this is redundant with the SessionRegistry's in-memory store.
-    In a real deployment, you'd use SqliteStorageBackend instead.
-    """
-
-    def __init__(self) -> None:
-        self._sessions: dict[str, Session] = {}
-        self._frames:   dict[str, Frame]   = {}  # frame_id → Frame
-
-    async def save_session(self, session: Session) -> None:
-        self._sessions[session.id] = session
-
-    async def load_session(self, session_id: str) -> Optional[Session]:
-        return self._sessions.get(session_id)
-
-    async def list_sessions(self, limit: int = 100, offset: int = 0) -> list[SessionInfo]:
-        sessions = list(self._sessions.values())
-        # Sort newest first
-        sessions.sort(key=lambda s: s.info.created_at, reverse=True)
-        return [s.info for s in sessions[offset:offset + limit]]
-
-    async def save_frame(self, frame: Frame) -> None:
-        self._frames[frame.id] = frame
-
-    async def load_frames(self, session_id: str) -> list[Frame]:
-        frames = [f for f in self._frames.values() if f.session_id == session_id]
-        frames.sort(key=lambda f: (f.direction.value, f.sequence_number))
-        return frames

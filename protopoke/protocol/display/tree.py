@@ -27,9 +27,9 @@ Public API:
 from __future__ import annotations
 
 import datetime
-import os
 
 from ...models import Direction, Frame, ParsedField, ParsedMessage
+from ._color import supports_color
 
 
 # ANSI codes for structural chrome
@@ -75,7 +75,7 @@ def render_field_tree(
     Returns:
         Multi-line string ready to print.
     """
-    if color and not _supports_color():
+    if color and not supports_color():
         color = False
 
     inner_w = width - 4  # room for "│  " prefix and " │" suffix
@@ -168,11 +168,3 @@ def _auto_display(pf: ParsedField) -> str:
     if isinstance(v, list):
         return f"({len(v)} items)"
     return str(v)
-
-
-def _supports_color() -> bool:
-    if os.environ.get("NO_COLOR"):
-        return False
-    if os.environ.get("FORCE_COLOR"):
-        return True
-    return hasattr(os, "isatty") and os.isatty(1)

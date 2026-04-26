@@ -20,10 +20,10 @@ Public API:
 
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from ...models import ParsedField, ParsedMessage
+from ...models import ParsedMessage
+from ._color import supports_color
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +111,7 @@ def render_hexdump(
         return "  (empty)\n"
 
     # Auto-detect TTY
-    if color and not _supports_color():
+    if color and not supports_color():
         color = False
 
     # Build a lookup: byte_offset → (color_code, is_last_in_range)
@@ -166,12 +166,3 @@ def render_hexdump(
         lines.append(f"{offset_str}{hex_str}    {ascii_str}")
 
     return "\n".join(lines) + "\n"
-
-
-def _supports_color() -> bool:
-    """Return True if the current terminal likely supports ANSI colour."""
-    if os.environ.get("NO_COLOR"):
-        return False
-    if os.environ.get("FORCE_COLOR"):
-        return True
-    return hasattr(os, "isatty") and os.isatty(1)

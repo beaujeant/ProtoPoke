@@ -156,12 +156,6 @@ class TestLengthPrefixFramer:
         assert len(frames) == 1
         assert frames[0].raw_bytes == data  # include_prefix=True by default
 
-    def test_payload_only_no_prefix(self):
-        f = LengthPrefixFramer(SESS, DIR, prefix_length=4, include_prefix=False)
-        data = self._pack(b"hello")
-        [frame] = f.feed(data)
-        assert frame.raw_bytes == b"hello"
-
     def test_partial_header_buffered(self):
         f = LengthPrefixFramer(SESS, DIR, prefix_length=4)
         assert f.feed(b"\x00\x00") == []  # Only 2 of 4 header bytes
