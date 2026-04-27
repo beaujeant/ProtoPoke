@@ -105,7 +105,10 @@ class TamperTab(Widget):
         align: left middle;
     }
     TamperTab #hex-editor-pane .pane-header Static {
-        width: 1fr;
+        width: auto;
+    }
+    TamperTab #hex-editor-pane .pane-header SegmentedControl {
+        dock: right;
     }
     TamperTab TextArea {
         height: 1fr;
@@ -161,11 +164,11 @@ class TamperTab(Widget):
         # Hex editor
         with Vertical(id="hex-editor-pane"):
             with Horizontal(classes="pane-header"):
-                yield FrameEditorHelpButton()
                 yield Static(
-                    "Frame Editor",
+                    "  Frame Editor",
                     markup=False,
                 )
+                yield FrameEditorHelpButton()
                 yield SegmentedControl(
                     [("HEX", "hex"), ("STR", "str")],
                     value=self._editor_mode,

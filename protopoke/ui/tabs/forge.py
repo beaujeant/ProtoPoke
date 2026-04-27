@@ -144,7 +144,10 @@ class ForgeTab(Widget):
         align: left middle;
     }
     ForgeTab #frame-editor-pane .pane-header Static {
-        width: 1fr;
+        width: auto;
+    }
+    ForgeTab #frame-editor-pane .pane-header SegmentedControl {
+        dock: right;
     }
     ForgeTab #frame-view-pane .pane-header {
         height: 1;
@@ -249,11 +252,11 @@ class ForgeTab(Widget):
                         yield Button("▶", id="btn-frame-send", classes="btn-tiny", variant="success", flat=True)
                 with Vertical(id="frame-editor-pane"):
                     with Horizontal(classes="pane-header"):
-                        yield FrameEditorHelpButton()
                         yield Static(
-                            "Frame Editor",
+                            "  Frame Editor",
                             markup=False,
                         )
+                        yield FrameEditorHelpButton()
                         yield SegmentedControl(
                             [("HEX", "hex"), ("STR", "str")],
                             value=self._frame_editor_mode,

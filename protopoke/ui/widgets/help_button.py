@@ -17,7 +17,7 @@ class FrameEditorHelpButton(Widget):
         width: 5;
         min-width: 5;
         height: 1;
-        margin-right: 1;
+        margin-left: 1;
     }
     FrameEditorHelpButton > Button {
         width: 5;
@@ -25,11 +25,11 @@ class FrameEditorHelpButton(Widget):
         height: 1;
         border: none;
         padding: 0;
-        background: $primary-darken-1;
+        background: steelblue;
         color: $text;
     }
     FrameEditorHelpButton > Button:hover {
-        background: $primary;
+        background: dodgerblue;
         border: none;
         padding: 0;
         color: $text;
