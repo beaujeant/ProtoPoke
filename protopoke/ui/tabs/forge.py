@@ -18,8 +18,8 @@ from ...forge.models import Playbook, PlaybookFrame, PlaybookRun, TrafficEntry
 from ..modals.playbook_modal import PlaybookModal, PlaybookResult
 from ..modals.frame_edit import FrameEditModal
 from ..modals.copy_frame_modal import CopyFrameModal
-from ..modals.format_help import FormatHelpModal
 from ..widgets.segmented_control import SegmentedControl
+from ..widgets.help_button import FrameEditorHelpButton
 from ..utils.frame_codec import (
     hex_template_to_str, str_to_hex_template, hex_pairs_to_str,
 )
@@ -146,13 +146,6 @@ class ForgeTab(Widget):
     ForgeTab #frame-editor-pane .pane-header Static {
         width: 1fr;
     }
-    ForgeTab #frame-editor-pane .pane-header Button.btn-help {
-        width: 5;
-        min-width: 5;
-        background: $surface-darken-1;
-        color: $text-muted;
-        margin-right: 1;
-    }
     ForgeTab #frame-view-pane .pane-header {
         height: 1;
         align: left middle;
@@ -256,11 +249,11 @@ class ForgeTab(Widget):
                         yield Button("▶", id="btn-frame-send", classes="btn-tiny", variant="success", flat=True)
                 with Vertical(id="frame-editor-pane"):
                     with Horizontal(classes="pane-header"):
+                        yield FrameEditorHelpButton()
                         yield Static(
-                            "  Frame Editor",
+                            "Frame Editor",
                             markup=False,
                         )
-                        yield Button("?", id="btn-frame-help", classes="btn-help", compact=True)
                         yield SegmentedControl(
                             [("HEX", "hex"), ("STR", "str")],
                             value=self._frame_editor_mode,
@@ -1290,10 +1283,6 @@ class ForgeTab(Widget):
         elif bid == "btn-frame-send":
             event.stop()
             self._send_selected_frame()
-
-        elif bid == "btn-frame-help":
-            event.stop()
-            self.app.push_screen(FormatHelpModal())
 
         elif bid == "btn-run":
             event.stop()

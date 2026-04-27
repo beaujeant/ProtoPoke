@@ -13,8 +13,8 @@ from ...models import TamperedUnit, Direction
 from ...rules.rule import InterceptRule, ReplaceRule
 from ..widgets.rule_table import RuleTable
 from ..widgets.segmented_control import SegmentedControl
+from ..widgets.help_button import FrameEditorHelpButton
 from ..modals.add_rule import AddInterceptRuleModal, AddReplaceRuleModal
-from ..modals.format_help import FormatHelpModal
 from ..utils.frame_codec import bytes_to_str, str_to_bytes, hex_pairs_to_str, str_to_hex_pairs
 
 logger = logging.getLogger(__name__)
@@ -107,13 +107,6 @@ class TamperTab(Widget):
     TamperTab #hex-editor-pane .pane-header Static {
         width: 1fr;
     }
-    TamperTab #hex-editor-pane .pane-header Button.btn-help {
-        width: 5;
-        min-width: 5;
-        background: $surface-darken-1;
-        color: $text-muted;
-        margin-right: 1;
-    }
     TamperTab TextArea {
         height: 1fr;
     }
@@ -168,11 +161,11 @@ class TamperTab(Widget):
         # Hex editor
         with Vertical(id="hex-editor-pane"):
             with Horizontal(classes="pane-header"):
+                yield FrameEditorHelpButton()
                 yield Static(
-                    "  Frame Editor",
+                    "Frame Editor",
                     markup=False,
                 )
-                yield Button("?", id="btn-tamper-help", classes="btn-help", compact=True)
                 yield SegmentedControl(
                     [("HEX", "hex"), ("STR", "str")],
                     value=self._editor_mode,
@@ -511,11 +504,6 @@ class TamperTab(Widget):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         bid = event.button.id
-
-        if bid == "btn-tamper-help":
-            event.stop()
-            self.app.push_screen(FormatHelpModal())
-            return
 
         if bid == "btn-forward":
             self._do_forward()
