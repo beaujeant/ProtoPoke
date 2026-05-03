@@ -1,10 +1,15 @@
 # framing: turns the raw TCP byte stream into logical Frame objects
 
+import logging
+
 from .base import Framer
 from .raw import RawFramer
 from .delimiter import DelimiterFramer
 from .length_prefix import LengthPrefixFramer
 from .line import LineFramer
+from ..utils.script_loader import load_python_module
+
+logger = logging.getLogger(__name__)
 
 # Registry of built-in framers.
 # To add a custom framer, import create_framer and extend this dict,
@@ -48,16 +53,30 @@ class _FunctionFramerAdapter(Framer):
         self._direction_str = direction_str
 
     def feed(self, data: bytes) -> list:
-        return [
-            self._make_frame(b)
-            for b in self._on_data_fn(data, self._state, self._direction_str)
-        ]
+        try:
+            return [
+                self._make_frame(b)
+                for b in self._on_data_fn(data, self._state, self._direction_str)
+            ]
+        except Exception as exc:
+            logger.error(
+                "Custom framer on_data() raised %s: %s; dropping chunk for session %s",
+                type(exc).__name__, exc, self._session_id,
+            )
+            return []
 
     def flush(self) -> list:
-        return [
-            self._make_frame(b)
-            for b in self._on_flush_fn(self._state, self._direction_str)
-        ]
+        try:
+            return [
+                self._make_frame(b)
+                for b in self._on_flush_fn(self._state, self._direction_str)
+            ]
+        except Exception as exc:
+            logger.error(
+                "Custom framer on_flush() raised %s: %s; session %s",
+                type(exc).__name__, exc, self._session_id,
+            )
+            return []
 
     def reset(self) -> None:
         pass  # state lifecycle is managed by the session, not the adapter
@@ -115,20 +134,9 @@ def load_framer_from_file(path: str):
         TypeError:         Neither module-level functions nor a class with
                            ``on_data``/``on_flush`` were found.
     """
-    import importlib.util
     import inspect
-    from pathlib import Path as _Path
 
-    file_path = _Path(path)
-    if not file_path.exists():
-        raise FileNotFoundError(f"Custom framer file not found: {path}")
-
-    spec = importlib.util.spec_from_file_location("_protopoke_custom_framer", file_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot load spec from {path}")
-
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    module = load_python_module(path)
 
     # --- Preferred: module-level on_data / on_flush functions ---
     on_data_fn  = getattr(module, "on_data",  None)
