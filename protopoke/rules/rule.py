@@ -29,7 +29,6 @@ Examples::
 from __future__ import annotations
 
 import codecs
-import importlib.util
 import logging
 import re
 import time
@@ -40,6 +39,7 @@ from enum import Enum
 from typing import Optional
 
 from ..models import Direction
+from ..utils.script_loader import load_python_module
 
 logger = logging.getLogger(__name__)
 
@@ -342,16 +342,6 @@ def compile_regex_pattern(pattern_str: str) -> "re.Pattern[bytes]":
         ) from exc
 
 
-def _load_replace_script(path: str) -> types.ModuleType:
-    """Dynamically load a replacement script from *path*."""
-    spec = importlib.util.spec_from_file_location("_replace_script", path)
-    if spec is None or spec.loader is None:
-        raise ValueError(f"Cannot create module spec for: {path}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)  # type: ignore[union-attr]
-    return mod
-
-
 def pattern_to_display(pattern_str: str) -> str:
     """
     Normalise and return the canonical display form of a pattern string.
@@ -561,7 +551,7 @@ class ReplaceRule:
             return data
         if self._script_module is None:
             try:
-                self._script_module = _load_replace_script(self.script_path)
+                self._script_module = load_python_module(self.script_path)
             except Exception as exc:
                 logger.error(
                     "Replace rule %r: failed to load script %s: %s",
