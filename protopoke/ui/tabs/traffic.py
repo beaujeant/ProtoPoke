@@ -152,6 +152,10 @@ class TrafficTab(Widget):
         # Text highlight styles without losing the original data.
         self._row_data: dict[str, tuple[str, ...]] = {}
 
+        # Direction per frame ID — used to re-apply the green/cyan tint when
+        # toggling multi-select highlighting.
+        self._row_directions: dict[str, Direction] = {}
+
         # Frame IDs that currently have highlight styling applied.  Used to
         # compute the diff so we only update changed rows.
         self._prev_highlighted: set[str] = set()
@@ -248,6 +252,7 @@ class TrafficTab(Widget):
         dt.clear()
         self._frame_rows = []
         self._row_data = {}
+        self._row_directions = {}
         self._prev_highlighted = set()
         self._anchor_frame_idx = -1
         self._selected_frame_ids = []
@@ -297,7 +302,12 @@ class TrafficTab(Widget):
             preview,
         )
         self._row_data[frame.id] = values
-        dt.add_row(*values, key=frame.id)
+        self._row_directions[frame.id] = frame.direction
+        cells = tuple(
+            self._styled_cell(col_key, val, frame.direction, selected=False)
+            for col_key, val in zip(self._COL_KEYS, values)
+        )
+        dt.add_row(*cells, key=frame.id)
         self._frame_rows.append(frame.id)
 
     def _show_frame_in_detail(self, frame_id: str) -> None:
@@ -321,12 +331,37 @@ class TrafficTab(Widget):
 
     _COL_KEYS = ("seq_c2s", "dir", "seq_s2c", "framer", "len", "preview")
     _SELECTED_STYLE = "bold underline"
+    _DIR_TINTED_KEYS = frozenset({"seq_c2s", "dir", "seq_s2c"})
+    _C2S_STYLE = "green"
+    _S2C_STYLE = "cyan"
+
+    def _direction_style(self, direction: Direction) -> str:
+        return self._C2S_STYLE if direction is Direction.CLIENT_TO_SERVER else self._S2C_STYLE
+
+    def _styled_cell(
+        self, col_key: str, value: str, direction: Direction, *, selected: bool
+    ) -> Text | str:
+        """Return the Rich Text (or plain str) to render for a cell.
+
+        Direction-tinted columns get a green/cyan foreground; selected rows
+        additionally get bold+underline. A plain string is returned only when
+        no styling applies, to keep DataTable column-width measurement happy.
+        """
+        styles: list[str] = []
+        if col_key in self._DIR_TINTED_KEYS and value:
+            styles.append(self._direction_style(direction))
+        if selected:
+            styles.append(self._SELECTED_STYLE)
+        if not styles:
+            return value
+        return Text(value, style=" ".join(styles))
 
     def _highlight_selection(self) -> None:
         """Apply / remove bold styling on multi-selected rows.
 
         When only a single row is selected the DataTable cursor already
-        provides a blue highlight, so no extra styling is applied.
+        provides a blue highlight, so no extra styling is applied. The
+        per-direction colour tint on Dir / # columns is preserved either way.
         """
         dt = self.query_one("#frames-table", DataTable)
         # If 0 or 1 selected, clear any previous highlights and bail out.
@@ -338,9 +373,10 @@ class TrafficTab(Widget):
             data = self._row_data.get(fid)
             if data is None:
                 continue
+            direction = self._row_directions.get(fid, Direction.CLIENT_TO_SERVER)
             is_sel = fid in new_sel
             for col_key, val in zip(self._COL_KEYS, data):
-                cell = Text(val, style=self._SELECTED_STYLE) if is_sel else val
+                cell = self._styled_cell(col_key, val, direction, selected=is_sel)
                 try:
                     dt.update_cell(fid, col_key, cell, update_width=False)
                 except Exception:
@@ -466,6 +502,7 @@ class TrafficTab(Widget):
         self._current_frame_id   = None
         self._frame_rows         = []
         self._row_data           = {}
+        self._row_directions     = {}
         self._prev_highlighted   = set()
         self._selected_frame_ids = []
         self._anchor_frame_idx   = -1
@@ -483,6 +520,7 @@ class TrafficTab(Widget):
             self._current_frame_id   = None
             self._frame_rows         = []
             self._row_data           = {}
+            self._row_directions     = {}
             self._prev_highlighted   = set()
             self._selected_frame_ids = []
             self._anchor_frame_idx   = -1
