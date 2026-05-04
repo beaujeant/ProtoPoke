@@ -437,11 +437,11 @@ class TrafficTab(Widget):
         hide_filters = [f for f in active if f.mode == HIDE]
         show_filters = [f for f in active if f.mode == SHOW]
 
-        if any(f.matches(frame.raw_bytes) for f in hide_filters):
+        if any(f.matches_frame(frame) for f in hide_filters):
             return False
 
         if show_filters:
-            return any(f.matches(frame.raw_bytes) for f in show_filters)
+            return any(f.matches_frame(frame) for f in show_filters)
 
         return True
 

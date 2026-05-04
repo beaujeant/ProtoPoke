@@ -49,19 +49,31 @@ class FrameFilterModal(ModalScreen[list[FrameDisplayFilter]]):
     _COLUMNS: list[tuple[str, str]] = [
         ("enabled", "En"),
         ("mode",    "Mode"),
+        ("dir",     "Dir"),
         ("label",   "Label"),
         ("pattern", "Pattern"),
     ]
+
+    _DIRECTION_LABELS: dict[str, str] = {
+        "client_to_server": "C→S",
+        "server_to_client": "S→C",
+    }
 
     def __init__(self, filters: list[FrameDisplayFilter]) -> None:
         super().__init__()
         self._filters: list[FrameDisplayFilter] = list(filters)
 
-    @staticmethod
-    def _row_factory(f: FrameDisplayFilter) -> tuple[str, str, str, str]:
+    @classmethod
+    def _row_factory(cls, f: FrameDisplayFilter) -> tuple[str, str, str, str, str]:
+        direction_label = (
+            cls._DIRECTION_LABELS.get(f.direction.value, "Both")
+            if f.direction is not None
+            else "Both"
+        )
         return (
             "✓" if f.enabled else "✗",
             f.mode.upper(),
+            direction_label,
             f.label,
             f.pattern_str or "(match all)",
         )

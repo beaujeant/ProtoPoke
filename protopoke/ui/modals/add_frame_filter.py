@@ -8,11 +8,18 @@ from textual.widgets import Button, Input, Label, Select, Static, Switch
 from textual.containers import Horizontal, Vertical
 
 from ...filters.frame_filter import HIDE, SHOW, FrameDisplayFilter
+from ...models import Direction
 from ...rules.rule import PatternError, compile_binary_pattern
 
 _MODE_OPTIONS = [
     ("Show — display only matching frames", SHOW),
     ("Hide — exclude matching frames",      HIDE),
+]
+
+_DIRECTION_OPTIONS = [
+    ("Both directions", ""),
+    ("Client → Server", "client_to_server"),
+    ("Server → Client", "server_to_client"),
 ]
 
 
@@ -95,6 +102,14 @@ class AddFrameFilterModal(ModalScreen[FrameDisplayFilter | None]):
                 id="ff-mode",
             )
 
+            yield Label("Direction:")
+            direction_val = ex.direction.value if (ex and ex.direction) else ""
+            yield Select(
+                [(lbl, val) for lbl, val in _DIRECTION_OPTIONS],
+                value=direction_val,
+                id="ff-direction",
+            )
+
             with Horizontal(classes="switch-row"):
                 yield Label("Enabled: ")
                 yield Switch(value=ex.enabled if ex else True, id="ff-enabled")
@@ -121,11 +136,19 @@ class AddFrameFilterModal(ModalScreen[FrameDisplayFilter | None]):
         label       = self.query_one("#ff-label",   Input).value.strip() or "Filter"
         pattern_str = self.query_one("#ff-pattern", Input).value.strip()
         mode        = str(self.query_one("#ff-mode", Select).value)
+        dir_val     = str(self.query_one("#ff-direction", Select).value)
         enabled     = self.query_one("#ff-enabled", Switch).value
         msg_widget  = self.query_one("#validation-msg", Static)
 
         if mode not in (SHOW, HIDE):
             mode = SHOW
+
+        direction: Direction | None = None
+        if dir_val:
+            try:
+                direction = Direction(dir_val)
+            except ValueError:
+                pass
 
         if pattern_str:
             try:
@@ -141,8 +164,9 @@ class AddFrameFilterModal(ModalScreen[FrameDisplayFilter | None]):
             f.label       = label
             f.pattern_str = pattern_str
             f.mode        = mode
+            f.direction   = direction
             f.enabled     = enabled
             f.compiled    = compile_binary_pattern(pattern_str) if pattern_str else None
             self.dismiss(f)
         else:
-            self.dismiss(FrameDisplayFilter.create(label, pattern_str, mode, enabled))
+            self.dismiss(FrameDisplayFilter.create(label, pattern_str, mode, direction, enabled))
