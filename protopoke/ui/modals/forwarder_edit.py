@@ -101,7 +101,7 @@ class ForwarderEditModal(ModalScreen):
     }
     ForwarderEditModal > Vertical {
         width: 80;
-        max-height: 90%;
+        height: 90%;
         border: thick $primary;
         padding: 1 2;
         background: $surface;
