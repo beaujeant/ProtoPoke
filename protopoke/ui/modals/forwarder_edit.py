@@ -162,6 +162,9 @@ class ForwarderEditModal(ModalScreen):
     ForwarderEditModal .buttons Button {
         margin-left: 1;
     }
+    ForwarderEditModal ScrollableContainer > Vertical {
+        height: auto;
+    }
     ForwarderEditModal #fm-tls-paths {
         height: auto;
     }
