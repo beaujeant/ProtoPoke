@@ -223,29 +223,56 @@ CloseCallback = Callable[[str, str], Awaitable[None]]
 
 @dataclass
 class ForgeConnection:
-    """Bookkeeping for a single persistent forge TCP connection.
+    """Bookkeeping for a single persistent forge connection (TCP or UDP).
 
     Attributes:
-        writer:         StreamWriter for the outbound side.
-        tls:            Whether TLS is in use.
-        queue:          Queue that the background reader drops chunks into.
-                        ``b""`` means EOF and an ``Exception`` means I/O error.
-        reader_task:    The asyncio.Task running ``_background_reader``.
+        writer:         StreamWriter for TCP; ``None`` for UDP.
+        tls:            Whether TLS is in use (TCP only; always False for UDP).
+        queue:          Queue that the background reader / datagram protocol
+                        drops chunks into.  ``b""`` means EOF (TCP) and an
+                        ``Exception`` means I/O error.
+        reader_task:    The asyncio.Task running ``_background_reader``
+                        (TCP only; ``None`` for UDP).
         host:           Target host (for logging).
         port:           Target port (for logging).
         close_callback: Optional async callable invoked exactly once when the
                         connection ends — used by the API to publish the
                         :class:`SessionClosedEvent`.
         closed:         True once the connection has been cleaned up.
+        transport_kind: ``"tcp"`` (default) or ``"udp"``.
+        udp_transport:  DatagramTransport for UDP forge sessions; ``None``
+                        otherwise.
     """
-    writer:         asyncio.StreamWriter
+    writer:         Optional[asyncio.StreamWriter]
     tls:            bool
     queue:          asyncio.Queue
-    reader_task:    asyncio.Task
+    reader_task:    Optional[asyncio.Task]
     host:           str
     port:           int
     close_callback: Optional[CloseCallback] = None
     closed:         bool = False
+    transport_kind: str = "tcp"
+    udp_transport:  Optional[asyncio.DatagramTransport] = None
+
+
+class _ForgeUdpProtocol(asyncio.DatagramProtocol):
+    """DatagramProtocol used by forge UDP sessions to feed the receive queue."""
+
+    def __init__(self, queue: asyncio.Queue) -> None:
+        self._queue = queue
+
+    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+        # Always put non-empty chunks; empty bytes is the TCP-EOF sentinel
+        # used elsewhere and would terminate the receive loop spuriously.
+        if data:
+            self._queue.put_nowait(data)
+
+    def error_received(self, exc: Exception) -> None:  # type: ignore[override]
+        self._queue.put_nowait(exc)
+
+    def connection_lost(self, exc: Optional[Exception]) -> None:  # type: ignore[override]
+        if exc is not None:
+            self._queue.put_nowait(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -456,28 +483,37 @@ class ForgeEngine:
         port: int,
         tls:  bool = False,
         close_callback: Optional[CloseCallback] = None,
+        transport: str = "tcp",
     ) -> "Session":
         """
-        Open a persistent TCP connection and register it as a session.
-        The connection is kept alive between sends.
+        Open a persistent connection and register it as a session.
+
+        For TCP (default): opens an ``asyncio.open_connection`` stream.
+        For UDP: creates a DatagramTransport bound with ``remote_addr=(host, port)``
+        so reply datagrams flow back into the same queue.
 
         Args:
             host: Target host.
             port: Target port.
-            tls:  Whether to use TLS.
+            tls:  Whether to use TLS (TCP only; rejected for UDP).
             close_callback: Optional async callable invoked exactly once when
                             the session is closed.  The callback receives
-                            ``(session_id, reason)`` where *reason* is a short
-                            human-readable string (``"server_eof"``,
-                            ``"io_error: …"``, ``"terminated"``).  Used by
-                            the API to publish :class:`SessionClosedEvent`.
+                            ``(session_id, reason)``.  Used by the API to
+                            publish :class:`SessionClosedEvent`.
+            transport: ``"tcp"`` (default) or ``"udp"``.
 
         Returns:
             The newly created Session (state=ACTIVE).
 
         Raises:
             ConnectionError: if the connection cannot be established.
+            ValueError:      if transport is unknown or UDP is combined with TLS.
         """
+        if transport == "udp":
+            return await self._open_udp_forge_session(host, port, close_callback)
+        if transport != "tcp":
+            raise ValueError(f"Unknown forge transport: {transport!r}")
+
         ssl_ctx: Optional[ssl.SSLContext] = None
         if tls:
             ssl_ctx = ssl.create_default_context()
@@ -507,6 +543,7 @@ class ForgeEngine:
             client_port=0,
             server_host=host,
             server_port=port,
+            transport="tcp",
         )
         self._session_registry.mark_active(session.id)
 
@@ -519,6 +556,7 @@ class ForgeEngine:
             host=host,
             port=port,
             close_callback=close_callback,
+            transport_kind="tcp",
         )
         reader_task = asyncio.get_event_loop().create_task(
             self._background_reader(session.id, reader, reader_queue),
@@ -529,6 +567,50 @@ class ForgeEngine:
         logger.info(
             "Forge connection established: %s:%d%s session=%s",
             host, port, " [TLS]" if tls else "", session.id[:8],
+        )
+        return session
+
+    async def _open_udp_forge_session(
+        self,
+        host: str,
+        port: int,
+        close_callback: Optional[CloseCallback],
+    ) -> "Session":
+        """Open a persistent UDP forge session."""
+        loop = asyncio.get_event_loop()
+        reader_queue: asyncio.Queue = asyncio.Queue()
+        try:
+            udp_transport, _proto = await loop.create_datagram_endpoint(
+                lambda: _ForgeUdpProtocol(reader_queue),
+                remote_addr=(host, port),
+            )
+        except OSError as exc:
+            raise ConnectionError(f"UDP endpoint failed for {host}:{port}: {exc}") from exc
+
+        session = self._session_registry.create(
+            client_host="forge",
+            client_port=0,
+            server_host=host,
+            server_port=port,
+            transport="udp",
+        )
+        self._session_registry.mark_active(session.id)
+
+        conn = ForgeConnection(
+            writer=None,
+            tls=False,
+            queue=reader_queue,
+            reader_task=None,
+            host=host,
+            port=port,
+            close_callback=close_callback,
+            transport_kind="udp",
+            udp_transport=udp_transport,
+        )
+        self._open_connections[session.id] = conn
+        logger.info(
+            "Forge UDP connection established: %s:%d session=%s",
+            host, port, session.id[:8],
         )
         return session
 
@@ -570,9 +652,9 @@ class ForgeEngine:
     async def _close_forge_session(self, session_id: str, reason: str) -> None:
         """Close a persistent forge session idempotently.
 
-        Cancels the reader task, closes the writer, marks the session CLOSED,
-        and invokes the stored close_callback (once).  Safe to call from the
-        reader task, from send_on_forge_session, or from the API.
+        Cancels the reader task, closes the writer / UDP transport, marks the
+        session CLOSED, and invokes the stored close_callback (once).  Safe to
+        call from the reader task, from send_on_forge_session, or from the API.
         """
         conn = self._open_connections.pop(session_id, None)
         if conn is None or conn.closed:
@@ -587,9 +669,13 @@ class ForgeEngine:
         if conn.reader_task is not None and conn.reader_task is not current:
             conn.reader_task.cancel()
 
-        # Close the writer — suppress errors since it may already be torn down.
+        # Close the writer / UDP transport — suppress errors since it may
+        # already be torn down.
         try:
-            conn.writer.close()
+            if conn.transport_kind == "udp" and conn.udp_transport is not None:
+                conn.udp_transport.close()
+            elif conn.writer is not None:
+                conn.writer.close()
         except Exception:
             pass
 
@@ -641,7 +727,6 @@ class ForgeEngine:
                 error=f"Forge session {session_id[:8]} not found or not open",
             )
 
-        writer = conn.writer
         queue  = conn.queue
         tls    = conn.tls
         host   = session.info.server_host
@@ -660,8 +745,15 @@ class ForgeEngine:
         io_error: Optional[Exception]     = None
 
         try:
-            writer.write(data)
-            await writer.drain()
+            if conn.transport_kind == "udp":
+                if conn.udp_transport is None:
+                    raise OSError("UDP transport is closed")
+                conn.udp_transport.sendto(data)
+            else:
+                if conn.writer is None:
+                    raise OSError("TCP writer is closed")
+                conn.writer.write(data)
+                await conn.writer.drain()
         except (ConnectionResetError, BrokenPipeError, OSError) as exc:
             io_error      = exc
             server_closed = True
@@ -724,12 +816,30 @@ class ForgeEngine:
         connect_timeout:  Optional[float] = None,
         receive_timeout:  Optional[float] = None,
         packet_callback:  Optional[Callable[[bytes], None]] = None,
+        transport:        str             = "tcp",
     ) -> SendResult:
         """
-        One-shot send: open connection, send data, signal EOF, read all response, close.
+        One-shot send.
+
+        TCP (default): open a connection, send *data*, signal EOF, read the
+        full response until the server closes, then close.
+
+        UDP: open a connected datagram endpoint, ``sendto(data)``, then drain
+        replies up to *receive_timeout* seconds.
         """
         timeout      = connect_timeout if connect_timeout is not None else self._connect_timeout
         recv_timeout = receive_timeout if receive_timeout is not None else timeout
+
+        if transport == "udp":
+            return await self._send_frame_udp(
+                data, host, port, recv_timeout, packet_callback,
+            )
+        if transport != "tcp":
+            return SendResult.failure(
+                sent_bytes=data, host=host, port=port, tls=tls,
+                error=f"Unknown transport {transport!r}",
+            )
+
         ssl_ctx: Optional[ssl.SSLContext] = None
         if tls:
             ssl_ctx = ssl.create_default_context()
@@ -821,6 +931,75 @@ class ForgeEngine:
             received_bytes=bytes(received),
             response_packets=received_packets,
             host=host, port=port, tls=tls,
+            success=True,
+        )
+
+    async def _send_frame_udp(
+        self,
+        data:            bytes,
+        host:            str,
+        port:            int,
+        recv_timeout:    float,
+        packet_callback: Optional[Callable[[bytes], None]],
+    ) -> SendResult:
+        """One-shot UDP send: drain replies up to *recv_timeout* seconds."""
+        loop = asyncio.get_event_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        try:
+            udp_transport, _proto = await loop.create_datagram_endpoint(
+                lambda: _ForgeUdpProtocol(queue),
+                remote_addr=(host, port),
+            )
+        except OSError as exc:
+            return SendResult.failure(
+                sent_bytes=data, host=host, port=port, tls=False,
+                error=f"UDP endpoint failed: {exc}",
+            )
+
+        received:         bytearray   = bytearray()
+        received_packets: list[bytes] = []
+        try:
+            try:
+                udp_transport.sendto(data)
+            except OSError as exc:
+                return SendResult.failure(
+                    sent_bytes=data, host=host, port=port, tls=False,
+                    error=f"UDP send failed: {exc}",
+                )
+
+            deadline = loop.time() + recv_timeout
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    break
+                try:
+                    chunk = await asyncio.wait_for(queue.get(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    break
+                if isinstance(chunk, Exception):
+                    return SendResult.failure(
+                        sent_bytes=data,
+                        received_bytes=bytes(received),
+                        response_packets=received_packets,
+                        host=host, port=port, tls=False,
+                        error=f"UDP I/O error: {chunk}",
+                    )
+                received.extend(chunk)
+                received_packets.append(chunk)
+                if packet_callback is not None:
+                    packet_callback(chunk)
+        finally:
+            try:
+                udp_transport.close()
+            except Exception:
+                pass
+
+        return SendResult(
+            sent_bytes=data,
+            received_bytes=bytes(received),
+            response_packets=received_packets,
+            host=host, port=port, tls=False,
             success=True,
         )
 

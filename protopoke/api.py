@@ -915,17 +915,20 @@ class ProtoPokeAPI:
         host: str,
         port: int,
         tls:  bool = False,
+        transport: str = "tcp",
     ) -> str:
         """
-        Open a persistent TCP connection to *host*:*port* for Forge.
+        Open a persistent forge connection to *host*:*port*.
 
-        Registers the connection as a session in the session registry so it
-        appears in the Traffic tab and the "From session" dropdown.  The
-        connection is kept alive between sends and across playbook runs; it
-        is closed (and the session marked CLOSED) automatically when the
-        server drops the connection or an I/O error occurs.  A
-        :class:`SessionClosedEvent` is published in both cases so the UI
-        updates even between runs.
+        For TCP (default): opens a stream connection that is kept alive between
+        sends. The connection is closed (and the session marked CLOSED)
+        automatically when the server drops it or an I/O error occurs.
+
+        For UDP: creates a long-lived datagram endpoint bound with
+        ``remote_addr=(host, port)``. There is no "close" signal from the
+        peer, so the session stays ACTIVE until the operator terminates it.
+
+        A :class:`SessionClosedEvent` is published when the session ends.
 
         Returns:
             The new session's ID.
@@ -940,7 +943,7 @@ class ProtoPokeAPI:
             await self.event_bus.publish(SessionClosedEvent(session=session.info))
 
         session = await self.forge_engine.open_forge_session(
-            host, port, tls, close_callback=_on_forge_close,
+            host, port, tls, close_callback=_on_forge_close, transport=transport,
         )
         await self.event_bus.publish(
             SessionOpenedEvent(session=session.info)
@@ -1091,13 +1094,18 @@ class ProtoPokeAPI:
         connect_timeout:  Optional[float] = None,
         receive_timeout:  Optional[float] = None,
         packet_callback:  Optional[Callable[[bytes], None]] = None,
+        transport:        str             = "tcp",
     ) -> SendResult:
         """
         Send raw bytes to *host*:*port* and return a :class:`SendResult`.
 
-        Opens a direct TCP connection (bypassing the proxy listener),
-        sends *data*, signals EOF, reads all response bytes, then closes
-        the connection.
+        For TCP (default): opens a direct connection (bypassing the proxy
+        listener), sends *data*, signals EOF, reads all response bytes, then
+        closes the connection.
+
+        For UDP: opens a connected datagram endpoint, sends *data* as a
+        single datagram, drains replies until ``receive_timeout`` expires,
+        then closes the endpoint.
 
         Returns:
             :class:`~protopoke.forge.engine.SendResult` with sent bytes,
@@ -1109,6 +1117,7 @@ class ProtoPokeAPI:
             client_port=0,
             server_host=host,
             server_port=port,
+            transport=transport,
         )
         self.session_registry.mark_active(session.id)
         await self.event_bus.publish(SessionOpenedEvent(session=session.info))
@@ -1121,6 +1130,7 @@ class ProtoPokeAPI:
             connect_timeout=connect_timeout,
             receive_timeout=receive_timeout,
             packet_callback=packet_callback,
+            transport=transport,
         )
 
         if record.sent_bytes:
@@ -1202,6 +1212,22 @@ class ProtoPokeAPI:
         import time as _time
 
         engine = PlaybookEngine()
+        playbook_transport = getattr(playbook, "transport", "tcp") or "tcp"
+
+        # If a source session was specified but its transport doesn't match
+        # the playbook's, drop the binding and open a fresh session below.
+        if playbook.source_session_id:
+            existing = self.get_session(playbook.source_session_id)
+            if existing is not None and getattr(existing.info, "transport", "tcp") != playbook_transport:
+                logger.warning(
+                    "Playbook: source_session_id %s is %s but playbook is %s — "
+                    "ignoring the bound session and opening a fresh %s connection.",
+                    playbook.source_session_id[:8],
+                    existing.info.transport,
+                    playbook_transport,
+                    playbook_transport,
+                )
+                playbook.source_session_id = None
 
         # A single-slot mutable cell so the nested send_fn can record the
         # forge-session id it opens and the outer method can persist it on
@@ -1295,7 +1321,9 @@ class ProtoPokeAPI:
                 return []
             try:
                 _conn_id[0] = await self.open_forge_session(
-                    playbook.host, playbook.port, playbook.tls
+                    playbook.host, playbook.port,
+                    tls=(playbook.tls if playbook_transport == "tcp" else False),
+                    transport=playbook_transport,
                 )
             except ConnectionError as exc:
                 logger.error(

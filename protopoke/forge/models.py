@@ -233,7 +233,10 @@ class Playbook:
         label:             User-visible name shown in the playbook list.
         host:              Target host for new connections.
         port:              Target port for new connections.
-        tls:               Whether to use TLS for new connections.
+        tls:               Whether to use TLS for new connections (TCP only).
+        transport:         ``"tcp"`` (default) or ``"udp"``. UDP playbooks
+                           cannot use TLS and do not support half-close;
+                           each frame is sent as a single datagram.
         source_session_id: If set, inject into this existing proxy session
                            instead of opening a new TCP connection.
         response_window:   Seconds to wait for server response after each frame send.
@@ -248,6 +251,7 @@ class Playbook:
     host:              str
     port:              int
     tls:               bool               = False
+    transport:         str                = "tcp"   # "tcp" | "udp"
     source_session_id: Optional[str]      = None
     response_window:   float              = 1.0
     variables:         dict[str, str]     = field(default_factory=dict)
@@ -263,6 +267,7 @@ class Playbook:
         tls:               bool = False,
         source_session_id: Optional[str] = None,
         response_window:   float = 1.0,
+        transport:         str   = "tcp",
     ) -> "Playbook":
         return cls(
             id=str(uuid.uuid4()),
@@ -270,6 +275,7 @@ class Playbook:
             host=host,
             port=port,
             tls=tls,
+            transport=transport,
             source_session_id=source_session_id,
             response_window=response_window,
         )
@@ -281,6 +287,7 @@ class Playbook:
             "host":              self.host,
             "port":              self.port,
             "tls":               self.tls,
+            "transport":         self.transport,
             "source_session_id": self.source_session_id,
             "response_window":   self.response_window,
             "variables":         self.variables,
@@ -296,6 +303,7 @@ class Playbook:
             host=d.get("host", ""),
             port=d.get("port", 0),
             tls=d.get("tls", False),
+            transport=d.get("transport", "tcp"),
             source_session_id=d.get("source_session_id"),
             response_window=d.get("response_window", 1.0),
             variables=d.get("variables", {}),

@@ -184,6 +184,7 @@ class SessionInfo:
     created_at:     float
     closed_at:      Optional[float] = None
     forwarder_name: str             = ""
+    transport:      str             = "tcp"   # "tcp" | "udp" | "socks5"
 
     @classmethod
     def create(
@@ -193,6 +194,7 @@ class SessionInfo:
         server_host:    str,
         server_port:    int,
         forwarder_name: str = "",
+        transport:      str = "tcp",
     ) -> "SessionInfo":
         return cls(
             id=new_id(),
@@ -203,6 +205,7 @@ class SessionInfo:
             state=SessionState.CONNECTING,
             created_at=time.time(),
             forwarder_name=forwarder_name,
+            transport=transport,
         )
 
     def to_dict(self) -> dict:
@@ -217,6 +220,7 @@ class SessionInfo:
             "created_at":     self.created_at,
             "closed_at":      self.closed_at,
             "forwarder_name": self.forwarder_name,
+            "transport":      self.transport,
         }
 
     def __repr__(self) -> str:

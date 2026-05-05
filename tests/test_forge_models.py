@@ -110,3 +110,21 @@ class TestPlaybook:
         p.variables["SEQ"] = "00000001"
         restored = Playbook.from_dict(p.to_dict())
         assert restored.variables["SEQ"] == "00000001"
+
+    def test_transport_defaults_to_tcp(self):
+        p = Playbook.create("Test")
+        assert p.transport == "tcp"
+
+    def test_legacy_dict_without_transport_loads_as_tcp(self):
+        p = Playbook.create("Test", host="h", port=1)
+        d = p.to_dict()
+        d.pop("transport", None)
+        restored = Playbook.from_dict(d)
+        assert restored.transport == "tcp"
+
+    def test_udp_transport_round_trips(self):
+        p = Playbook.create("Test", host="h", port=1, transport="udp")
+        d = p.to_dict()
+        assert d["transport"] == "udp"
+        restored = Playbook.from_dict(d)
+        assert restored.transport == "udp"

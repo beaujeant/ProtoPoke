@@ -2012,6 +2012,10 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         connect_timeout:          Optional[float] = None,
         read_buffer_size:         Optional[int]   = None,
         max_sessions:             Optional[int]   = None,
+        forwarder_type:           Optional[str]   = None,
+        udp_idle_timeout:         Optional[float] = None,
+        socks_auth_user:          Optional[str]   = None,
+        socks_auth_pass:          Optional[str]   = None,
     ) -> dict:
         """
         Update one or more ProxyConfig fields.
@@ -2040,10 +2044,19 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
             connect_timeout:          Seconds to wait when connecting upstream.
             read_buffer_size:         Bytes per read() call (affects relay wake-up rate).
             max_sessions:             Max concurrent sessions (0 = unlimited).
+            forwarder_type:           Transport type: "tcp", "udp", or "socks5".
+                                      Restart-only; ignored on a running forwarder.
+            udp_idle_timeout:         UDP flow idle timeout in seconds.
+                                      Restart-only.
+            socks_auth_user:          SOCKS5 username (None = no-auth method).
+                                      Empty string means clear the username.
+                                      Restart-only.
+            socks_auth_pass:          SOCKS5 password.  Restart-only.
 
         Returns:
             The updated config dict.
         """
+        from ..config import ForwarderType
         cfg = api.config
         if listen_host              is not None: cfg.listen_host              = listen_host
         if listen_port              is not None: cfg.listen_port              = listen_port
@@ -2057,6 +2070,10 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         if read_buffer_size         is not None: cfg.read_buffer_size         = read_buffer_size
         if max_sessions             is not None: cfg.max_sessions             = max_sessions
         if protocol_definition_path is not None: cfg.protocol_definition_path = protocol_definition_path
+        if forwarder_type           is not None: cfg.forwarder_type           = ForwarderType(forwarder_type)
+        if udp_idle_timeout         is not None: cfg.udp_idle_timeout         = udp_idle_timeout
+        if socks_auth_user          is not None: cfg.socks_auth_user          = socks_auth_user or None
+        if socks_auth_pass          is not None: cfg.socks_auth_pass          = socks_auth_pass or None
         if framer_kwargs is not None:
             decoded: dict = {}
             for k, v in framer_kwargs.items():

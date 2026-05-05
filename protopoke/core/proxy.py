@@ -28,16 +28,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Optional, TYPE_CHECKING
 
-from ..config import ForwarderConfig
-from ..models import Direction
+from ..config import ForwarderConfig, ForwarderType
+from ..models import Direction, SessionState
 from ..events.bus import EventBus, SessionOpenedEvent, SessionClosedEvent, SessionUpdatedEvent, UpstreamConnectionFailedEvent
 from ..framing import create_framer, load_framer_from_file
+from ..framing.raw import RawFramer
 from ..tamper.controller import TamperController, PassthroughController
 from ..tls.handler import TLSHandler
 from .session import SessionRegistry, Session
 from .relay import BidirectionalRelay
+from . import socks5
+from .udp_proxy import UdpFlow, _UdpServerProtocol, _UdpUpstreamProtocol, process_udp_datagram
 
 if TYPE_CHECKING:
     from ..rules.engine import RulesEngine
@@ -124,6 +128,16 @@ class ProxyEngine:
         # Used to hot-swap framers on running sessions without restarting.
         self._session_relays: dict[str, BidirectionalRelay] = {}
 
+        # ----- UDP-only state -----
+        # The shared listening DatagramTransport (one per UDP forwarder).
+        self._udp_listen_transport: Optional[asyncio.DatagramTransport] = None
+        # client_addr (host, port) → UdpFlow
+        self._udp_flows_by_addr: dict[tuple[str, int], UdpFlow] = {}
+        # session_id → UdpFlow  (mirror lookup for inject_to_*, terminate_session)
+        self._udp_flows: dict[str, UdpFlow] = {}
+        # Background idle sweeper task
+        self._udp_sweeper_task: Optional[asyncio.Task] = None
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -132,13 +146,28 @@ class ProxyEngine:
         """
         Start listening for connections.
 
-        Returns as soon as the server is bound (does not block).
-        The event loop must be running for connections to be handled.
+        Returns as soon as the listener is bound (does not block).
+        The event loop must be running for traffic to be handled.
+
+        Dispatches on ``config.forwarder_type``:
+            - TCP   : `asyncio.start_server` accepting BidirectionalRelay sessions.
+            - UDP   : `loop.create_datagram_endpoint` + per-flow upstream sockets.
+            - SOCKS5: same as TCP but each connection performs a SOCKS5 handshake
+                      to discover the per-connection upstream target.
         """
         # TLS setup is synchronous (cert generation); do it here so any errors
         # surface before we bind the listening socket.
         self.tls_handler.setup()
 
+        if self.config.forwarder_type is ForwarderType.UDP:
+            await self._start_udp()
+        elif self.config.forwarder_type is ForwarderType.SOCKS5:
+            await self._start_socks5()
+        else:
+            await self._start_tcp()
+
+    async def _start_tcp(self) -> None:
+        """Start a plain TCP forwarder (current default behaviour)."""
         try:
             self._server = await asyncio.start_server(
                 self._handle_client,
@@ -162,7 +191,7 @@ class ProxyEngine:
         if self.tls_handler.get_upstream_ssl_context():
             tls_info += " [TLS upstream]"
         logger.info(
-            "Forwarder '%s' listening on %s → %s:%d%s",
+            "Forwarder '%s' [tcp] listening on %s → %s:%d%s",
             self.forwarder_name,
             addrs,
             self.config.upstream_host,
@@ -170,19 +199,81 @@ class ProxyEngine:
             tls_info,
         )
 
+    async def _start_socks5(self) -> None:
+        """Start a SOCKS5 proxy forwarder."""
+        try:
+            self._server = await asyncio.start_server(
+                self._handle_socks5_client,
+                host=self.config.listen_host,
+                port=self.config.listen_port,
+                ssl=None,  # SOCKS5 + TLS-listen is rejected in ForwarderConfig
+            )
+        except OSError as exc:
+            logger.error(
+                "Forwarder '%s' failed to bind %s:%d: %s",
+                self.forwarder_name,
+                self.config.listen_host,
+                self.config.listen_port,
+                exc,
+            )
+            raise
+        addrs = [str(s.getsockname()) for s in self._server.sockets]
+        auth_info = " [auth=user/pass]" if self.config.socks_auth_user else " [auth=none]"
+        logger.info(
+            "Forwarder '%s' [socks5] listening on %s%s",
+            self.forwarder_name, addrs, auth_info,
+        )
+
+    async def _start_udp(self) -> None:
+        """Start a UDP forwarder."""
+        loop = asyncio.get_event_loop()
+        try:
+            transport, _proto = await loop.create_datagram_endpoint(
+                lambda: _UdpServerProtocol(self),
+                local_addr=(self.config.listen_host, self.config.listen_port),
+            )
+        except OSError as exc:
+            logger.error(
+                "Forwarder '%s' [udp] failed to bind %s:%d: %s",
+                self.forwarder_name,
+                self.config.listen_host,
+                self.config.listen_port,
+                exc,
+            )
+            raise
+        self._udp_listen_transport = transport
+        self._udp_sweeper_task = asyncio.create_task(
+            self._udp_idle_sweeper(),
+            name=f"udp-sweep-{self.forwarder_name}",
+        )
+        logger.info(
+            "Forwarder '%s' [udp] listening on %s:%d → %s:%d (idle_timeout=%.1fs)",
+            self.forwarder_name,
+            self.config.listen_host, self.config.listen_port,
+            self.config.upstream_host, self.config.upstream_port,
+            self.config.udp_idle_timeout,
+        )
+
     async def serve_forever(self) -> None:
         """Start the server and block until stop() is called."""
         await self.start()
-        assert self._server is not None
-        async with self._server:
-            await self._server.serve_forever()
+        if self._server is not None:
+            async with self._server:
+                await self._server.serve_forever()
+        else:
+            # UDP path: no asyncio.Server; just wait until stop() cancels us.
+            try:
+                while self._udp_listen_transport is not None:
+                    await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                pass
 
     async def stop(self) -> None:
         """
         Gracefully shut down the proxy.
 
-        1. Stops accepting new connections.
-        2. Cancels all active session tasks.
+        1. Stops accepting new connections / datagrams.
+        2. Cancels all active session tasks and closes UDP flows.
         3. Shuts down the intercept controller (forwards pending items).
         """
         if self._server is not None:
@@ -192,7 +283,26 @@ class ProxyEngine:
                 self.forwarder_name,
             )
 
-        # Cancel all active sessions BEFORE calling wait_closed().
+        if self._udp_listen_transport is not None:
+            try:
+                self._udp_listen_transport.close()
+            except Exception:
+                pass
+            self._udp_listen_transport = None
+
+        if self._udp_sweeper_task is not None:
+            self._udp_sweeper_task.cancel()
+            try:
+                await self._udp_sweeper_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._udp_sweeper_task = None
+
+        # Close all UDP flows (publishes SessionClosedEvent for each).
+        for flow in list(self._udp_flows.values()):
+            await self._close_udp_flow(flow, reason="shutdown")
+
+        # Cancel all active TCP sessions BEFORE calling wait_closed().
         # wait_closed() blocks until every open connection is gone — but those
         # connections are owned by the session tasks, so we must cancel the
         # tasks first; otherwise the two sides wait for each other forever.
@@ -221,11 +331,11 @@ class ProxyEngine:
         client_writer: asyncio.StreamWriter,
     ) -> None:
         """
-        Entry point for each new incoming connection.
+        Entry point for each new TCP connection.
 
-        asyncio calls this coroutine when a client connects. We do NOT
-        await the relay here — instead we create a Task so this handler
-        returns quickly and asyncio can accept more connections.
+        Resolves the upstream target via SNI (when TLS-MITM is active) or
+        falls back to the configured ``upstream_host``/``upstream_port``,
+        then hands off to :meth:`_run_tcp_session`.
         """
         peer = client_writer.get_extra_info("peername") or ("unknown", 0)
         client_host, client_port = peer[0], peer[1]
@@ -234,16 +344,8 @@ class ProxyEngine:
             client_host, client_port, self.forwarder_name,
         )
 
-        # Enforce session limit if configured
-        if self.config.max_sessions > 0:
-            active = len(self.session_registry.active_sessions())
-            if active >= self.config.max_sessions:
-                logger.warning(
-                    "Session limit (%d) reached; rejecting %s:%d",
-                    self.config.max_sessions, client_host, client_port,
-                )
-                client_writer.close()
-                return
+        if not self._enforce_session_limit(client_writer, client_host, client_port):
+            return
 
         # In auto-CA / transparent-proxy mode the TLS handshake is already
         # complete by the time asyncio calls this handler.  Extract the SNI
@@ -252,91 +354,204 @@ class ProxyEngine:
         #   b) forward it as the upstream TLS SNI (and hostname for verification)
         ssl_obj = client_writer.get_extra_info("ssl_object")
         sni_host = self.tls_handler.get_sni_hostname(ssl_obj)
-        # Prefer the SNI hostname; fall back to the statically-configured host
         effective_server_name = sni_host or self.config.upstream_host
         if sni_host:
             logger.debug("SNI hostname from client: %s", sni_host)
 
-        # Create session record
+        await self._run_tcp_session(
+            client_reader=client_reader,
+            client_writer=client_writer,
+            client_host=client_host,
+            client_port=client_port,
+            connect_host=self.config.upstream_host,
+            connect_port=self.config.upstream_port,
+            display_host=effective_server_name,
+            display_port=self.config.upstream_port,
+            tls_server_name=effective_server_name,
+            transport="tcp",
+        )
+
+    async def _handle_socks5_client(
+        self,
+        client_reader: asyncio.StreamReader,
+        client_writer: asyncio.StreamWriter,
+    ) -> None:
+        """
+        Entry point for SOCKS5 connections.
+
+        Performs RFC 1928 + RFC 1929 negotiation, then runs the same
+        TCP relay code as :meth:`_handle_client` against the
+        client-supplied target.
+        """
+        peer = client_writer.get_extra_info("peername") or ("unknown", 0)
+        client_host, client_port = peer[0], peer[1]
+        logger.info(
+            "SOCKS5 client connected: %s:%d → forwarder '%s'",
+            client_host, client_port, self.forwarder_name,
+        )
+
+        if not self._enforce_session_limit(client_writer, client_host, client_port):
+            return
+
+        try:
+            target_host, target_port = await socks5.negotiate(
+                client_reader,
+                client_writer,
+                self.config.socks_auth_user,
+                self.config.socks_auth_pass,
+            )
+        except socks5.Socks5Error as exc:
+            logger.warning(
+                "SOCKS5 handshake failed for %s:%d: %s",
+                client_host, client_port, exc,
+            )
+            try:
+                await socks5.send_reply(client_writer, exc.reply)
+            except Exception:
+                pass
+            client_writer.close()
+            return
+        except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError) as exc:
+            logger.debug(
+                "SOCKS5 client %s:%d disconnected during handshake: %s",
+                client_host, client_port, exc,
+            )
+            client_writer.close()
+            return
+
+        logger.info(
+            "SOCKS5 CONNECT %s:%d (client %s:%d, forwarder '%s')",
+            target_host, target_port, client_host, client_port, self.forwarder_name,
+        )
+
+        await self._run_tcp_session(
+            client_reader=client_reader,
+            client_writer=client_writer,
+            client_host=client_host,
+            client_port=client_port,
+            connect_host=target_host,
+            connect_port=target_port,
+            display_host=target_host,
+            display_port=target_port,
+            tls_server_name=target_host,
+            transport="socks5",
+            socks5_reply=True,
+        )
+
+    def _enforce_session_limit(
+        self,
+        client_writer: asyncio.StreamWriter,
+        client_host: str,
+        client_port: int,
+    ) -> bool:
+        """Return True if the new connection is allowed under max_sessions."""
+        if self.config.max_sessions > 0:
+            active = len(self.session_registry.active_sessions())
+            if active >= self.config.max_sessions:
+                logger.warning(
+                    "Session limit (%d) reached; rejecting %s:%d",
+                    self.config.max_sessions, client_host, client_port,
+                )
+                client_writer.close()
+                return False
+        return True
+
+    async def _run_tcp_session(
+        self,
+        *,
+        client_reader:  asyncio.StreamReader,
+        client_writer:  asyncio.StreamWriter,
+        client_host:    str,
+        client_port:    int,
+        connect_host:   str,
+        connect_port:   int,
+        display_host:   str,
+        display_port:   int,
+        tls_server_name: str,
+        transport:      str = "tcp",
+        socks5_reply:   bool = False,
+    ) -> None:
+        """
+        Open the upstream TCP connection and run a BidirectionalRelay session.
+
+        Used by both plain TCP forwarders and SOCKS5 forwarders. The split
+        between ``connect_*`` (where we open the socket) and ``display_*``
+        (what we record on the session) is what lets transparent-MITM TCP
+        keep its statically-configured upstream IP while showing the
+        SNI-derived hostname in the Traffic tab.
+        """
         session = self.session_registry.create(
             client_host=client_host,
             client_port=client_port,
-            server_host=effective_server_name,
-            server_port=self.config.upstream_port,
+            server_host=display_host,
+            server_port=display_port,
             forwarder_name=self.forwarder_name,
+            transport=transport,
         )
 
-        # Connect to upstream (always the configured IP/host for the TCP
-        # connection, but pass the effective server name for TLS SNI and
-        # hostname verification so the upstream handshake matches what the
-        # client expects).
         upstream_ssl = self.tls_handler.get_upstream_ssl_context()
 
         try:
             server_reader, server_writer = await asyncio.wait_for(
                 asyncio.open_connection(
-                    self.config.upstream_host,
-                    self.config.upstream_port,
+                    connect_host,
+                    connect_port,
                     ssl=upstream_ssl,
-                    # server_hostname drives both the TLS SNI extension sent to
-                    # the upstream server and the hostname used for cert
-                    # verification; ignored when ssl=None.
-                    server_hostname=effective_server_name if upstream_ssl else None,
+                    server_hostname=tls_server_name if upstream_ssl else None,
                 ),
                 timeout=self.config.connect_timeout,
             )
-        except asyncio.TimeoutError:
-            error_msg = (
-                f"Timeout connecting to upstream "
-                f"{self.config.upstream_host}:{self.config.upstream_port}"
-            )
+        except (asyncio.TimeoutError, OSError) as exc:
+            if isinstance(exc, asyncio.TimeoutError):
+                error_msg = f"Timeout connecting to upstream {connect_host}:{connect_port}"
+                reply = socks5.Socks5Reply.TTL_EXPIRED
+            else:
+                error_msg = str(exc)
+                reply = socks5.reply_for_oserror(exc)
             logger.error("%s for session %s", error_msg, session.id[:8])
+            if socks5_reply:
+                try:
+                    await socks5.send_reply(client_writer, reply)
+                except Exception:
+                    pass
             client_writer.close()
             self.session_registry.mark_closed(session.id)
             await self.event_bus.publish(UpstreamConnectionFailedEvent(
                 forwarder_name=self.forwarder_name,
                 client_host=client_host,
                 client_port=client_port,
-                upstream_host=self.config.upstream_host,
-                upstream_port=self.config.upstream_port,
-                error=error_msg,
-            ))
-            return
-        except OSError as exc:
-            error_msg = str(exc)
-            logger.error(
-                "Failed to connect to upstream %s:%d for session %s: %s",
-                self.config.upstream_host, self.config.upstream_port,
-                session.id[:8], error_msg,
-            )
-            client_writer.close()
-            self.session_registry.mark_closed(session.id)
-            await self.event_bus.publish(UpstreamConnectionFailedEvent(
-                forwarder_name=self.forwarder_name,
-                client_host=client_host,
-                client_port=client_port,
-                upstream_host=self.config.upstream_host,
-                upstream_port=self.config.upstream_port,
+                upstream_host=connect_host,
+                upstream_port=connect_port,
                 error=error_msg,
             ))
             return
 
-        # Both sides connected
+        if socks5_reply:
+            sockname = server_writer.get_extra_info("sockname") or ("0.0.0.0", 0)
+            try:
+                await socks5.send_reply(
+                    client_writer,
+                    socks5.Socks5Reply.SUCCEEDED,
+                    bnd_host=str(sockname[0]),
+                    bnd_port=int(sockname[1]),
+                )
+            except Exception as exc:
+                logger.debug("Failed to send SOCKS5 success reply: %s", exc)
+                client_writer.close()
+                server_writer.close()
+                self.session_registry.mark_closed(session.id)
+                return
+
         logger.info(
             "Connected to upstream %s:%d for session %s",
-            self.config.upstream_host, self.config.upstream_port,
-            session.id[:8],
+            connect_host, connect_port, session.id[:8],
         )
         self.session_registry.mark_active(session.id)
         self._session_server_writers[session.id] = server_writer
         self._session_client_writers[session.id] = client_writer
         await self.event_bus.publish(SessionOpenedEvent(session=session.info))
 
-
         # Create one framer per direction.
-        # If a custom framer file is configured, load the factory and
-        # instantiate both adapters with a shared state dict so the user
-        # script can correlate client→server and server→client parsing.
         if self.config.custom_framer_path:
             framer_factory = load_framer_from_file(self.config.custom_framer_path)
             shared_state: dict = {}
@@ -378,23 +593,17 @@ class ProxyEngine:
             on_first_disconnect=_on_first_disconnect,
         )
 
-        # Track the relay so we can hot-swap framers on running sessions.
         self._session_relays[session.id] = relay
 
-        # Run the relay as a tracked background task
         task = asyncio.create_task(
             self._run_session(session, relay),
             name=f"session-{session.id[:8]}",
         )
         self._session_tasks[session.id] = task
 
-        # Remove from tracking dict when done
         task.add_done_callback(
             lambda _: self._session_tasks.pop(session.id, None)
         )
-
-        # Note: we do NOT await the task here — the handler returns
-        # immediately and asyncio continues accepting new connections.
 
     async def _run_session(self, session: Session, relay: BidirectionalRelay) -> None:
         """
@@ -476,16 +685,21 @@ class ProxyEngine:
 
     async def terminate_session(self, session_id: str) -> bool:
         """
-        Forcefully terminate an active session by cancelling its relay task.
+        Forcefully terminate an active session.
 
-        Cancelling the task triggers the ``_run_session`` finally block, which
-        closes both the client and server TCP connections, marks the session
-        CLOSED, and publishes a SessionClosedEvent.
+        For TCP/SOCKS5: cancels the relay task, which triggers cleanup,
+        connection close, mark CLOSED, and SessionClosedEvent.
+        For UDP: closes the per-flow upstream socket and marks the session
+        CLOSED via :meth:`_close_udp_flow`.
 
-        Returns:
-            ``True``  if the session task was found and cancelled.
-            ``False`` if the session is already closed (no task registered).
+        Returns ``True`` if a session was found and terminated, ``False``
+        if it was already closed.
         """
+        flow = self._udp_flows.get(session_id)
+        if flow is not None:
+            await self._close_udp_flow(flow, reason="terminated")
+            logger.info("terminate_session: closed UDP flow for session %s", session_id[:8])
+            return True
         task = self._session_tasks.get(session_id)
         if task is None:
             return False
@@ -511,16 +725,28 @@ class ProxyEngine:
 
     async def inject_to_client(self, session_id: str, data: bytes) -> bool:
         """
-        Write *data* directly into an active session's client TCP connection.
+        Push *data* into an active session toward the client.
 
-        The bytes are written to the client writer that the relay already holds
-        open, so they arrive on the *same* TCP connection as the real server's
-        traffic — the client sees them as if the server sent them.
+        For TCP/SOCKS5: writes to the relay's client StreamWriter — the
+        client sees the bytes as if the server sent them.
+        For UDP: ``sendto(data, flow.client_addr)`` on the listening socket.
 
-        Returns:
-            ``True``  if the session was found and the write succeeded.
-            ``False`` if the session is not active (no writer registered).
+        Returns ``True`` on success, ``False`` if the session is not active.
         """
+        flow = self._udp_flows.get(session_id)
+        if flow is not None and not flow.closed:
+            try:
+                flow.listen_transport.sendto(data, flow.client_addr)
+            except OSError as exc:
+                logger.debug("UDP inject_to_client failed: %s", exc)
+                return False
+            flow.last_activity = time.monotonic()
+            logger.debug(
+                "inject_to_client: sent %d UDP bytes to session %s",
+                len(data), session_id[:8],
+            )
+            return True
+
         writer = self._session_client_writers.get(session_id)
         if writer is None:
             return False
@@ -534,21 +760,30 @@ class ProxyEngine:
 
     async def inject_to_server(self, session_id: str, data: bytes) -> bool:
         """
-        Write *data* directly into an active session's upstream TCP connection.
+        Push *data* into an active session toward the upstream server.
 
-        The bytes are written to the server writer that the relay already holds
-        open, so they arrive on the *same* TCP connection as the real client's
-        traffic.  The server's response (if any) flows back through the normal
-        relay path and is forwarded to the original client.
+        For TCP/SOCKS5: writes to the relay's server StreamWriter — the
+        upstream sees the bytes as if the client sent them. The server's
+        response (if any) flows back through the normal relay path.
+        For UDP: ``sendto(data)`` on the per-flow upstream socket (which is
+        bound with ``remote_addr``, so no explicit destination is needed).
 
-        Returns:
-            ``True``  if the session was found and the write succeeded.
-            ``False`` if the session is not active (no writer registered).
-
-        Raises:
-            OSError / BrokenPipeError: propagated if the write itself fails
-            (caller should catch and treat as an injection error).
+        Returns ``True`` on success, ``False`` if the session is not active.
         """
+        flow = self._udp_flows.get(session_id)
+        if flow is not None and not flow.closed:
+            try:
+                flow.upstream_transport.sendto(data)
+            except OSError as exc:
+                logger.debug("UDP inject_to_server failed: %s", exc)
+                return False
+            flow.last_activity = time.monotonic()
+            logger.debug(
+                "inject_to_server: sent %d UDP bytes to session %s",
+                len(data), session_id[:8],
+            )
+            return True
+
         writer = self._session_server_writers.get(session_id)
         if writer is None:
             return False
@@ -559,3 +794,168 @@ class ProxyEngine:
             len(data), session_id[:8],
         )
         return True
+
+    # ------------------------------------------------------------------
+    # UDP-specific handlers
+    # ------------------------------------------------------------------
+
+    async def _on_udp_client_datagram(
+        self,
+        data: bytes,
+        addr: tuple[str, int],
+    ) -> None:
+        """Handle a datagram received from a client (UDP forwarder)."""
+        flow = self._udp_flows_by_addr.get(addr)
+        if flow is None:
+            flow = await self._open_udp_flow(addr)
+            if flow is None:
+                return  # upstream open failed; flow not created
+        if flow.closed:
+            return  # raced with idle sweeper; drop
+
+        out_bytes = await process_udp_datagram(self, flow, data, Direction.CLIENT_TO_SERVER)
+        if out_bytes is None:
+            return
+        try:
+            flow.upstream_transport.sendto(out_bytes)
+        except OSError as exc:
+            logger.debug(
+                "UDP upstream sendto failed for session %s: %s",
+                flow.session.id[:8], exc,
+            )
+
+    async def _on_udp_server_datagram(
+        self,
+        session_id: str,
+        data: bytes,
+    ) -> None:
+        """Handle a datagram received from upstream (UDP forwarder)."""
+        flow = self._udp_flows.get(session_id)
+        if flow is None or flow.closed:
+            return
+        out_bytes = await process_udp_datagram(self, flow, data, Direction.SERVER_TO_CLIENT)
+        if out_bytes is None:
+            return
+        try:
+            flow.listen_transport.sendto(out_bytes, flow.client_addr)
+        except OSError as exc:
+            logger.debug(
+                "UDP listen sendto failed for session %s: %s",
+                flow.session.id[:8], exc,
+            )
+
+    async def _open_udp_flow(self, addr: tuple[str, int]) -> Optional[UdpFlow]:
+        """
+        Create a new UDP flow for a previously-unseen client address.
+
+        Opens the per-flow upstream DatagramTransport, registers the flow,
+        creates the Session record, and publishes SessionOpenedEvent.
+        Returns ``None`` if the upstream endpoint cannot be created.
+        """
+        if self._udp_listen_transport is None:
+            return None
+
+        if self.config.max_sessions > 0:
+            active = len(self.session_registry.active_sessions())
+            if active >= self.config.max_sessions:
+                logger.warning(
+                    "Session limit (%d) reached; dropping UDP packet from %s:%d",
+                    self.config.max_sessions, addr[0], addr[1],
+                )
+                return None
+
+        client_host, client_port = addr[0], addr[1]
+        session = self.session_registry.create(
+            client_host=client_host,
+            client_port=client_port,
+            server_host=self.config.upstream_host,
+            server_port=self.config.upstream_port,
+            forwarder_name=self.forwarder_name,
+            transport="udp",
+        )
+
+        loop = asyncio.get_event_loop()
+        try:
+            upstream_transport, _proto = await loop.create_datagram_endpoint(
+                lambda: _UdpUpstreamProtocol(self, session.id),
+                remote_addr=(self.config.upstream_host, self.config.upstream_port),
+            )
+        except OSError as exc:
+            error_msg = str(exc)
+            logger.error(
+                "Failed to open UDP upstream %s:%d for session %s: %s",
+                self.config.upstream_host, self.config.upstream_port,
+                session.id[:8], error_msg,
+            )
+            self.session_registry.mark_closed(session.id)
+            await self.event_bus.publish(UpstreamConnectionFailedEvent(
+                forwarder_name=self.forwarder_name,
+                client_host=client_host,
+                client_port=client_port,
+                upstream_host=self.config.upstream_host,
+                upstream_port=self.config.upstream_port,
+                error=error_msg,
+            ))
+            return None
+
+        client_framer = RawFramer(session_id=session.id, direction=Direction.CLIENT_TO_SERVER)
+        server_framer = RawFramer(session_id=session.id, direction=Direction.SERVER_TO_CLIENT)
+
+        flow = UdpFlow(
+            session=session,
+            listen_transport=self._udp_listen_transport,
+            upstream_transport=upstream_transport,
+            client_addr=addr,
+            client_framer=client_framer,
+            server_framer=server_framer,
+        )
+        self._udp_flows_by_addr[addr] = flow
+        self._udp_flows[session.id] = flow
+
+        self.session_registry.mark_active(session.id)
+        await self.event_bus.publish(SessionOpenedEvent(session=session.info))
+        logger.info(
+            "UDP flow opened: %s:%d → %s:%d (session %s)",
+            client_host, client_port,
+            self.config.upstream_host, self.config.upstream_port,
+            session.id[:8],
+        )
+        return flow
+
+    async def _close_udp_flow(self, flow: UdpFlow, reason: str) -> None:
+        """Close a UDP flow: close upstream socket, mark CLOSED, publish event."""
+        if flow.closed:
+            return
+        flow.closed = True
+        try:
+            flow.upstream_transport.close()
+        except Exception:
+            pass
+
+        # Remove from lookup tables before publishing — the SessionClosedEvent
+        # may trigger UI updates that re-query state.
+        self._udp_flows_by_addr.pop(flow.client_addr, None)
+        self._udp_flows.pop(flow.session.id, None)
+
+        if flow.session.info.state is not SessionState.CLOSED:
+            self.session_registry.mark_closed(flow.session.id)
+            await self.event_bus.publish(SessionClosedEvent(session=flow.session.info))
+        logger.info(
+            "UDP flow closed (%s): session %s (%d frames captured)",
+            reason, flow.session.id[:8], len(flow.session.frames),
+        )
+
+    async def _udp_idle_sweeper(self) -> None:
+        """Periodically close UDP flows that have been idle too long."""
+        timeout = self.config.udp_idle_timeout
+        try:
+            while True:
+                await asyncio.sleep(max(timeout / 2.0, 1.0))
+                now = time.monotonic()
+                for flow in list(self._udp_flows.values()):
+                    if flow.closed:
+                        continue
+                    if now - flow.last_activity > timeout:
+                        await self._close_udp_flow(flow, reason="idle_timeout")
+        except asyncio.CancelledError:
+            return
