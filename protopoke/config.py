@@ -15,9 +15,21 @@ an explicit ForwarderConfig.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+
+class ForwarderType(str, Enum):
+    """Transport type for a forwarder."""
+
+    TCP    = "tcp"
+    UDP    = "udp"
+    SOCKS5 = "socks5"
 
 
 @dataclass
@@ -74,6 +86,9 @@ class ForwarderConfig:
     name:    str  = "Forwarder"
     enabled: bool = True
 
+    # Transport type — selects the listening engine (TCP/UDP/SOCKS5).
+    forwarder_type: ForwarderType = ForwarderType.TCP
+
     # Networking
     listen_host:      str   = "127.0.0.1"
     listen_port:      int   = 8080
@@ -81,6 +96,13 @@ class ForwarderConfig:
     upstream_port:    int   = 9090
     connect_timeout:  float = 10.0
     read_buffer_size: int   = 4096
+
+    # UDP — idle timeout (seconds) before a flow transitions ACTIVE → CLOSED.
+    udp_idle_timeout: float = 60.0
+
+    # SOCKS5 — credentials. None means no-auth method advertised.
+    socks_auth_user: Optional[str] = None
+    socks_auth_pass: Optional[str] = None
 
     # Sessions
     max_sessions: int = 0  # 0 = unlimited
@@ -143,6 +165,30 @@ class ForwarderConfig:
     custom_framer_path: Optional[str] = None
 
     # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
+
+    def __post_init__(self) -> None:
+        # Allow string values from JSON to be coerced to enum.
+        if isinstance(self.forwarder_type, str):
+            self.forwarder_type = ForwarderType(self.forwarder_type)
+
+        if self.forwarder_type is ForwarderType.SOCKS5 and self.tls_listen:
+            raise ValueError(
+                "SOCKS5 forwarders cannot have tls_listen=True. "
+                "Wrapping the SOCKS5 handshake in TLS is non-standard and not supported. "
+                "Disable TLS-listen or change the forwarder type."
+            )
+
+        if self.forwarder_type is ForwarderType.UDP and self.tls_listen:
+            raise ValueError(
+                "UDP forwarders cannot have tls_listen=True (DTLS is not supported)."
+            )
+
+        if self.udp_idle_timeout <= 0:
+            raise ValueError("udp_idle_timeout must be > 0 seconds.")
+
+    # ------------------------------------------------------------------
     # Serialisation
     # ------------------------------------------------------------------
 
@@ -158,6 +204,8 @@ class ForwarderConfig:
                     k: (v.hex() if isinstance(v, (bytes, bytearray)) else v)
                     for k, v in val.items()
                 }
+            elif isinstance(val, ForwarderType):
+                val = val.value
             d[f] = val
         return d
 
@@ -181,6 +229,8 @@ class ForwarderConfig:
                     else:
                         decoded[k] = v
                 val = decoded
+            elif f_name == "forwarder_type" and isinstance(val, str):
+                val = ForwarderType(val)
             kwargs[f_name] = val
         return cls(**kwargs)
 

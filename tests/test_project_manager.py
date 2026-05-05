@@ -7,7 +7,7 @@ import zipfile
 
 import pytest
 
-from protopoke.config import ForwarderConfig
+from protopoke.config import ForwarderConfig, ForwarderType
 from protopoke.rules.rule import ReplaceRule, InterceptRule, RuleAction
 from protopoke.forge.models import Playbook, PlaybookFrame, TrafficEntry
 from protopoke.project.manager import ProjectManager, ProjectState
@@ -177,6 +177,42 @@ class TestProjectManager:
         assert state.captured_sessions[0]["id"] == "sess-1"
         assert len(state.captured_sessions[0]["frames"]) == 1
         assert state.captured_sessions[0]["frames"][0]["raw_bytes"] == "deadbeef"
+
+    def test_mixed_transport_forwarders_round_trip(self, tmp_path):
+        pm = ProjectManager()
+        pm.forwarders = [
+            ForwarderConfig(name="tcp1", listen_port=11111),
+            ForwarderConfig(
+                name="udp1",
+                forwarder_type=ForwarderType.UDP,
+                listen_port=22222,
+                upstream_host="127.0.0.1",
+                upstream_port=33333,
+                udp_idle_timeout=12.5,
+            ),
+            ForwarderConfig(
+                name="socks1",
+                forwarder_type=ForwarderType.SOCKS5,
+                listen_port=44444,
+                socks_auth_user="user",
+                socks_auth_pass="pass",
+            ),
+        ]
+        pm.save_as(tmp_path / "mixed.pp")
+
+        pm2 = ProjectManager()
+        state = pm2.open(tmp_path / "mixed.pp")
+        types = {f.name: f.forwarder_type for f in state.forwarders}
+        assert types == {
+            "tcp1":   ForwarderType.TCP,
+            "udp1":   ForwarderType.UDP,
+            "socks1": ForwarderType.SOCKS5,
+        }
+        udp = next(f for f in state.forwarders if f.name == "udp1")
+        assert udp.udp_idle_timeout == 12.5
+        socks = next(f for f in state.forwarders if f.name == "socks1")
+        assert socks.socks_auth_user == "user"
+        assert socks.socks_auth_pass == "pass"
 
     def test_zip_too_many_members_rejected(self, tmp_path):
         """ZIP with more than _ZIP_MAX_MEMBERS entries raises ValueError."""

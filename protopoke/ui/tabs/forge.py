@@ -964,7 +964,13 @@ class ForgeTab(Widget):
             all_sessions = []
 
         sessions = [
-            (s.id, f"Session {s.id[:8]}", s.info.server_host, s.info.server_port)
+            (
+                s.id,
+                f"Session {s.id[:8]}",
+                s.info.server_host,
+                s.info.server_port,
+                getattr(s.info, "transport", "tcp"),
+            )
             for s in all_sessions
         ]
 
@@ -979,6 +985,7 @@ class ForgeTab(Widget):
                 session_id=pb.source_session_id,
                 window=pb.response_window,
                 edit=True,
+                transport=getattr(pb, "transport", "tcp"),
             )
             self.app.push_screen(modal, self._on_edit_playbook)
         else:
@@ -995,6 +1002,7 @@ class ForgeTab(Widget):
             tls=result.tls,
             source_session_id=result.session_id,
             response_window=result.window,
+            transport=result.transport,
         )
         self.add_playbook(pb)
         if hasattr(self.app, "mark_dirty"):
@@ -1008,6 +1016,7 @@ class ForgeTab(Widget):
         pb.host              = result.host
         pb.port              = result.port
         pb.tls               = result.tls
+        pb.transport         = result.transport
         pb.source_session_id = result.session_id
         pb.response_window   = result.window
         self._update_playbook_list_row(self._current_idx)

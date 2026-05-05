@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from protopoke.config import ForwarderConfig
+from protopoke.config import ForwarderConfig, ForwarderType
 
 
 class TestForwarderConfigSerialization:
@@ -79,3 +79,59 @@ class TestForwarderConfigSerialization:
         restored = ForwarderConfig.from_dict(cfg.to_dict())
         assert restored.name == "MyForwarder"
         assert restored.enabled is False
+
+    def test_forwarder_type_default_is_tcp(self):
+        cfg = ForwarderConfig(name="t")
+        assert cfg.forwarder_type is ForwarderType.TCP
+
+    def test_legacy_dict_without_forwarder_type_loads_as_tcp(self):
+        cfg = ForwarderConfig(name="t")
+        d = cfg.to_dict()
+        d.pop("forwarder_type", None)
+        restored = ForwarderConfig.from_dict(d)
+        assert restored.forwarder_type is ForwarderType.TCP
+
+    def test_udp_forwarder_round_trip(self):
+        cfg = ForwarderConfig(
+            name="udp",
+            forwarder_type=ForwarderType.UDP,
+            udp_idle_timeout=42.0,
+        )
+        restored = ForwarderConfig.from_dict(cfg.to_dict())
+        assert restored.forwarder_type is ForwarderType.UDP
+        assert restored.udp_idle_timeout == 42.0
+
+    def test_socks5_forwarder_round_trip_with_auth(self):
+        cfg = ForwarderConfig(
+            name="socks",
+            forwarder_type=ForwarderType.SOCKS5,
+            socks_auth_user="alice",
+            socks_auth_pass="secret",
+        )
+        d = cfg.to_dict()
+        # forwarder_type is serialised as a plain string for JSON compatibility.
+        assert d["forwarder_type"] == "socks5"
+        restored = ForwarderConfig.from_dict(d)
+        assert restored.forwarder_type is ForwarderType.SOCKS5
+        assert restored.socks_auth_user == "alice"
+        assert restored.socks_auth_pass == "secret"
+
+    def test_socks5_with_tls_listen_rejected(self):
+        with pytest.raises(ValueError):
+            ForwarderConfig(
+                name="bad",
+                forwarder_type=ForwarderType.SOCKS5,
+                tls_listen=True,
+            )
+
+    def test_udp_with_tls_listen_rejected(self):
+        with pytest.raises(ValueError):
+            ForwarderConfig(
+                name="bad",
+                forwarder_type=ForwarderType.UDP,
+                tls_listen=True,
+            )
+
+    def test_udp_idle_timeout_must_be_positive(self):
+        with pytest.raises(ValueError):
+            ForwarderConfig(name="t", udp_idle_timeout=0)

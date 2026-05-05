@@ -10,7 +10,7 @@ from textual.widgets import Button, DataTable, Input, Label, Select, Static, Swi
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
 
-from ...config import ForwarderConfig
+from ...config import ForwarderConfig, ForwarderType
 from ...mcp.host import MCPSettings
 from ..modals.forwarder_edit import ForwarderEditModal
 
@@ -213,12 +213,26 @@ class ConfigTab(Widget):
             err = self._fwd_errors.get(fwd.name, "")
             if err:
                 status += f"  ⚠ {err}"
+
+        listen_str = f"{fwd.listen_host}:{fwd.listen_port}"
+        if fwd.forwarder_type is ForwarderType.UDP:
+            listen_str = f"udp://{listen_str}"
+            upstream_str = f"udp://{fwd.upstream_host}:{fwd.upstream_port}"
+            tls_client = "—"
+        elif fwd.forwarder_type is ForwarderType.SOCKS5:
+            listen_str = f"socks5://{listen_str}"
+            upstream_str = "(SOCKS dynamic)"
+            tls_client = "—"
+        else:
+            upstream_str = f"{fwd.upstream_host}:{fwd.upstream_port}"
+            tls_client = "Yes" if fwd.tls_listen else "No"
+
         return (
             "On" if fwd.enabled else "Off",
             fwd.name,
-            f"{fwd.listen_host}:{fwd.listen_port}",
-            f"{fwd.upstream_host}:{fwd.upstream_port}",
-            "Yes" if fwd.tls_listen else "No",
+            listen_str,
+            upstream_str,
+            tls_client,
             "Yes" if fwd.tls_upstream else "No",
             status,
         )

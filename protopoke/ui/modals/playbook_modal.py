@@ -25,6 +25,7 @@ class PlaybookResult:
     tls:        bool
     session_id: str | None
     window:     float
+    transport:  str = "tcp"   # "tcp" | "udp"
 
 
 class PlaybookModal(ModalScreen[PlaybookResult | None]):
@@ -83,7 +84,7 @@ class PlaybookModal(ModalScreen[PlaybookResult | None]):
 
     def __init__(
         self,
-        sessions: list[tuple[str, str, str, int]],  # (id, display_label, host, port)
+        sessions: list[tuple],  # (id, display_label, host, port[, transport])
         *,
         label:      str        = "",
         host:       str        = "",
@@ -92,9 +93,19 @@ class PlaybookModal(ModalScreen[PlaybookResult | None]):
         session_id: str | None = None,
         window:     float      = 1.0,
         edit:       bool       = False,
+        transport:  str        = "tcp",
     ) -> None:
         super().__init__()
-        self._sessions   = sessions
+        # Normalise sessions to a 5-tuple including transport (default "tcp")
+        # so older callers passing (id, label, host, port) still work.
+        self._sessions: list[tuple[str, str, str, int, str]] = []
+        for entry in sessions:
+            if len(entry) >= 5:
+                sid, lbl, h, p, tr = entry[0], entry[1], entry[2], entry[3], entry[4]
+            else:
+                sid, lbl, h, p = entry[0], entry[1], entry[2], entry[3]
+                tr = "tcp"
+            self._sessions.append((sid, lbl, h, p, tr))
         self._label      = label
         self._host       = host
         self._port       = port
@@ -102,17 +113,23 @@ class PlaybookModal(ModalScreen[PlaybookResult | None]):
         self._session_id = session_id
         self._window     = window
         self._edit       = edit
+        self._transport  = transport if transport in ("tcp", "udp") else "tcp"
 
     def compose(self) -> ComposeResult:
+        # Filter sessions to those whose transport matches the current
+        # playbook transport — UDP playbooks can only bind to UDP sessions
+        # and vice versa.
+        matching = [s for s in self._sessions if s[4] == self._transport]
+
         session_options: list[tuple[str, str]] = [
             ("Custom (manual host:port)", _CUSTOM),
         ]
-        for sid, lbl, host, port in self._sessions:
+        for sid, lbl, host, port, _tr in matching:
             session_options.append((f"{lbl}  ({host}:{port})", sid))
 
         initial_session = _CUSTOM
         if self._session_id:
-            if any(sid == self._session_id for sid, *_ in self._sessions):
+            if any(s[0] == self._session_id for s in matching):
                 initial_session = self._session_id
 
         title         = "Edit Playbook" if self._edit else "New Playbook"
@@ -124,6 +141,14 @@ class PlaybookModal(ModalScreen[PlaybookResult | None]):
 
             yield Label("Name:")
             yield Input(self._label, placeholder="My Playbook", id="pb-label")
+
+            yield Label("Transport:", classes="section-title")
+            yield Select(
+                [("TCP", "tcp"), ("UDP", "udp")],
+                value=self._transport,
+                id="pb-transport",
+                allow_blank=False,
+            )
 
             yield Label("Session:", classes="section-title")
             yield Select(
@@ -139,7 +164,7 @@ class PlaybookModal(ModalScreen[PlaybookResult | None]):
                 yield Label("Port: ")
                 yield Input(port_display, placeholder="8080", id="pb-port", restrict=r"\d*")
 
-            with Horizontal(classes="tls-row"):
+            with Horizontal(classes="tls-row", id="pb-tls-row"):
                 yield Label("TLS: ")
                 yield Switch(id="pb-tls", value=self._tls)
 
@@ -157,9 +182,28 @@ class PlaybookModal(ModalScreen[PlaybookResult | None]):
                 yield Button(confirm_label, variant="primary", id="btn-confirm")
 
     def on_mount(self) -> None:
+        self._apply_transport_visibility(self._transport)
         if self._session_id and self._session_id != _CUSTOM:
             self._set_fields_from_session(self._session_id)
         self.query_one("#pb-label", Input).focus()
+
+    def _apply_transport_visibility(self, transport: str) -> None:
+        """Hide TLS row for UDP playbooks (no DTLS support)."""
+        try:
+            self.query_one("#pb-tls-row").display = (transport == "tcp")
+        except Exception:
+            pass
+
+    def _rebuild_session_options(self) -> None:
+        """Rebuild the session selector to match the current transport."""
+        select = self.query_one("#session-select", Select)
+        matching = [s for s in self._sessions if s[4] == self._transport]
+        options: list[tuple[str, str]] = [("Custom (manual host:port)", _CUSTOM)]
+        for sid, lbl, host, port, _tr in matching:
+            options.append((f"{lbl}  ({host}:{port})", sid))
+        select.set_options(options)
+        select.value = _CUSTOM
+        self._enable_custom_fields()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -167,7 +211,7 @@ class PlaybookModal(ModalScreen[PlaybookResult | None]):
 
     def _set_fields_from_session(self, session_id: str) -> None:
         """Pre-fill host/port from *session_id* and disable those fields."""
-        for sid, _lbl, host, port in self._sessions:
+        for sid, _lbl, host, port, _tr in self._sessions:
             if sid == session_id:
                 self.query_one("#pb-host", Input).value = host
                 self.query_one("#pb-port", Input).value = str(port)
@@ -187,6 +231,14 @@ class PlaybookModal(ModalScreen[PlaybookResult | None]):
     # ------------------------------------------------------------------
 
     def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "pb-transport":
+            value = event.value
+            new_transport = "tcp" if value is Select.BLANK else str(value)
+            if new_transport != self._transport:
+                self._transport = new_transport
+                self._apply_transport_visibility(new_transport)
+                self._rebuild_session_options()
+            return
         if event.select.id != "session-select":
             return
         value = event.value
@@ -209,8 +261,11 @@ class PlaybookModal(ModalScreen[PlaybookResult | None]):
         sid_val    = self.query_one("#session-select", Select).value
         session_id = None if (sid_val is Select.BLANK or sid_val == _CUSTOM) else str(sid_val)
 
+        transport_val = self.query_one("#pb-transport", Select).value
+        transport = "tcp" if transport_val is Select.BLANK else str(transport_val)
+
         if session_id:
-            for s_id, _lbl, s_host, s_port in self._sessions:
+            for s_id, _lbl, s_host, s_port, _tr in self._sessions:
                 if s_id == session_id:
                     host     = s_host
                     port_str = str(s_port)
@@ -231,6 +286,10 @@ class PlaybookModal(ModalScreen[PlaybookResult | None]):
         except ValueError:
             window = self._window
 
+        # UDP playbooks ignore the TLS toggle.
+        if transport == "udp":
+            tls = False
+
         self.dismiss(PlaybookResult(
             label=label,
             host=host,
@@ -238,6 +297,7 @@ class PlaybookModal(ModalScreen[PlaybookResult | None]):
             tls=tls,
             session_id=session_id,
             window=window,
+            transport=transport,
         ))
 
     def on_key(self, event) -> None:

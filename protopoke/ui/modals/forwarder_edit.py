@@ -10,7 +10,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Switch, Static
 from textual.containers import Horizontal, Vertical, ScrollableContainer
 
-from ...config import ForwarderConfig
+from ...config import ForwarderConfig, ForwarderType
 from .file_picker import FilePickerModal
 from .framer_edit import FramerEditModal, FramerSettings
 
@@ -20,6 +20,13 @@ _LOG_LEVEL_OPTIONS = [
     ("INFO", "INFO"),
     ("WARNING", "WARNING"),
     ("ERROR", "ERROR"),
+]
+
+
+_FORWARDER_TYPE_OPTIONS = [
+    ("TCP", ForwarderType.TCP.value),
+    ("UDP", ForwarderType.UDP.value),
+    ("SOCKS5", ForwarderType.SOCKS5.value),
 ]
 
 
@@ -162,6 +169,7 @@ class ForwarderEditModal(ModalScreen):
 
     # Widget IDs that require a restart and should be disabled while running.
     _RESTART_ONLY_IDS = frozenset({
+        "fm-type",
         "fm-listen-host", "fm-listen-port",
         "fm-upstream-host", "fm-upstream-port",
         "fm-max-sessions", "fm-read-buffer",
@@ -169,6 +177,7 @@ class ForwarderEditModal(ModalScreen):
         "fm-ca-cert", "fm-ca-key", "fm-tls-cert", "fm-tls-key",
         "fm-browse-ca-cert", "fm-browse-ca-key",
         "fm-browse-tls-cert", "fm-browse-tls-key",
+        "fm-udp-idle", "fm-socks-user", "fm-socks-pass",
     })
 
     def __init__(
@@ -223,10 +232,19 @@ class ForwarderEditModal(ModalScreen):
             yield Label(title, classes="modal-title")
 
             with ScrollableContainer():
-                # ---- Name ----
+                # ---- Name + Type ----
                 with Horizontal(classes="field-row"):
                     yield Label("Name:", classes="field-label")
                     yield Input(value=self._forwarder.name, id="fm-name", classes="field-input")
+                with Horizontal(classes="field-row"):
+                    yield Label("Type:", classes="field-label")
+                    yield Select(
+                        _FORWARDER_TYPE_OPTIONS,
+                        value=self._forwarder.forwarder_type.value,
+                        id="fm-type",
+                        classes="field-input",
+                        allow_blank=False,
+                    )
 
                 # ---- Listener ----
                 yield Static("  Listener", classes="section-header")
@@ -248,19 +266,52 @@ class ForwarderEditModal(ModalScreen):
                         classes="field-input",
                     )
 
-                # ---- Upstream ----
-                yield Static("  Upstream", classes="section-header")
-                with Horizontal(classes="field-row"):
-                    yield Label("Upstream host:", classes="field-label")
-                    yield Input(value=fwd.upstream_host, id="fm-upstream-host", classes="field-input")
-                with Horizontal(classes="field-row"):
-                    yield Label("Upstream port:", classes="field-label")
-                    yield Input(
-                        value=str(fwd.upstream_port),
-                        id="fm-upstream-port",
-                        restrict=r"\d*",
-                        classes="field-input",
-                    )
+                # ---- Upstream (TCP / UDP) ----
+                with Vertical(id="fm-section-upstream"):
+                    yield Static("  Upstream", classes="section-header")
+                    with Horizontal(classes="field-row"):
+                        yield Label("Upstream host:", classes="field-label")
+                        yield Input(value=fwd.upstream_host, id="fm-upstream-host", classes="field-input")
+                    with Horizontal(classes="field-row"):
+                        yield Label("Upstream port:", classes="field-label")
+                        yield Input(
+                            value=str(fwd.upstream_port),
+                            id="fm-upstream-port",
+                            restrict=r"\d*",
+                            classes="field-input",
+                        )
+
+                # ---- UDP-specific ----
+                with Vertical(id="fm-section-udp"):
+                    yield Static("  UDP", classes="section-header")
+                    with Horizontal(classes="field-row"):
+                        yield Label("Idle timeout (s):", classes="field-label")
+                        yield Input(
+                            value=str(fwd.udp_idle_timeout),
+                            id="fm-udp-idle",
+                            restrict=r"[\d.]*",
+                            classes="field-input",
+                        )
+
+                # ---- SOCKS5-specific ----
+                with Vertical(id="fm-section-socks"):
+                    yield Static("  SOCKS5 auth", classes="section-header")
+                    with Horizontal(classes="field-row"):
+                        yield Label("Username:", classes="field-label")
+                        yield Input(
+                            value=fwd.socks_auth_user or "",
+                            id="fm-socks-user",
+                            placeholder="(blank = no auth)",
+                            classes="field-input",
+                        )
+                    with Horizontal(classes="field-row"):
+                        yield Label("Password:", classes="field-label")
+                        yield Input(
+                            value=fwd.socks_auth_pass or "",
+                            id="fm-socks-pass",
+                            password=True,
+                            classes="field-input",
+                        )
 
                 # ---- Sessions / buffer ----
                 yield Static("  Sessions", classes="section-header")
@@ -282,61 +333,63 @@ class ForwarderEditModal(ModalScreen):
                     )
 
                 # ---- TLS client side ----
-                yield Static("  SSL/TLS", classes="section-header")
-                with Horizontal(classes="field-row"):
-                    yield Label("SSL/TLS client side:", classes="field-label")
-                    yield Switch(value=fwd.tls_listen, id="fm-tls-listen")
-                with Horizontal(classes="field-row"):
-                    yield Label("SSL/TLS upstream:", classes="field-label")
-                    yield Switch(value=fwd.tls_upstream, id="fm-tls-upstream")
-                with Vertical(id="fm-tls-paths"):
+                with Vertical(id="fm-section-tls"):
+                    yield Static("  SSL/TLS", classes="section-header")
                     with Horizontal(classes="field-row"):
-                        yield Label("CA cert path:", classes="field-label")
-                        yield Input(
-                            value=fwd.ca_cert_path or "",
-                            id="fm-ca-cert",
-                            placeholder="~/.protopoke/ca.crt",
-                            classes="field-input",
-                        )
-                        yield Button("Browse", id="fm-browse-ca-cert", classes="btn-browse")
+                        yield Label("SSL/TLS client side:", classes="field-label")
+                        yield Switch(value=fwd.tls_listen, id="fm-tls-listen")
                     with Horizontal(classes="field-row"):
-                        yield Label("CA key path:", classes="field-label")
-                        yield Input(
-                            value=fwd.ca_key_path or "",
-                            id="fm-ca-key",
-                            placeholder="~/.protopoke/ca.key",
-                            classes="field-input",
-                        )
-                        yield Button("Browse", id="fm-browse-ca-key", classes="btn-browse")
-                    with Horizontal(classes="field-row"):
-                        yield Label("Manual cert path:", classes="field-label")
-                        yield Input(
-                            value=fwd.tls_cert_path or "",
-                            id="fm-tls-cert",
-                            placeholder="(optional override)",
-                            classes="field-input",
-                        )
-                        yield Button("Browse", id="fm-browse-tls-cert", classes="btn-browse")
-                    with Horizontal(classes="field-row"):
-                        yield Label("Manual key path:", classes="field-label")
-                        yield Input(
-                            value=fwd.tls_key_path or "",
-                            id="fm-tls-key",
-                            placeholder="(optional override)",
-                            classes="field-input",
-                        )
-                        yield Button("Browse", id="fm-browse-tls-key", classes="btn-browse")
+                        yield Label("SSL/TLS upstream:", classes="field-label")
+                        yield Switch(value=fwd.tls_upstream, id="fm-tls-upstream")
+                    with Vertical(id="fm-tls-paths"):
+                        with Horizontal(classes="field-row"):
+                            yield Label("CA cert path:", classes="field-label")
+                            yield Input(
+                                value=fwd.ca_cert_path or "",
+                                id="fm-ca-cert",
+                                placeholder="~/.protopoke/ca.crt",
+                                classes="field-input",
+                            )
+                            yield Button("Browse", id="fm-browse-ca-cert", classes="btn-browse")
+                        with Horizontal(classes="field-row"):
+                            yield Label("CA key path:", classes="field-label")
+                            yield Input(
+                                value=fwd.ca_key_path or "",
+                                id="fm-ca-key",
+                                placeholder="~/.protopoke/ca.key",
+                                classes="field-input",
+                            )
+                            yield Button("Browse", id="fm-browse-ca-key", classes="btn-browse")
+                        with Horizontal(classes="field-row"):
+                            yield Label("Manual cert path:", classes="field-label")
+                            yield Input(
+                                value=fwd.tls_cert_path or "",
+                                id="fm-tls-cert",
+                                placeholder="(optional override)",
+                                classes="field-input",
+                            )
+                            yield Button("Browse", id="fm-browse-tls-cert", classes="btn-browse")
+                        with Horizontal(classes="field-row"):
+                            yield Label("Manual key path:", classes="field-label")
+                            yield Input(
+                                value=fwd.tls_key_path or "",
+                                id="fm-tls-key",
+                                placeholder="(optional override)",
+                                classes="field-input",
+                            )
+                            yield Button("Browse", id="fm-browse-tls-key", classes="btn-browse")
 
                 # ---- Framing ----
-                yield Static("  Framing", classes="section-header")
-                with Horizontal(classes="field-row"):
-                    yield Label("Framer:", classes="field-label")
-                    yield Button("Edit", id="fm-btn-framer-edit", classes="btn-framer-edit")
-                    yield Static(
-                        _framer_summary(self._framer_name, self._framer_kwargs, self._custom_framer_path),
-                        id="fm-framer-summary",
-                        classes="framer-summary",
-                    )
+                with Vertical(id="fm-section-framing"):
+                    yield Static("  Framing", classes="section-header")
+                    with Horizontal(classes="field-row"):
+                        yield Label("Framer:", classes="field-label")
+                        yield Button("Edit", id="fm-btn-framer-edit", classes="btn-framer-edit")
+                        yield Static(
+                            _framer_summary(self._framer_name, self._framer_kwargs, self._custom_framer_path),
+                            id="fm-framer-summary",
+                            classes="framer-summary",
+                        )
 
                 # ---- Protocol ----
                 yield Static("  Protocol Definition", classes="section-header")
@@ -365,9 +418,46 @@ class ForwarderEditModal(ModalScreen):
             except Exception:
                 pass
 
+    def _apply_type_visibility(self, type_value: str) -> None:
+        """Show or hide sections based on the selected forwarder type."""
+        # Default: all sections visible (TCP)
+        show_upstream = True
+        show_tls      = True
+        show_udp      = False
+        show_socks    = False
+        framing_disabled = False
+
+        if type_value == ForwarderType.UDP.value:
+            show_tls = False
+            show_udp = True
+            framing_disabled = True   # UDP forces RawFramer
+        elif type_value == ForwarderType.SOCKS5.value:
+            show_upstream = False     # target is client-supplied
+            show_tls      = False     # SOCKS5 + tls_listen is rejected at config
+            show_socks    = True
+
+        for sect_id, visible in (
+            ("fm-section-upstream", show_upstream),
+            ("fm-section-tls",      show_tls),
+            ("fm-section-udp",      show_udp),
+            ("fm-section-socks",    show_socks),
+        ):
+            try:
+                self.query_one(f"#{sect_id}").display = visible
+            except Exception:
+                pass
+
+        try:
+            self.query_one("#fm-btn-framer-edit").disabled = framing_disabled
+        except Exception:
+            pass
+
     def on_mount(self) -> None:
         # Enable/disable TLS path fields based on the client-side TLS toggle
         self._set_tls_paths_enabled(self._forwarder.tls_listen)
+
+        # Show/hide sections based on the configured forwarder type
+        self._apply_type_visibility(self._forwarder.forwarder_type.value)
 
         # Disable fields that require a restart when the forwarder is running
         if self._is_running:
@@ -380,6 +470,11 @@ class ForwarderEditModal(ModalScreen):
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "fm-type":
+            value = event.value if event.value is not Select.BLANK else ForwarderType.TCP.value
+            self._apply_type_visibility(str(value))
 
     def on_switch_changed(self, event: Switch.Changed) -> None:
         if event.switch.id == "fm-tls-listen":
@@ -467,21 +562,55 @@ class ForwarderEditModal(ModalScreen):
         fwd = self._forwarder
         fwd.name = name
 
+        type_value = _sel("fm-type") or ForwarderType.TCP.value
+        try:
+            fwd.forwarder_type = ForwarderType(type_value)
+        except ValueError:
+            fwd.forwarder_type = ForwarderType.TCP
+
         fwd.listen_host = _sel("fm-listen-host") or "127.0.0.1"
         fwd.listen_port = _int("fm-listen-port", 8080)
         fwd.upstream_host = _str("fm-upstream-host") or "127.0.0.1"
         fwd.upstream_port = _int("fm-upstream-port", 9090)
         fwd.max_sessions = _int("fm-max-sessions", 0)
         fwd.read_buffer_size = _int("fm-read-buffer", 4096)
-        fwd.tls_listen = _sw("fm-tls-listen")
+
+        # UDP and SOCKS5 cannot use tls_listen — strip it preemptively so
+        # ForwarderConfig.__post_init__ doesn't reject the save.
+        if fwd.forwarder_type in (ForwarderType.UDP, ForwarderType.SOCKS5):
+            fwd.tls_listen = False
+        else:
+            fwd.tls_listen = _sw("fm-tls-listen")
         fwd.tls_upstream = _sw("fm-tls-upstream")
         fwd.ca_cert_path = _str("fm-ca-cert") or None
         fwd.ca_key_path = _str("fm-ca-key") or None
         fwd.tls_cert_path = _str("fm-tls-cert") or None
         fwd.tls_key_path = _str("fm-tls-key") or None
-        fwd.framer_name = self._framer_name
-        fwd.framer_kwargs = dict(self._framer_kwargs)
-        fwd.custom_framer_path = self._custom_framer_path
+
+        # UDP-specific
+        try:
+            fwd.udp_idle_timeout = float(_str("fm-udp-idle") or "60")
+        except ValueError:
+            fwd.udp_idle_timeout = 60.0
+        if fwd.udp_idle_timeout <= 0:
+            fwd.udp_idle_timeout = 60.0
+
+        # SOCKS5-specific
+        fwd.socks_auth_user = _str("fm-socks-user") or None
+        fwd.socks_auth_pass = _str("fm-socks-pass") or None
+        if fwd.socks_auth_user is None:
+            fwd.socks_auth_pass = None  # password without username is ignored
+
+        # UDP forwarders force the RawFramer (no stateful framer makes sense
+        # for datagrams).
+        if fwd.forwarder_type is ForwarderType.UDP:
+            fwd.framer_name = "raw"
+            fwd.framer_kwargs = {}
+            fwd.custom_framer_path = None
+        else:
+            fwd.framer_name = self._framer_name
+            fwd.framer_kwargs = dict(self._framer_kwargs)
+            fwd.custom_framer_path = self._custom_framer_path
         fwd.protocol_definition_path = _str("fm-proto-def") or None
 
         self.dismiss(fwd)
