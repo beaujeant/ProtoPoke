@@ -194,6 +194,7 @@ class ConfigTab(Widget):
         dt = self.query_one("#cfg-table", DataTable)
         dt.add_column("Enabled", key="enabled")
         dt.add_column("Name", key="name")
+        dt.add_column("Type", key="type")
         dt.add_column("Listen", key="listen")
         dt.add_column("Upstream", key="upstream")
         dt.add_column("TLS Client", key="tls_client")
@@ -216,24 +217,29 @@ class ConfigTab(Widget):
 
         listen_str = f"{fwd.listen_host}:{fwd.listen_port}"
         if fwd.forwarder_type is ForwarderType.UDP:
-            listen_str = f"udp://{listen_str}"
-            upstream_str = f"udp://{fwd.upstream_host}:{fwd.upstream_port}"
+            type_str = "UDP"
+            upstream_str = f"{fwd.upstream_host}:{fwd.upstream_port}"
             tls_client = "—"
+            tls_upstream = "—"
         elif fwd.forwarder_type is ForwarderType.SOCKS5:
-            listen_str = f"socks5://{listen_str}"
-            upstream_str = "(SOCKS dynamic)"
+            type_str = "SOCKS5"
+            upstream_str = "(dynamic)"
             tls_client = "—"
+            tls_upstream = "—"
         else:
+            type_str = "TCP"
             upstream_str = f"{fwd.upstream_host}:{fwd.upstream_port}"
             tls_client = "Yes" if fwd.tls_listen else "No"
+            tls_upstream = "Yes" if fwd.tls_upstream else "No"
 
         return (
             "On" if fwd.enabled else "Off",
             fwd.name,
+            type_str,
             listen_str,
             upstream_str,
             tls_client,
-            "Yes" if fwd.tls_upstream else "No",
+            tls_upstream,
             status,
         )
 
