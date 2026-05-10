@@ -107,6 +107,15 @@ class ForwarderConfig:
     # Sessions
     max_sessions: int = 0  # 0 = unlimited
 
+    # Lifecycle
+    # When True (default), the upstream server connection is kept alive after
+    # the client disconnects.  The session transitions to ONLY_SERVER and stays
+    # there until the server closes or the user terminates the session, so the
+    # Forge tab can keep injecting frames into the live connection.  Set to
+    # False to restore the legacy behaviour where a client disconnect tears
+    # down the server connection via a TCP half-close.
+    keep_upstream_on_client_disconnect: bool = True
+
     # Interception
     tamper_enabled: bool = False
 
