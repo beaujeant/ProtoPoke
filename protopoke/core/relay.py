@@ -26,12 +26,30 @@ Architecture:
         concurrent asyncio Tasks.
 
         IMPORTANT — TCP half-close handling:
-            When one side sends EOF, the correct proxy behaviour is a
-            TCP half-close: signal EOF to the destination (so the remote
-            peer knows we're done writing) but keep reading from it so
-            any remaining in-flight data can reach the client.
+            When one side sends EOF the default behaviour is a TCP half-close:
+            signal EOF to the destination (so the remote peer knows we're done
+            writing) but keep reading from it so any remaining in-flight data
+            can still reach the original sender.
 
-            Example:
+            For the upstream direction (client → server) this is suppressed by
+            default via ``keep_upstream_on_client_disconnect=True``: a client
+            disconnect should NOT tear down the upstream server connection,
+            because the operator may still want to drive that connection from
+            the Forge tab.  In that mode the upstream relay simply exits, the
+            session transitions to ONLY_SERVER, and the server connection
+            stays fully open until the server closes it or the session is
+            terminated manually.
+
+            Example (default — keep upstream alive):
+                1. Client sends data + FIN → proxy
+                2. Upstream relay reads EOF and exits silently (no write_eof)
+                3. Session transitions to ONLY_SERVER
+                4. Operator uses Forge to inject more frames → server still
+                   answers; downstream relay keeps capturing them
+                5. Server eventually closes (or operator terminates) → both
+                   relays finish, BidirectionalRelay closes the writers
+
+            Legacy mode (``keep_upstream_on_client_disconnect=False``):
                 1. Client sends data + FIN → proxy
                 2. Upstream relay receives EOF, writes_eof() to server
                 3. Server echoes data + FIN → proxy  (response in flight)
@@ -92,6 +110,7 @@ class DirectionalRelay:
         event_bus:            EventBus,
         read_buffer_size:     int = 4096,
         rules_engine:         "Optional[RulesEngine]" = None,
+        propagate_eof:        bool = True,
     ) -> None:
         """
         Args:
@@ -106,6 +125,11 @@ class DirectionalRelay:
                                InterceptCompletedEvent.
             read_buffer_size:  Bytes per asyncio read() call.
             rules_engine:      Replace rules applied before tampering (None = no rules).
+            propagate_eof:     When True (default), send write_eof() to the destination
+                               on source-side EOF. Set to False to leave the destination
+                               connection fully open — used for the upstream direction
+                               so a client disconnect does not tear down the server
+                               connection (Forge can still inject into it).
         """
         self._session              = session
         self._direction            = direction
@@ -116,6 +140,7 @@ class DirectionalRelay:
         self._event_bus            = event_bus
         self._read_buffer_size     = read_buffer_size
         self._rules_engine         = rules_engine
+        self._propagate_eof        = propagate_eof
         self._running              = False
 
     async def run(self) -> None:
@@ -166,8 +191,13 @@ class DirectionalRelay:
             # We do NOT call writer.close() here — that would terminate the
             # TCP connection immediately, losing any in-flight response data.
             # BidirectionalRelay.run() closes the writers after both tasks end.
+            #
+            # When `propagate_eof` is False, we skip the half-close entirely:
+            # this is what keeps the upstream server connection alive after a
+            # client disconnect so Forge can keep injecting frames.
             self._running = False
-            await self._send_eof_to_dest()
+            if self._propagate_eof:
+                await self._send_eof_to_dest()
 
     async def _process_frame(self, frame: Frame) -> None:
         """
@@ -313,6 +343,7 @@ class BidirectionalRelay:
         read_buffer_size:     int = 4096,
         rules_engine:         "Optional[RulesEngine]" = None,
         on_first_disconnect:  "Optional[Callable[[Direction], Awaitable[None]]]" = None,
+        keep_upstream_on_client_disconnect: bool = True,
     ) -> None:
         """
         Args:
@@ -333,6 +364,16 @@ class BidirectionalRelay:
                                  Receives the Direction of the side that closed.
                                  Used by the engine to transition the session to
                                  ONLY_SERVER or ONLY_CLIENT state.
+            keep_upstream_on_client_disconnect:
+                                 When True (default), a client disconnect does NOT
+                                 propagate EOF to the upstream server — the server
+                                 connection stays fully open until the server itself
+                                 closes or the session is terminated manually.  This
+                                 lets Forge continue to inject frames into the live
+                                 server connection after the original client is gone.
+                                 Set to False to restore the legacy behaviour where
+                                 a client EOF is forwarded as a TCP half-close to the
+                                 upstream server.
         """
         self._session              = session
         self._client_writer        = client_writer
@@ -349,6 +390,10 @@ class BidirectionalRelay:
             event_bus=event_bus,
             read_buffer_size=read_buffer_size,
             rules_engine=rules_engine,
+            # When the client disconnects we do NOT forward EOF to the upstream
+            # server — keep the server connection alive so Forge can keep using
+            # it.  The session ends when the server closes or the user terminates.
+            propagate_eof=not keep_upstream_on_client_disconnect,
         )
 
         self._downstream = DirectionalRelay(

@@ -108,10 +108,14 @@ class TestInjectToServer:
         """inject_to_server returns False once the session's connection closes."""
         async with echo_server_ctx() as (upstream_host, upstream_port):
             listen_port = free_port()
+            # Use the legacy disconnect behaviour so closing the client also
+            # tears down the upstream session — the new default keeps the
+            # server side alive (covered by a dedicated test).
             config = ForwarderConfig(
                 name="Test",
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
+                keep_upstream_on_client_disconnect=False,
             )
             api = ProtoPokeAPI([config])
             await api.start()
@@ -138,6 +142,53 @@ class TestInjectToServer:
                 # The session is now closed -- writer should be gone
                 result = await api.inject_to_server(session_id, b"\x01")
                 assert result is False
+            finally:
+                await api.stop()
+
+    async def test_inject_works_after_client_disconnect(self):
+        """
+        With the default ``keep_upstream_on_client_disconnect=True``, a client
+        disconnect must NOT close the upstream connection — Forge can still
+        inject into it.
+        """
+        async with echo_server_ctx() as (upstream_host, upstream_port):
+            listen_port = free_port()
+            config = ForwarderConfig(
+                name="Test",
+                listen_host="127.0.0.1", listen_port=listen_port,
+                upstream_host=upstream_host, upstream_port=upstream_port,
+            )
+            api = ProtoPokeAPI([config])
+            await api.start()
+            try:
+                client_reader, client_writer = await asyncio.open_connection(
+                    "127.0.0.1", listen_port
+                )
+                client_writer.write(b"ping")
+                await client_writer.drain()
+                await asyncio.sleep(0.1)
+
+                sessions = api.list_active_sessions()
+                assert len(sessions) == 1
+                session_id = sessions[0].id
+
+                client_writer.close()
+                try:
+                    await client_writer.wait_closed()
+                except Exception:
+                    pass
+                await asyncio.sleep(0.2)
+
+                # Server connection should still be alive — inject succeeds.
+                result = await api.inject_to_server(session_id, b"after-close")
+                assert result is True
+
+                # Terminating the session releases the upstream and now
+                # inject must return False.
+                await api.terminate_session(session_id)
+                await asyncio.sleep(0.2)
+                result_after = await api.inject_to_server(session_id, b"\x01")
+                assert result_after is False
             finally:
                 await api.stop()
 

@@ -126,10 +126,14 @@ class TestPassthroughProxy:
     async def test_session_state_lifecycle(self):
         async with echo_server_ctx() as (upstream_host, upstream_port):
             listen_port = free_port()
+            # Force the legacy "client disconnect tears down the upstream"
+            # behaviour so the session reliably reaches CLOSED without us
+            # having to terminate it manually.
             config = ForwarderConfig(
                 name="Test",
                 listen_host="127.0.0.1", listen_port=listen_port,
                 upstream_host=upstream_host, upstream_port=upstream_port,
+                keep_upstream_on_client_disconnect=False,
             )
             api = ProtoPokeAPI([config])
             opened_sessions = []
@@ -152,6 +156,54 @@ class TestPassthroughProxy:
                 assert len(opened_sessions) == 1
                 assert len(closed_sessions) == 1
                 assert opened_sessions[0] == closed_sessions[0]
+            finally:
+                await api.stop()
+
+    @pytest.mark.asyncio
+    async def test_client_disconnect_keeps_upstream_alive(self):
+        """
+        With the default ``keep_upstream_on_client_disconnect=True`` setting,
+        a client disconnect must NOT close the upstream server connection.
+        The session transitions to ONLY_SERVER and the server-side writer is
+        still available so Forge can keep injecting bytes.
+        """
+        from protopoke.models import SessionState
+
+        async with echo_server_ctx() as (upstream_host, upstream_port):
+            listen_port = free_port()
+            config = ForwarderConfig(
+                name="Test",
+                listen_host="127.0.0.1", listen_port=listen_port,
+                upstream_host=upstream_host, upstream_port=upstream_port,
+            )
+            api = ProtoPokeAPI([config])
+            await api.start()
+            try:
+                reader, writer = await asyncio.open_connection(
+                    "127.0.0.1", listen_port
+                )
+                writer.write(b"hello")
+                await writer.drain()
+                await asyncio.sleep(0.1)
+
+                sessions = api.list_active_sessions()
+                assert len(sessions) == 1
+                session_id = sessions[0].id
+
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+                await asyncio.sleep(0.2)
+
+                # Session must still be active (ONLY_SERVER) and inject must work.
+                session = api.get_session(session_id)
+                assert session is not None
+                assert session.state is SessionState.ONLY_SERVER
+
+                injected = await api.inject_to_server(session_id, b"after-close")
+                assert injected is True
             finally:
                 await api.stop()
 

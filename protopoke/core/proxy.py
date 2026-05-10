@@ -591,6 +591,7 @@ class ProxyEngine:
             read_buffer_size=self.config.read_buffer_size,
             rules_engine=self.rules_engine,
             on_first_disconnect=_on_first_disconnect,
+            keep_upstream_on_client_disconnect=self.config.keep_upstream_on_client_disconnect,
         )
 
         self._session_relays[session.id] = relay
