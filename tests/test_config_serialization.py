@@ -95,11 +95,9 @@ class TestForwarderConfigSerialization:
         cfg = ForwarderConfig(
             name="udp",
             forwarder_type=ForwarderType.UDP,
-            udp_idle_timeout=42.0,
         )
         restored = ForwarderConfig.from_dict(cfg.to_dict())
         assert restored.forwarder_type is ForwarderType.UDP
-        assert restored.udp_idle_timeout == 42.0
 
     def test_socks5_forwarder_round_trip_with_auth(self):
         cfg = ForwarderConfig(
@@ -131,7 +129,3 @@ class TestForwarderConfigSerialization:
                 forwarder_type=ForwarderType.UDP,
                 tls_listen=True,
             )
-
-    def test_udp_idle_timeout_must_be_positive(self):
-        with pytest.raises(ValueError):
-            ForwarderConfig(name="t", udp_idle_timeout=0)

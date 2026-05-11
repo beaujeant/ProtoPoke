@@ -44,7 +44,6 @@ async def test_udp_forwarder_relays_datagram_and_creates_session():
             listen_port=listen_port,
             upstream_host="127.0.0.1",
             upstream_port=echo_port,
-            udp_idle_timeout=5.0,
         )
         api = ProtoPokeAPI(forwarders=[config])
         await api.start()
@@ -90,7 +89,13 @@ async def test_udp_forwarder_relays_datagram_and_creates_session():
         echo_transport.close()
 
 
-async def test_udp_idle_timeout_closes_session():
+async def test_udp_flow_stays_open_when_idle():
+    """A UDP flow must NOT be closed just because it's been quiet for a while.
+
+    UDP has no FIN and this tool is meant for reverse engineering — pausing on
+    an intercept or stepping away to inspect frames must not silently fragment
+    the capture.  The flow lives until forwarder stop or explicit termination.
+    """
     listen_port = free_port()
     echo_transport, echo_port = await _start_udp_echo()
     try:
@@ -101,29 +106,85 @@ async def test_udp_idle_timeout_closes_session():
             listen_port=listen_port,
             upstream_host="127.0.0.1",
             upstream_port=echo_port,
-            udp_idle_timeout=0.5,
         )
         api = ProtoPokeAPI(forwarders=[config])
         await api.start()
         try:
             await asyncio.sleep(0.05)
             loop = asyncio.get_event_loop()
+            replies: asyncio.Queue = asyncio.Queue()
+
+            class _ClientProto(asyncio.DatagramProtocol):
+                def datagram_received(self, data, addr):
+                    replies.put_nowait(data)
+
             client_transport, _ = await loop.create_datagram_endpoint(
-                asyncio.DatagramProtocol,
+                _ClientProto,
                 remote_addr=("127.0.0.1", listen_port),
             )
             try:
                 client_transport.sendto(b"hi")
+                await asyncio.wait_for(replies.get(), timeout=1.0)
+                await asyncio.sleep(1.5)  # sit idle past any plausible old timeout
+                sessions = api.list_sessions()
+                assert len(sessions) == 1
+                assert sessions[0].info.state is SessionState.ACTIVE
+
+                # Same source-port reuses the existing flow / session.
+                client_transport.sendto(b"hi-again")
+                await asyncio.wait_for(replies.get(), timeout=1.0)
+                sessions = api.list_sessions()
+                assert len(sessions) == 1
+                assert sessions[0].info.state is SessionState.ACTIVE
             finally:
-                await asyncio.sleep(0.05)
                 client_transport.close()
+        finally:
+            await api.stop()
+    finally:
+        echo_transport.close()
 
-            # Wait long enough for the idle sweeper (0.5/2 = 0.25s) to run twice.
-            await asyncio.sleep(1.5)
 
-            sessions = api.list_sessions()
-            assert len(sessions) == 1
-            assert sessions[0].info.state is SessionState.CLOSED
+async def test_udp_terminate_session_closes_flow():
+    """Operator-driven termination is the only way a UDP session reaches CLOSED."""
+    listen_port = free_port()
+    echo_transport, echo_port = await _start_udp_echo()
+    try:
+        config = ForwarderConfig(
+            name="udp-terminate",
+            forwarder_type=ForwarderType.UDP,
+            listen_host="127.0.0.1",
+            listen_port=listen_port,
+            upstream_host="127.0.0.1",
+            upstream_port=echo_port,
+        )
+        api = ProtoPokeAPI(forwarders=[config])
+        await api.start()
+        try:
+            await asyncio.sleep(0.05)
+            loop = asyncio.get_event_loop()
+            replies: asyncio.Queue = asyncio.Queue()
+
+            class _ClientProto(asyncio.DatagramProtocol):
+                def datagram_received(self, data, addr):
+                    replies.put_nowait(data)
+
+            client_transport, _ = await loop.create_datagram_endpoint(
+                _ClientProto,
+                remote_addr=("127.0.0.1", listen_port),
+            )
+            try:
+                client_transport.sendto(b"hi")
+                await asyncio.wait_for(replies.get(), timeout=1.0)
+
+                sessions = api.list_sessions()
+                assert len(sessions) == 1
+                sid = sessions[0].info.id
+
+                await api.terminate_session(sid)
+                await asyncio.sleep(0.05)
+                assert api.list_sessions()[0].info.state is SessionState.CLOSED
+            finally:
+                client_transport.close()
         finally:
             await api.stop()
     finally:

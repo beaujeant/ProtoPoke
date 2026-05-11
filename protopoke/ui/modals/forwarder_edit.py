@@ -180,7 +180,7 @@ class ForwarderEditModal(ModalScreen):
         "fm-ca-cert", "fm-ca-key", "fm-tls-cert", "fm-tls-key",
         "fm-browse-ca-cert", "fm-browse-ca-key",
         "fm-browse-tls-cert", "fm-browse-tls-key",
-        "fm-udp-idle", "fm-socks-user", "fm-socks-pass",
+        "fm-socks-user", "fm-socks-pass",
     })
 
     def __init__(
@@ -281,18 +281,6 @@ class ForwarderEditModal(ModalScreen):
                             value=str(fwd.upstream_port),
                             id="fm-upstream-port",
                             restrict=r"\d*",
-                            classes="field-input",
-                        )
-
-                # ---- UDP-specific ----
-                with Vertical(id="fm-section-udp"):
-                    yield Static("  UDP", classes="section-header")
-                    with Horizontal(classes="field-row"):
-                        yield Label("Idle timeout (s):", classes="field-label")
-                        yield Input(
-                            value=str(fwd.udp_idle_timeout),
-                            id="fm-udp-idle",
-                            restrict=r"[\d.]*",
                             classes="field-input",
                         )
 
@@ -426,13 +414,11 @@ class ForwarderEditModal(ModalScreen):
         # Default: all sections visible (TCP)
         show_upstream = True
         show_tls      = True
-        show_udp      = False
         show_socks    = False
         framing_disabled = False
 
         if type_value == ForwarderType.UDP.value:
             show_tls = False
-            show_udp = True
             framing_disabled = True   # UDP forces RawFramer
         elif type_value == ForwarderType.SOCKS5.value:
             show_upstream = False     # target is client-supplied
@@ -442,7 +428,6 @@ class ForwarderEditModal(ModalScreen):
         for sect_id, visible in (
             ("fm-section-upstream", show_upstream),
             ("fm-section-tls",      show_tls),
-            ("fm-section-udp",      show_udp),
             ("fm-section-socks",    show_socks),
         ):
             try:
@@ -589,14 +574,6 @@ class ForwarderEditModal(ModalScreen):
         fwd.ca_key_path = _str("fm-ca-key") or None
         fwd.tls_cert_path = _str("fm-tls-cert") or None
         fwd.tls_key_path = _str("fm-tls-key") or None
-
-        # UDP-specific
-        try:
-            fwd.udp_idle_timeout = float(_str("fm-udp-idle") or "60")
-        except ValueError:
-            fwd.udp_idle_timeout = 60.0
-        if fwd.udp_idle_timeout <= 0:
-            fwd.udp_idle_timeout = 60.0
 
         # SOCKS5-specific
         fwd.socks_auth_user = _str("fm-socks-user") or None

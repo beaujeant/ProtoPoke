@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import Optional, TYPE_CHECKING
 
 from ..config import ForwarderConfig, ForwarderType
@@ -135,8 +134,6 @@ class ProxyEngine:
         self._udp_flows_by_addr: dict[tuple[str, int], UdpFlow] = {}
         # session_id → UdpFlow  (mirror lookup for inject_to_*, terminate_session)
         self._udp_flows: dict[str, UdpFlow] = {}
-        # Background idle sweeper task
-        self._udp_sweeper_task: Optional[asyncio.Task] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -242,16 +239,11 @@ class ProxyEngine:
             )
             raise
         self._udp_listen_transport = transport
-        self._udp_sweeper_task = asyncio.create_task(
-            self._udp_idle_sweeper(),
-            name=f"udp-sweep-{self.forwarder_name}",
-        )
         logger.info(
-            "Forwarder '%s' [udp] listening on %s:%d → %s:%d (idle_timeout=%.1fs)",
+            "Forwarder '%s' [udp] listening on %s:%d → %s:%d",
             self.forwarder_name,
             self.config.listen_host, self.config.listen_port,
             self.config.upstream_host, self.config.upstream_port,
-            self.config.udp_idle_timeout,
         )
 
     async def serve_forever(self) -> None:
@@ -289,14 +281,6 @@ class ProxyEngine:
             except Exception:
                 pass
             self._udp_listen_transport = None
-
-        if self._udp_sweeper_task is not None:
-            self._udp_sweeper_task.cancel()
-            try:
-                await self._udp_sweeper_task
-            except (asyncio.CancelledError, Exception):
-                pass
-            self._udp_sweeper_task = None
 
         # Close all UDP flows (publishes SessionClosedEvent for each).
         for flow in list(self._udp_flows.values()):
@@ -741,7 +725,6 @@ class ProxyEngine:
             except OSError as exc:
                 logger.debug("UDP inject_to_client failed: %s", exc)
                 return False
-            flow.last_activity = time.monotonic()
             logger.debug(
                 "inject_to_client: sent %d UDP bytes to session %s",
                 len(data), session_id[:8],
@@ -778,7 +761,6 @@ class ProxyEngine:
             except OSError as exc:
                 logger.debug("UDP inject_to_server failed: %s", exc)
                 return False
-            flow.last_activity = time.monotonic()
             logger.debug(
                 "inject_to_server: sent %d UDP bytes to session %s",
                 len(data), session_id[:8],
@@ -945,18 +927,3 @@ class ProxyEngine:
             "UDP flow closed (%s): session %s (%d frames captured)",
             reason, flow.session.id[:8], len(flow.session.frames),
         )
-
-    async def _udp_idle_sweeper(self) -> None:
-        """Periodically close UDP flows that have been idle too long."""
-        timeout = self.config.udp_idle_timeout
-        try:
-            while True:
-                await asyncio.sleep(max(timeout / 2.0, 1.0))
-                now = time.monotonic()
-                for flow in list(self._udp_flows.values()):
-                    if flow.closed:
-                        continue
-                    if now - flow.last_activity > timeout:
-                        await self._close_udp_flow(flow, reason="idle_timeout")
-        except asyncio.CancelledError:
-            return

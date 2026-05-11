@@ -9,10 +9,14 @@ UDP is connectionless, so the engine fakes "sessions" per
         * a Session record (state ACTIVE — there's no CONNECTING handshake)
         * a per-flow upstream DatagramTransport bound with
           ``remote_addr=(upstream_host, upstream_port)`` so reply datagrams
-          route back to ``_UdpUpstreamProtocol``
+          route back to ``_UdpUpstreamProtocol``. The OS picks an ephemeral
+          source port for that socket once and reuses it for every datagram
+          in the flow, mirroring how the real client behaves.
     - Subsequent datagrams from the same remote address reuse the flow.
-    - An idle sweeper closes flows whose ``last_activity`` exceeds
-      ``udp_idle_timeout``, transitioning the session ACTIVE → CLOSED.
+    - Flows stay open until the forwarder stops or the operator explicitly
+      calls ``terminate_session()``. UDP has no FIN and this tool is meant
+      for reverse engineering, where pause/intercept/resume is normal — an
+      idle timeout would silently fragment captures, so there is none.
 
 Per-datagram pipeline mirrors the TCP relay's ``_process_frame`` step:
 
@@ -30,16 +34,15 @@ Notes:
       un-tampered datagrams; this is intentional and correct for a passive
       interception tool.
     - UDP has no half-close, no ONLY_SERVER / ONLY_CLIENT states, no FIN.
-      Sessions transition ACTIVE → CLOSED directly via the idle sweeper or
-      explicit ``terminate_session()``.
+      Sessions sit in ACTIVE for their whole life and only transition to
+      CLOSED when ``terminate_session()`` or forwarder shutdown closes them.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional, TYPE_CHECKING
 
 from ..framing.raw import RawFramer
@@ -66,7 +69,6 @@ class UdpFlow:
     client_addr:        tuple[str, int]
     client_framer:      RawFramer
     server_framer:      RawFramer
-    last_activity:      float            = field(default_factory=time.monotonic)
     closed:             bool             = False
 
 
@@ -130,12 +132,7 @@ async def process_udp_datagram(
 
     Returns the bytes that should be forwarded, or ``None`` if the operator
     dropped the frame.
-
-    Updates ``flow.last_activity`` on every call so the idle sweeper sees
-    fresh traffic.
     """
-    flow.last_activity = time.monotonic()
-
     framer = flow.client_framer if direction is Direction.CLIENT_TO_SERVER else flow.server_framer
     frames = framer.feed(data)
     if not frames:
