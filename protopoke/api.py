@@ -1085,33 +1085,94 @@ class ProtoPokeAPI:
                 )
         return ok
 
+    async def _inject_and_collect_response(
+        self,
+        session_id:      str,
+        data:            bytes,
+        direction:       str,
+        receive_timeout: float,
+    ) -> tuple[bool, list[bytes]]:
+        """Inject *data* into an existing proxy session and gather replies.
+
+        Returns ``(ok, response_packets)``.  The caller decides what to do
+        when ``ok`` is False (writer gone, session closed, etc.).
+        """
+        import asyncio as _asyncio
+        import time as _time
+
+        send_time = _time.time()
+        if direction == "server_to_client":
+            ok = await self.inject_to_client(session_id, data)
+            resp_dir = Direction.CLIENT_TO_SERVER
+        else:
+            ok = await self.inject_to_server(session_id, data)
+            resp_dir = Direction.SERVER_TO_CLIENT
+        if not ok:
+            return False, []
+        await _asyncio.sleep(receive_timeout)
+        session = self.get_session(session_id)
+        if session is None:
+            return True, []
+        return True, [
+            f.raw_bytes for f in session.frames
+            if f.direction is resp_dir and f.timestamp >= send_time
+        ]
+
     async def send_frame(
         self,
-        data:             bytes,
-        host:             str,
-        port:             int,
-        tls:              bool           = False,
-        connect_timeout:  Optional[float] = None,
-        receive_timeout:  Optional[float] = None,
-        packet_callback:  Optional[Callable[[bytes], None]] = None,
-        transport:        str             = "tcp",
+        data:               bytes,
+        host:               str             = "",
+        port:               int             = 0,
+        tls:                bool            = False,
+        connect_timeout:    Optional[float] = None,
+        receive_timeout:    Optional[float] = None,
+        packet_callback:    Optional[Callable[[bytes], None]] = None,
+        transport:          str             = "tcp",
+        source_session_id:  Optional[str]   = None,
+        direction:          str             = "client_to_server",
     ) -> SendResult:
         """
-        Send raw bytes to *host*:*port* and return a :class:`SendResult`.
+        Send raw bytes and return a :class:`SendResult`.
 
-        For TCP (default): opens a direct connection (bypassing the proxy
-        listener), sends *data*, signals EOF, reads all response bytes, then
-        closes the connection.
+        Three modes, selected automatically:
 
-        For UDP: opens a connected datagram endpoint, sends *data* as a
-        single datagram, drains replies until ``receive_timeout`` expires,
-        then closes the endpoint.
+        - **One-shot** (``source_session_id`` is None): opens a fresh
+          connection to ``host:port``, sends *data*, drains replies, and
+          closes.  For TCP this signals EOF; for UDP it sends a single
+          datagram and reads until ``receive_timeout`` expires.
+
+        - **Forge session reuse** (``source_session_id`` names a live forge
+          session): sends *data* over the persistent socket owned by
+          :class:`ForgeEngine`.  Works for TCP and UDP.  ``direction`` is
+          ignored — forge sessions are always client→server.
+
+        - **Proxy session injection** (``source_session_id`` names a live
+          proxy session): writes *data* into the existing forwarder session
+          via :meth:`inject_to_server` (``direction="client_to_server"``,
+          default) or :meth:`inject_to_client` (``"server_to_client"``),
+          then collects frames captured on that session for the next
+          ``receive_timeout`` seconds.  Works for TCP and UDP.
+
+        When ``source_session_id`` is set, ``host``/``port``/``tls``/
+        ``transport`` are taken from the bound session — the corresponding
+        arguments are ignored.  The session must be ACTIVE and its
+        transport must match the requested *transport* (when given).
 
         Returns:
             :class:`~protopoke.forge.engine.SendResult` with sent bytes,
             response bytes, success flag, and any error message.
         """
-        # Create a one-shot session so the sent/received frames appear in the Traffic tab.
+        if source_session_id is not None:
+            return await self._send_frame_via_session(
+                data=data,
+                session_id=source_session_id,
+                receive_timeout=receive_timeout,
+                packet_callback=packet_callback,
+                transport=transport,
+                direction=direction,
+            )
+
+        # One-shot: create a fresh session so the frames appear in Traffic.
         session = self.session_registry.create(
             client_host="forge",
             client_port=0,
@@ -1164,6 +1225,105 @@ class ProtoPokeAPI:
 
         return record
 
+    async def _send_frame_via_session(
+        self,
+        data:            bytes,
+        session_id:      str,
+        receive_timeout: Optional[float],
+        packet_callback: Optional[Callable[[bytes], None]],
+        transport:       str,
+        direction:       str,
+    ) -> SendResult:
+        """Implement ``send_frame(..., source_session_id=...)``.
+
+        Routes to either ``send_on_forge_session`` (forge sessions) or
+        proxy injection (forwarder-owned sessions).
+        """
+        session = self.get_session(session_id)
+        if session is None:
+            return SendResult.failure(
+                sent_bytes=data, host="", port=0, tls=False,
+                error=f"Session {session_id!r} not found",
+            )
+        if not session.is_active():
+            return SendResult.failure(
+                sent_bytes=data,
+                host=session.info.server_host,
+                port=session.info.server_port,
+                tls=False,
+                error=f"Session {session_id!r} is not active",
+            )
+
+        sess_transport = getattr(session.info, "transport", "tcp") or "tcp"
+        if transport and transport != sess_transport:
+            return SendResult.failure(
+                sent_bytes=data,
+                host=session.info.server_host,
+                port=session.info.server_port,
+                tls=False,
+                error=(
+                    f"Session {session_id!r} transport is {sess_transport} "
+                    f"but send_frame requested {transport}"
+                ),
+            )
+
+        if self.forge_engine.is_forge_session(session_id):
+            if direction == "server_to_client":
+                return SendResult.failure(
+                    sent_bytes=data,
+                    host=session.info.server_host,
+                    port=session.info.server_port,
+                    tls=False,
+                    error=(
+                        "server_to_client is not supported on forge sessions "
+                        "(forge IS the client)"
+                    ),
+                )
+            return await self.send_on_forge_session(
+                session_id=session_id,
+                data=data,
+                receive_timeout=receive_timeout,
+                packet_callback=packet_callback,
+            )
+
+        # Proxy session injection path.
+        recv_timeout = (
+            receive_timeout if receive_timeout is not None
+            else self.config.connect_timeout
+        )
+        ok, response_packets = await self._inject_and_collect_response(
+            session_id=session_id,
+            data=data,
+            direction=direction,
+            receive_timeout=recv_timeout,
+        )
+        if not ok:
+            return SendResult.failure(
+                sent_bytes=data,
+                host=session.info.server_host,
+                port=session.info.server_port,
+                tls=False,
+                error=(
+                    f"inject_to_{'client' if direction == 'server_to_client' else 'server'} "
+                    f"failed on session {session_id!r}"
+                ),
+            )
+        if packet_callback is not None:
+            for pkt in response_packets:
+                try:
+                    packet_callback(pkt)
+                except Exception:
+                    logger.exception("send_frame packet_callback raised")
+        received = b"".join(response_packets)
+        return SendResult(
+            sent_bytes=data,
+            received_bytes=received,
+            response_packets=response_packets,
+            host=session.info.server_host,
+            port=session.info.server_port,
+            tls=False,
+        )
+
     # ------------------------------------------------------------------
     # Sequence
     # ------------------------------------------------------------------
@@ -1208,9 +1368,6 @@ class ProtoPokeAPI:
             The completed :class:`~protopoke.forge.models.PlaybookRun`.
             The caller is responsible for appending it to ``playbook.runs``.
         """
-        import asyncio as _asyncio
-        import time as _time
-
         engine = PlaybookEngine()
         playbook_transport = getattr(playbook, "transport", "tcp") or "tcp"
 
@@ -1245,28 +1402,19 @@ class ProtoPokeAPI:
         async def _send_via_proxy_inject(
             session_id: str, data: bytes, direction: str
         ) -> list[bytes]:
-            send_time = _time.time()
-            if direction == "server_to_client":
-                ok = await self.inject_to_client(session_id, data)
-                resp_dir = Direction.CLIENT_TO_SERVER
-            else:
-                ok = await self.inject_to_server(session_id, data)
-                resp_dir = Direction.SERVER_TO_CLIENT
+            ok, response_packets = await self._inject_and_collect_response(
+                session_id=session_id,
+                data=data,
+                direction=direction,
+                receive_timeout=playbook.response_window,
+            )
             if not ok:
                 logger.warning(
                     "Playbook: inject_to_%s failed on session %s — connection gone",
                     "client" if direction == "server_to_client" else "server",
                     session_id[:8],
                 )
-                return []
-            await _asyncio.sleep(playbook.response_window)
-            session = self.get_session(session_id)
-            if not session:
-                return []
-            return [
-                f.raw_bytes for f in session.frames
-                if f.direction is resp_dir and f.timestamp >= send_time
-            ]
+            return response_packets
 
         async def send_fn(data: bytes, direction: str = "client_to_server") -> list[bytes]:
             # Drop stale session_id — if the server closed the connection

@@ -1215,6 +1215,7 @@ class ForgeTab(Widget):
             host=pb.host,
             port=pb.port,
             tls=pb.tls,
+            transport=getattr(pb, "transport", "tcp"),
             source_session_id=pb.source_session_id,
             response_window=pb.response_window,
             variables=pb.variables,

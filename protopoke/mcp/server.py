@@ -1016,29 +1016,49 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     async def send_frame(
-        data_hex:        str,
-        host:            str,
-        port:            int,
-        tls:             bool           = False,
-        connect_timeout: Optional[float] = None,
-        receive_timeout: Optional[float] = None,
+        data_hex:          str,
+        host:              str             = "",
+        port:              int             = 0,
+        tls:               bool            = False,
+        connect_timeout:   Optional[float] = None,
+        receive_timeout:   Optional[float] = None,
+        transport:         str             = "tcp",
+        source_session_id: Optional[str]   = None,
+        direction:         str             = "client_to_server",
     ) -> dict:
         """
-        Send raw bytes directly to host:port and return the response.
+        Send raw bytes and return the response.
 
-        Opens a direct TCP connection (bypassing the proxy listener), sends
-        the bytes, reads the response, and closes the connection. This is
-        a one-shot send — for named reusable requests use the forge tools.
+        Three modes:
+
+        * **One-shot** (default, ``source_session_id`` omitted): opens a
+          fresh ``transport`` connection to ``host:port``, sends the bytes,
+          reads the response, then closes.
+        * **Forge session reuse** (``source_session_id`` is a live forge
+          session): sends over its persistent socket. Works for TCP/UDP.
+          ``direction`` is ignored (forge sessions are client→server).
+        * **Proxy session injection** (``source_session_id`` is a live
+          proxy session): injects into the existing forwarder session and
+          collects frames captured for ``receive_timeout`` seconds. Use
+          ``direction="server_to_client"`` to push toward the client.
+
+        When ``source_session_id`` is set, ``host``/``port``/``tls`` are
+        taken from the bound session and the corresponding arguments are
+        ignored; ``transport`` (if given) must match the session.
 
         Args:
-            data_hex:        Bytes to send as a hex string (e.g. "deadbeef01").
-            host:            Target hostname or IP address.
-            port:            Target TCP port.
-            tls:             Wrap the connection in TLS (no cert verification).
-            connect_timeout: Optional override for the default connect timeout.
-            receive_timeout: Seconds to wait for the server response before
-                             returning bytes received so far.  Defaults to the
-                             connect timeout.
+            data_hex:          Bytes to send as a hex string.
+            host:              Target host (one-shot mode only).
+            port:              Target port (one-shot mode only).
+            tls:               Wrap connection in TLS (one-shot TCP only).
+            connect_timeout:   Override the default connect timeout.
+            receive_timeout:   Seconds to wait for the response.
+            transport:         "tcp" (default) or "udp".
+            source_session_id: Reuse this existing forge or proxy session
+                               instead of opening a new connection.
+            direction:         "client_to_server" (default) or
+                               "server_to_client" — only used for proxy
+                               session injection.
 
         Returns:
             SendResult dict: sent_bytes_hex, received_bytes_hex, success, error.
@@ -1055,6 +1075,9 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
             tls=tls,
             connect_timeout=connect_timeout,
             receive_timeout=receive_timeout,
+            transport=transport,
+            source_session_id=source_session_id,
+            direction=direction,
         )
         return record.to_dict()
 
