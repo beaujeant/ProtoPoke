@@ -97,9 +97,6 @@ class ForwarderConfig:
     connect_timeout:  float = 10.0
     read_buffer_size: int   = 4096
 
-    # UDP — idle timeout (seconds) before a flow transitions ACTIVE → CLOSED.
-    udp_idle_timeout: float = 60.0
-
     # SOCKS5 — credentials. None means no-auth method advertised.
     socks_auth_user: Optional[str] = None
     socks_auth_pass: Optional[str] = None
@@ -193,9 +190,6 @@ class ForwarderConfig:
             raise ValueError(
                 "UDP forwarders cannot have tls_listen=True (DTLS is not supported)."
             )
-
-        if self.udp_idle_timeout <= 0:
-            raise ValueError("udp_idle_timeout must be > 0 seconds.")
 
     # ------------------------------------------------------------------
     # Serialisation

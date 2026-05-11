@@ -188,7 +188,6 @@ class TestProjectManager:
                 listen_port=22222,
                 upstream_host="127.0.0.1",
                 upstream_port=33333,
-                udp_idle_timeout=12.5,
             ),
             ForwarderConfig(
                 name="socks1",
@@ -209,7 +208,7 @@ class TestProjectManager:
             "socks1": ForwarderType.SOCKS5,
         }
         udp = next(f for f in state.forwarders if f.name == "udp1")
-        assert udp.udp_idle_timeout == 12.5
+        assert udp.upstream_port == 33333
         socks = next(f for f in state.forwarders if f.name == "socks1")
         assert socks.socks_auth_user == "user"
         assert socks.socks_auth_pass == "pass"

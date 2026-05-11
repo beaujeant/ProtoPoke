@@ -2013,7 +2013,6 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         read_buffer_size:         Optional[int]   = None,
         max_sessions:             Optional[int]   = None,
         forwarder_type:           Optional[str]   = None,
-        udp_idle_timeout:         Optional[float] = None,
         socks_auth_user:          Optional[str]   = None,
         socks_auth_pass:          Optional[str]   = None,
     ) -> dict:
@@ -2046,8 +2045,6 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
             max_sessions:             Max concurrent sessions (0 = unlimited).
             forwarder_type:           Transport type: "tcp", "udp", or "socks5".
                                       Restart-only; ignored on a running forwarder.
-            udp_idle_timeout:         UDP flow idle timeout in seconds.
-                                      Restart-only.
             socks_auth_user:          SOCKS5 username (None = no-auth method).
                                       Empty string means clear the username.
                                       Restart-only.
@@ -2071,7 +2068,6 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         if max_sessions             is not None: cfg.max_sessions             = max_sessions
         if protocol_definition_path is not None: cfg.protocol_definition_path = protocol_definition_path
         if forwarder_type           is not None: cfg.forwarder_type           = ForwarderType(forwarder_type)
-        if udp_idle_timeout         is not None: cfg.udp_idle_timeout         = udp_idle_timeout
         if socks_auth_user          is not None: cfg.socks_auth_user          = socks_auth_user or None
         if socks_auth_pass          is not None: cfg.socks_auth_pass          = socks_auth_pass or None
         if framer_kwargs is not None:
