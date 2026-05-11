@@ -196,6 +196,7 @@ class TrafficTab(Widget):
         # Sessions table
         sdt = self.query_one("#sessions-table", DataTable)
         sdt.add_column("ID",      key="id")
+        sdt.add_column("Type",    key="type")
         sdt.add_column("Client",  key="client")
         sdt.add_column("Server",  key="server")
         sdt.add_column("State",   key="state")
@@ -224,6 +225,7 @@ class TrafficTab(Widget):
         is_first = dt.row_count == 0
         dt.add_row(
             info.id[:8],
+            info.transport.upper(),
             f"{info.client_host}:{info.client_port}",
             f"{info.server_host}:{info.server_port}",
             info.state.value,
