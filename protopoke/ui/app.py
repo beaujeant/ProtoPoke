@@ -745,6 +745,7 @@ class ProtoPoke(App):
             tls=self._tls_upstream_for_session(session_id),
             source_session_id=session_id if session.is_active() else None,
             direction=direction,
+            transport=session.info.transport,
         )
         self._project.mark_dirty()
         self._switch_to_forge(forge_tab)
@@ -790,6 +791,7 @@ class ProtoPoke(App):
             tls=self._tls_upstream_for_session(session_id),
             source_session_id=session_id if session.is_active() else None,
             playbook_label=f"Playbook {len(forge_tab._playbooks)+1}",
+            transport=session.info.transport,
         )
         self._project.mark_dirty()
         self._switch_to_forge(forge_tab)

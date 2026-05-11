@@ -1402,14 +1402,16 @@ class ForgeTab(Widget):
         tls:       bool = False,
         source_session_id: str | None = None,
         direction: str  = "client_to_server",
+        transport: str  = "tcp",
     ) -> None:
         """Create a new playbook with one frame from raw bytes (Traffic tab → Forge)."""
         pb = Playbook.create(
             label=label,
             host=host,
             port=port,
-            tls=tls,
+            tls=tls and transport == "tcp",
             source_session_id=source_session_id,
+            transport=transport,
         )
         hex_str = " ".join(f"{b:02x}" for b in raw_bytes)
         pb.frames.append(PlaybookFrame.create(
@@ -1427,14 +1429,16 @@ class ForgeTab(Widget):
         tls:         bool = False,
         source_session_id: str | None = None,
         playbook_label:    str        = "",
+        transport:         str        = "tcp",
     ) -> None:
         """Create a new playbook with multiple frames (Traffic tab multi-select → Forge)."""
         pb = Playbook.create(
             label=playbook_label or f"Playbook {len(self._playbooks)+1}",
             host=host,
             port=port,
-            tls=tls,
+            tls=tls and transport == "tcp",
             source_session_id=source_session_id,
+            transport=transport,
         )
         for raw_bytes, frame_label, direction in frames_data:
             hex_str = " ".join(f"{b:02x}" for b in raw_bytes)
