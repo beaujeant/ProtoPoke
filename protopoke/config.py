@@ -112,6 +112,13 @@ class ForwarderConfig:
     # False to restore the legacy behaviour where a client disconnect tears
     # down the server connection via a TCP half-close.
     keep_upstream_on_client_disconnect: bool = True
+    # Symmetric counterpart: when True (default), the client connection is kept
+    # writable after the upstream server disconnects.  The session transitions
+    # to ONLY_CLIENT and the proxy does NOT half-close its write side toward
+    # the client, so the Forge tab can keep injecting server→client frames.
+    # Set to False to restore the legacy behaviour where a server disconnect
+    # propagates a TCP half-close to the client.
+    keep_client_on_server_disconnect: bool = True
 
     # Interception
     tamper_enabled: bool = False
