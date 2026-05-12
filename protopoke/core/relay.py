@@ -344,6 +344,7 @@ class BidirectionalRelay:
         rules_engine:         "Optional[RulesEngine]" = None,
         on_first_disconnect:  "Optional[Callable[[Direction], Awaitable[None]]]" = None,
         keep_upstream_on_client_disconnect: bool = True,
+        keep_client_on_server_disconnect:   bool = True,
     ) -> None:
         """
         Args:
@@ -374,6 +375,14 @@ class BidirectionalRelay:
                                  Set to False to restore the legacy behaviour where
                                  a client EOF is forwarded as a TCP half-close to the
                                  upstream server.
+            keep_client_on_server_disconnect:
+                                 Symmetric counterpart of the above: when True
+                                 (default), a server disconnect does NOT propagate
+                                 EOF to the client — the proxy keeps its write side
+                                 toward the client open so Forge can keep injecting
+                                 server→client frames.  Set to False for the legacy
+                                 behaviour where a server EOF is forwarded as a TCP
+                                 half-close to the client.
         """
         self._session              = session
         self._client_writer        = client_writer
@@ -406,6 +415,11 @@ class BidirectionalRelay:
             event_bus=event_bus,
             read_buffer_size=read_buffer_size,
             rules_engine=rules_engine,
+            # When the server disconnects we do NOT forward EOF to the client —
+            # keep the client connection writable so Forge can keep injecting
+            # server→client frames.  The session ends when the client closes or
+            # the user terminates.
+            propagate_eof=not keep_client_on_server_disconnect,
         )
 
     def framer_for(self, direction: Direction) -> Framer:
