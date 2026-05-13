@@ -223,8 +223,8 @@ def test_rebind_swaps_api_in_tool_closure(api):
     mcp._protopoke_rebind(new_api)
 
     result_after = tool.fn()
-    # listen port reflects the new api's config
-    assert "29000" in result_after["listen"]
+    # The rebind made the tool see the new api: forwarders match the new instance.
+    assert result_after["configured_forwarders"] == [f.name for f in new_api.forwarders]
 
 
 async def test_mcphost_rebind_uses_server_hook(api, patched_run_async):
@@ -234,7 +234,7 @@ async def test_mcphost_rebind_uses_server_hook(api, patched_run_async):
         new_api = _make_api(port=29001)
         host.rebind(new_api)
         tool = host._server._tool_manager.get_tool("proxy_status")
-        assert "29001" in tool.fn()["listen"]
+        assert tool.fn()["configured_forwarders"] == [f.name for f in new_api.forwarders]
     finally:
         await host.stop()
 

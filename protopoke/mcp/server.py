@@ -1,10 +1,11 @@
-"""FastMCP server wrapping ProxyAPI.
+"""FastMCP server wrapping ProtoPokeAPI.
 
 All tools return JSON-serialisable dicts.  Bytes fields are hex-encoded strings.
 Tools are grouped by concern:
 
     Proxy lifecycle         : proxy_status, proxy_start, proxy_stop
-    Forwarder management    : list_forwarders, start_forwarder, stop_forwarder,
+    Forwarder management    : list_forwarders, add_forwarder, remove_forwarder,
+                              start_forwarder, stop_forwarder, update_forwarder,
                               update_forwarder_config
     Session management      : list_sessions, get_session, get_frames,
                               get_frame, get_session_summary, decode_frames,
@@ -33,12 +34,12 @@ Tools are grouped by concern:
                               update_playbook, delete_playbook,
                               run_playbook, frame_to_forge
     Replay                  : forge_session, replay_with_field_edits
-    Framing                 : set_framer
-    Variables               : get_variables, set_variable, clear_variables
+    Framing                 : set_framer, list_framers
+    Variables               : get_variables, set_variable, delete_variable,
+                              clear_variables
     TLS / CA                : get_ca_cert
     Fuzzing                 : fuzz_start, fuzz_status, fuzz_results,
-                              fuzz_stop, list_campaigns
-    Config                  : get_config, set_config
+                              fuzz_stop, list_campaigns, list_mutators
 """
 
 from __future__ import annotations
@@ -100,23 +101,19 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def proxy_status() -> dict:
-        """Return current proxy status: running state, config summary, counts."""
+        """Return current proxy status: running forwarders, session and tamper counts."""
         sessions = api.list_sessions()
         active = api.list_active_sessions()
         running = api.list_running()
-        cfg = api.config
         return {
             "running": bool(running),
             "running_forwarders": running,
+            "configured_forwarders": [f.name for f in api.forwarders],
             "tamper_enabled": api.tamper_enabled,
             "pending_tamper_count": api.pending_count(),
             "total_sessions": len(sessions),
             "active_sessions": len(active),
-            "listen": f"{cfg.listen_host}:{cfg.listen_port}",
-            "upstream": f"{cfg.upstream_host}:{cfg.upstream_port}",
-            "framer": cfg.framer_name,
-            "tls_listen": cfg.tls_listen,
-            "tls_upstream": cfg.tls_upstream,
+            "protocol_name": api._decoder.protocol_name,
         }
 
     @mcp.tool()
@@ -144,25 +141,140 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
     @mcp.tool()
     def list_forwarders() -> list[dict]:
         """
-        List all configured forwarders with their running state and config.
+        List all configured forwarders with their running state and full config.
 
-        Each forwarder entry includes its name, enabled flag, running state,
-        and full ProxyConfig.  Useful when multiple forwarders are configured
-        (e.g. separate listeners for different protocols or ports).
+        Each entry includes the forwarder's name, enabled flag, running state,
+        and the complete ForwarderConfig dict.  Useful when multiple
+        forwarders are configured (e.g. separate listeners for different
+        protocols or ports).
 
         Returns:
-            List of forwarder dicts with keys: name, enabled, running, config.
+            List of dicts with keys: name, enabled, running, config.
         """
         running = set(api.list_running())
-        result = []
-        for fwd in api.forwarders:
-            result.append({
+        return [
+            {
                 "name":    fwd.name,
                 "enabled": fwd.enabled,
                 "running": fwd.name in running,
-                "config":  fwd.config.to_dict(),
-            })
-        return result
+                "config":  fwd.to_dict(),
+            }
+            for fwd in api.forwarders
+        ]
+
+    @mcp.tool()
+    async def add_forwarder(config: dict) -> dict:
+        """
+        Add a new forwarder from a ForwarderConfig dict.
+
+        The dict must include a unique ``name`` and may set any
+        ForwarderConfig field (listen_host, listen_port, upstream_host,
+        upstream_port, forwarder_type "tcp"/"udp"/"socks5", tls_listen,
+        tls_upstream, tamper_enabled, framer_name, framer_kwargs,
+        protocol_definition_path, custom_framer_path, …).
+
+        The new forwarder is added in stopped state — call ``start_forwarder``
+        to begin listening.
+
+        Returns:
+            ``{"ok": True, "name": <name>}`` on success, or
+            ``{"ok": False, "error": ...}``.
+        """
+        from ..config import ForwarderConfig
+        try:
+            new_fwd = ForwarderConfig.from_dict(config)
+        except Exception as exc:
+            return {"ok": False, "error": f"Invalid config: {exc}"}
+
+        if any(f.name == new_fwd.name for f in api.forwarders):
+            return {"ok": False, "error": f"Forwarder named {new_fwd.name!r} already exists"}
+
+        api.update_forwarders([*api.forwarders, new_fwd])
+        return {"ok": True, "name": new_fwd.name}
+
+    @mcp.tool()
+    async def remove_forwarder(name: str) -> dict:
+        """
+        Remove a forwarder by name.
+
+        If the forwarder is currently running it is stopped first.  Captured
+        sessions remain in the registry for inspection.
+
+        Returns:
+            ``{"ok": True, "name": <name>}`` on success, or
+            ``{"ok": False, "error": ...}`` if not found.
+        """
+        if not any(f.name == name for f in api.forwarders):
+            return {"ok": False, "error": f"Forwarder {name!r} not found"}
+        if api.is_running(name):
+            await api.stop_forwarder(name)
+        api.update_forwarders([f for f in api.forwarders if f.name != name])
+        return {"ok": True, "name": name}
+
+    @mcp.tool()
+    async def update_forwarder(name: str, fields: dict) -> dict:
+        """
+        Update arbitrary fields on a forwarder.
+
+        ``fields`` is a partial ForwarderConfig dict: any field present on
+        :class:`~protopoke.config.ForwarderConfig` (e.g. ``listen_port``,
+        ``upstream_host``, ``tls_listen``, ``tamper_enabled``,
+        ``forwarder_type``, ``socks_auth_user``, ``connect_timeout``, …)
+        may be set.
+
+        Network-level changes (host/port/transport/tls) only take effect
+        after the forwarder is restarted: if the forwarder is currently
+        running it is stopped and started again so the new settings apply.
+        Framing and protocol-definition changes are applied in-place on
+        live sessions.
+
+        Use ``update_forwarder_config`` for hot-swap-only changes (name,
+        framer, protocol) without a restart.
+
+        Returns:
+            ``{"ok": True, "config": <new ForwarderConfig dict>}``.
+        """
+        fwd = next((f for f in api.forwarders if f.name == name), None)
+        if fwd is None:
+            return {"ok": False, "error": f"Forwarder {name!r} not found"}
+
+        from ..config import ForwarderConfig, ForwarderType
+        valid_fields = set(ForwarderConfig.__dataclass_fields__)
+        unknown = set(fields) - valid_fields
+        if unknown:
+            return {"ok": False, "error": f"Unknown field(s): {sorted(unknown)}"}
+
+        was_running = api.is_running(name)
+
+        # Decode any bytes-as-hex framer_kwargs values, coerce enums.
+        for key, value in fields.items():
+            if key == "forwarder_type" and isinstance(value, str):
+                value = ForwarderType(value)
+            elif key == "framer_kwargs" and isinstance(value, dict):
+                decoded: dict = {}
+                for k, v in value.items():
+                    if isinstance(v, str):
+                        try:
+                            decoded[k] = bytes.fromhex(v)
+                        except ValueError:
+                            decoded[k] = v
+                    else:
+                        decoded[k] = v
+                value = decoded
+            setattr(fwd, key, value)
+
+        try:
+            fwd.__post_init__()
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+
+        # Rebuild the engine so the new networking/transport settings apply.
+        api.update_forwarders(api.forwarders)
+        if was_running:
+            await api.stop_forwarder(name)
+            await api.start_forwarder(name)
+
+        return {"ok": True, "config": fwd.to_dict()}
 
     @mcp.tool()
     async def start_forwarder(name: str) -> dict:
@@ -1086,9 +1198,10 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         host: str,
         port: int,
         tls:  bool = False,
+        transport: str = "tcp",
     ) -> dict:
         """
-        Open a persistent TCP connection for interactive Forge sends.
+        Open a persistent connection for interactive Forge sends.
 
         Unlike send_frame() which opens and closes a connection per send,
         this creates a named session that stays open so you can send multiple
@@ -1099,18 +1212,20 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         all frames sent and received are captured for analysis.
 
         Use send_on_forge_session() to send data through the returned session.
-        The session is automatically marked CLOSED when the server drops it.
+        For TCP the session is marked CLOSED when the server drops it; for
+        UDP the session stays open until you call ``terminate_session``.
 
         Args:
-            host: Target hostname or IP address.
-            port: Target TCP port.
-            tls:  Wrap the connection in TLS (no cert verification).
+            host:      Target hostname or IP address.
+            port:      Target port.
+            tls:       Wrap the connection in TLS (TCP only; no cert verification).
+            transport: ``"tcp"`` (default) or ``"udp"``.
 
         Returns:
             {"ok": True, "session_id": "<uuid>"} on success.
         """
         try:
-            session_id = await api.open_forge_session(host, port, tls)
+            session_id = await api.open_forge_session(host, port, tls, transport=transport)
             return {"ok": True, "session_id": session_id}
         except ConnectionError as exc:
             return {"ok": False, "error": str(exc)}
@@ -1237,6 +1352,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         port:              int,
         data_hex:          str           = "",
         tls:               bool          = False,
+        transport:         str           = "tcp",
         source_session_id: Optional[str] = None,
         response_window:   float         = 1.0,
     ) -> dict:
@@ -1246,9 +1362,10 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         Args:
             label:             Human-readable name.
             host:              Target hostname or IP address.
-            port:              Target TCP port.
+            port:              Target port.
             data_hex:          Frame bytes as hex string.
-            tls:               Whether to use TLS.
+            tls:               Whether to use TLS (TCP only).
+            transport:         ``"tcp"`` (default) or ``"udp"``.
             source_session_id: Optional session ID to inject into.
             response_window:   Seconds to wait for server response per frame.
 
@@ -1265,6 +1382,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
             host=host,
             port=port,
             tls=tls,
+            transport=transport,
             source_session_id=source_session_id,
             response_window=response_window,
         )
@@ -1295,18 +1413,22 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         host:        Optional[str]  = None,
         port:        Optional[int]  = None,
         tls:         Optional[bool] = None,
+        transport:   Optional[str]  = None,
         data_hex:    Optional[str]  = None,
+        response_window: Optional[float] = None,
     ) -> dict:
         """
         Update a playbook's connection config and/or the first frame's bytes.
 
         Args:
-            playbook_id: The playbook UUID.
-            label:       New name (or null to keep current).
-            host:        New target host (or null to keep current).
-            port:        New target port (or null to keep current).
-            tls:         New TLS setting (or null to keep current).
-            data_hex:    New bytes for the first frame as hex (or null to keep current).
+            playbook_id:     The playbook UUID.
+            label:           New name (or null to keep current).
+            host:            New target host (or null to keep current).
+            port:            New target port (or null to keep current).
+            tls:             New TLS setting (or null to keep current).
+            transport:       ``"tcp"`` or ``"udp"`` (or null to keep current).
+            data_hex:        New bytes for the first frame as hex (or null to keep current).
+            response_window: Seconds to wait per frame (or null to keep current).
 
         Returns:
             Updated playbook dict, or {"ok": False} if not found.
@@ -1318,6 +1440,8 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         if host  is not None: pb.host  = host
         if port  is not None: pb.port  = port
         if tls   is not None: pb.tls   = tls
+        if transport is not None: pb.transport = transport
+        if response_window is not None: pb.response_window = response_window
         if data_hex is not None:
             try:
                 frame_bytes = bytes.fromhex(data_hex)
@@ -1402,12 +1526,14 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         )
         fwd_name = session.info.forwarder_name
         fwd = next((f for f in api.forwarders if f.name == fwd_name), None) if fwd_name else None
-        tls_upstream = fwd.config.tls_upstream if fwd else api.config.tls_upstream
+        tls_upstream = fwd.tls_upstream if fwd else False
+        transport = getattr(session.info, "transport", "tcp") or "tcp"
         pb = Playbook.create(
             label=label or f"From {session_id[:8]}",
             host=session.info.server_host,
             port=session.info.server_port,
             tls=tls_upstream,
+            transport=transport,
             source_session_id=session_id if session.is_active() else None,
         )
         hex_str = " ".join(frame.raw_bytes.hex()[i:i+2] for i in range(0, len(frame.raw_bytes.hex()), 2))
@@ -1421,12 +1547,13 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     async def forge_session(
-        session_id:     str,
-        server_host:    Optional[str]  = None,
-        server_port:    Optional[int]  = None,
-        frame_delay:    float          = 0.0,
-        direction:      str            = "client_to_server",
-        frame_selector: Optional[str]  = None,
+        session_id:      str,
+        server_host:     Optional[str]            = None,
+        server_port:     Optional[int]            = None,
+        frame_delay:     float                    = 0.0,
+        direction:       str                      = "client_to_server",
+        frame_selector:  Optional[str]            = None,
+        modified_frames: Optional[dict[str, str]] = None,
     ) -> dict:
         """
         Replay a captured session against the upstream server.
@@ -1435,14 +1562,18 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         Useful for reproducing observed traffic, regression testing, or fuzzing.
 
         Args:
-            session_id:     Session UUID to replay.
-            server_host:    Override target host (default: original server host).
-            server_port:    Override target port (default: original server port).
-            frame_delay:    Seconds to wait between sending each frame.
-            direction:      Which direction to replay: "client_to_server" (default)
-                            or "server_to_client".
-            frame_selector: Comma/range selector for specific frames, e.g.
-                            "0,2,4-6" or "3". None means all frames.
+            session_id:      Session UUID to replay.
+            server_host:     Override target host (default: original server host).
+            server_port:     Override target port (default: original server port).
+            frame_delay:     Seconds to wait between sending each frame.
+            direction:       Which direction to replay: "client_to_server" (default)
+                             or "server_to_client".
+            frame_selector:  Comma/range selector for specific frames, e.g.
+                             "0,2,4-6" or "3". None means all frames.
+            modified_frames: Optional dict of ``frame_id → replacement_hex`` for
+                             byte-level overrides on specific frames. Frames not
+                             listed use their original bytes. Use
+                             ``replay_with_field_edits`` for protocol field edits.
 
         Returns:
             ForgeResult dict with replayed_session_id, success, frame counts, etc.
@@ -1452,6 +1583,15 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         except ValueError:
             return {"ok": False, "error": f"Invalid direction '{direction}'."}
 
+        decoded_mods: Optional[dict[str, bytes]] = None
+        if modified_frames:
+            decoded_mods = {}
+            for fid, hex_str in modified_frames.items():
+                try:
+                    decoded_mods[fid] = bytes.fromhex(hex_str)
+                except ValueError as exc:
+                    return {"ok": False, "error": f"Invalid hex for frame {fid}: {exc}"}
+
         result = await api.forge_session(
             session_id=session_id,
             server_host=server_host,
@@ -1459,6 +1599,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
             frame_delay=frame_delay,
             direction=dir_enum,
             frame_selector=frame_selector,
+            modified_frames=decoded_mods,
         )
         return result.to_dict()
 
@@ -2000,6 +2141,22 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         return {"ok": True, "name": name, "value_hex": value_hex}
 
     @mcp.tool()
+    def delete_variable(name: str) -> dict:
+        """
+        Remove a single variable from the global variable store.
+
+        Args:
+            name: Variable name to remove.
+
+        Returns:
+            {"ok": True, "name": ...} if it existed, {"ok": False, "error": ...} otherwise.
+        """
+        if name not in api.variables:
+            return {"ok": False, "error": f"Variable {name!r} not found."}
+        del api.variables[name]
+        return {"ok": True, "name": name}
+
+    @mcp.tool()
     def clear_variables() -> dict:
         """
         Clear all variables from the global variable store.
@@ -2012,100 +2169,43 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         return {"ok": True, "cleared": count}
 
     # ------------------------------------------------------------------ #
-    # Config                                                                #
+    # Framers / mutators introspection                                      #
     # ------------------------------------------------------------------ #
 
     @mcp.tool()
-    def get_config() -> dict:
-        """Return the current ProxyConfig as a JSON-serialisable dict."""
-        return api.config.to_dict()
+    def list_framers() -> list[str]:
+        """
+        List the built-in framer names available to ``set_framer`` and
+        ``update_forwarder_config``.
+
+        Returns the keys of ``FRAMER_REGISTRY``. The pseudo-name ``"custom"``
+        is always accepted as well — supply ``custom_framer_path`` to point
+        at a Python file implementing :class:`~protopoke.framing.base.Framer`.
+        """
+        from protopoke.framing import FRAMER_REGISTRY
+        return sorted(FRAMER_REGISTRY)
 
     @mcp.tool()
-    def set_config(
-        listen_host:              Optional[str]   = None,
-        listen_port:              Optional[int]   = None,
-        upstream_host:            Optional[str]   = None,
-        upstream_port:            Optional[int]   = None,
-        tls_listen:               Optional[bool]  = None,
-        tls_upstream:             Optional[bool]  = None,
-        tamper_enabled:           Optional[bool]  = None,
-        framer_name:              Optional[str]   = None,
-        framer_kwargs:            Optional[dict]  = None,
-        protocol_definition_path: Optional[str]   = None,
-        connect_timeout:          Optional[float] = None,
-        read_buffer_size:         Optional[int]   = None,
-        max_sessions:             Optional[int]   = None,
-        forwarder_type:           Optional[str]   = None,
-        socks_auth_user:          Optional[str]   = None,
-        socks_auth_pass:          Optional[str]   = None,
-    ) -> dict:
+    def list_mutators() -> list[dict]:
         """
-        Update one or more ProxyConfig fields.
+        List the fuzzing mutators available to ``fuzz_start``.
 
-        Only the provided (non-null) fields are changed; all others keep their
-        current values.  Changes to network/framing settings take effect for
-        new connections; use set_framer() to hot-swap the framer on live sessions.
-
-        Upstream TLS certificate verification is always disabled — this tool
-        is for reverse engineering and accepts any certificate unconditionally.
-
-        Args:
-            listen_host:              Bind address for the proxy listener.
-            listen_port:              Port for the proxy listener.
-            upstream_host:            Default upstream host to forward to.
-            upstream_port:            Default upstream port to forward to.
-            tls_listen:               Terminate TLS on the listening side (MITM).
-            tls_upstream:             Use TLS when connecting to upstream.
-            tamper_enabled:           Master intercept on/off switch.
-            framer_name:              Framer: "raw", "delimiter", "length_prefix", "line".
-            framer_kwargs:            Extra options for the framer (e.g.
-                                      {"delimiter": "0d0a"} — hex for delimiter framer,
-                                      {"length_size": 4} for length_prefix framer).
-                                      Byte values should be hex strings.
-            protocol_definition_path: Path to a .yaml/.json protocol definition file.
-            connect_timeout:          Seconds to wait when connecting upstream.
-            read_buffer_size:         Bytes per read() call (affects relay wake-up rate).
-            max_sessions:             Max concurrent sessions (0 = unlimited).
-            forwarder_type:           Transport type: "tcp", "udp", or "socks5".
-                                      Restart-only; ignored on a running forwarder.
-            socks_auth_user:          SOCKS5 username (None = no-auth method).
-                                      Empty string means clear the username.
-                                      Restart-only.
-            socks_auth_pass:          SOCKS5 password.  Restart-only.
-
-        Returns:
-            The updated config dict.
+        Each entry has ``name`` (the spec key), ``parameters`` (optional
+        kwargs and their defaults), and ``requires_protocol`` (True for
+        protocol-aware mutators that need ``set_protocol_file`` to be called
+        first).
         """
-        from ..config import ForwarderType
-        cfg = api.config
-        if listen_host              is not None: cfg.listen_host              = listen_host
-        if listen_port              is not None: cfg.listen_port              = listen_port
-        if upstream_host            is not None: cfg.upstream_host            = upstream_host
-        if upstream_port            is not None: cfg.upstream_port            = upstream_port
-        if tls_listen               is not None: cfg.tls_listen               = tls_listen
-        if tls_upstream             is not None: cfg.tls_upstream             = tls_upstream
-        if tamper_enabled           is not None: cfg.tamper_enabled           = tamper_enabled
-        if framer_name              is not None: cfg.framer_name              = framer_name
-        if connect_timeout          is not None: cfg.connect_timeout          = connect_timeout
-        if read_buffer_size         is not None: cfg.read_buffer_size         = read_buffer_size
-        if max_sessions             is not None: cfg.max_sessions             = max_sessions
-        if protocol_definition_path is not None: cfg.protocol_definition_path = protocol_definition_path
-        if forwarder_type           is not None: cfg.forwarder_type           = ForwarderType(forwarder_type)
-        if socks_auth_user          is not None: cfg.socks_auth_user          = socks_auth_user or None
-        if socks_auth_pass          is not None: cfg.socks_auth_pass          = socks_auth_pass or None
-        if framer_kwargs is not None:
-            decoded: dict = {}
-            for k, v in framer_kwargs.items():
-                if isinstance(v, str):
-                    try:
-                        decoded[k] = bytes.fromhex(v)
-                    except ValueError:
-                        decoded[k] = v
-                else:
-                    decoded[k] = v
-            cfg.framer_kwargs = decoded
-
-        return cfg.to_dict()
+        return [
+            {"name": "bit_flip",       "parameters": {"count": 1},                       "requires_protocol": False},
+            {"name": "byte_insert",    "parameters": {"count": 4},                       "requires_protocol": False},
+            {"name": "byte_delete",    "parameters": {"max_count": 4},                   "requires_protocol": False},
+            {"name": "known_bad",      "parameters": {},                                 "requires_protocol": False},
+            {"name": "radamsa",        "parameters": {"radamsa_path": "radamsa", "timeout": 5.0}, "requires_protocol": False},
+            {"name": "field_boundary", "parameters": {},                                 "requires_protocol": True},
+            {"name": "field_overflow", "parameters": {"lengths": [256, 1024, 4096]},     "requires_protocol": True},
+            {"name": "null_byte",      "parameters": {},                                 "requires_protocol": True},
+            {"name": "length_mangle",  "parameters": {},                                 "requires_protocol": True},
+        ]
 
     # Expose the rebind hook so MCPHost can swap the bound API without
     # tearing down the server task.
