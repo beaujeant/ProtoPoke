@@ -54,6 +54,7 @@ nav:
   - Getting Started:
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quickstart.md
+    - Tutorial — DNS over UDP: getting-started/tutorial-dns.md
   - User Guide:
     - Terminal UI: guide/tui.md
     - Framing: guide/framing.md
