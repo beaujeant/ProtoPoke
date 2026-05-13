@@ -102,7 +102,8 @@ class TestProxyStatus:
         assert "tamper_enabled" in result
         assert "pending_tamper_count" in result
         assert "total_sessions" in result
-        assert "listen" in result
+        assert "configured_forwarders" in result
+        assert "running_forwarders" in result
 
     def test_tamper_enabled_reflects_config(self, mcp_server, api):
         fn = get_tool(mcp_server, "proxy_status")
@@ -333,32 +334,64 @@ class TestInterceptRuleTools:
 
 
 # ---------------------------------------------------------------------------
-# Config tools
+# Forwarder management tools
 # ---------------------------------------------------------------------------
 
-class TestConfigTools:
-    def test_get_config(self, mcp_server, api):
-        fn = get_tool(mcp_server, "get_config")
+class TestForwarderTools:
+    def test_list_forwarders(self, mcp_server, api):
+        fn = get_tool(mcp_server, "list_forwarders")
         result = fn()
-        assert result["listen_port"] == api.config.listen_port
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0]["name"] == "Default"
+        assert result[0]["config"]["listen_port"] == api.forwarders[0].listen_port
 
-    def test_set_config_listen_port(self, mcp_server, api):
-        fn = get_tool(mcp_server, "set_config")
-        result = fn(listen_port=7777)
-        assert result["listen_port"] == 7777
-        assert api.config.listen_port == 7777
+    @pytest.mark.asyncio
+    async def test_add_and_remove_forwarder(self, mcp_server, api):
+        add = get_tool(mcp_server, "add_forwarder")
+        result = await add({"name": "Second", "listen_port": 19997, "upstream_host": "127.0.0.1", "upstream_port": 19996})
+        assert result["ok"] is True
+        assert any(f.name == "Second" for f in api.forwarders)
 
-    def test_set_config_upstream(self, mcp_server, api):
-        fn = get_tool(mcp_server, "set_config")
-        fn(upstream_host="192.168.1.1", upstream_port=9000)
-        assert api.config.upstream_host == "192.168.1.1"
-        assert api.config.upstream_port == 9000
+        remove = get_tool(mcp_server, "remove_forwarder")
+        result = await remove("Second")
+        assert result["ok"] is True
+        assert not any(f.name == "Second" for f in api.forwarders)
 
-    def test_set_config_partial_update(self, mcp_server, api):
-        original_port = api.config.listen_port
-        fn = get_tool(mcp_server, "set_config")
-        fn(upstream_host="newhost")
-        assert api.config.listen_port == original_port  # unchanged
+    @pytest.mark.asyncio
+    async def test_add_forwarder_duplicate_name(self, mcp_server):
+        fn = get_tool(mcp_server, "add_forwarder")
+        result = await fn({"name": "Default"})
+        assert result["ok"] is False
+
+    @pytest.mark.asyncio
+    async def test_update_forwarder_listen_port(self, mcp_server, api):
+        fn = get_tool(mcp_server, "update_forwarder")
+        result = await fn("Default", {"listen_port": 7777, "upstream_host": "1.2.3.4"})
+        assert result["ok"] is True
+        assert api.forwarders[0].listen_port == 7777
+        assert api.forwarders[0].upstream_host == "1.2.3.4"
+
+    @pytest.mark.asyncio
+    async def test_update_forwarder_unknown_field(self, mcp_server):
+        fn = get_tool(mcp_server, "update_forwarder")
+        result = await fn("Default", {"bogus_field": 42})
+        assert result["ok"] is False
+
+
+class TestIntrospectionTools:
+    def test_list_framers(self, mcp_server):
+        fn = get_tool(mcp_server, "list_framers")
+        result = fn()
+        assert "raw" in result
+        assert "length_prefix" in result
+
+    def test_list_mutators(self, mcp_server):
+        fn = get_tool(mcp_server, "list_mutators")
+        result = fn()
+        names = {m["name"] for m in result}
+        assert "bit_flip" in names
+        assert "field_boundary" in names
 
 
 # ---------------------------------------------------------------------------
