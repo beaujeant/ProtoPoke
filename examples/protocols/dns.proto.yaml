@@ -34,15 +34,45 @@
 #   │   NSCOUNT   2B  – number of authority RRs                │
 #   │   ARCOUNT   2B  – number of additional RRs               │
 #   ├──────────────────────────────────────────────────────────┤
-#   │ Question / Answer / Authority / Additional sections      │
-#   │ (variable-length; captured as raw bytes below)           │
+#   │ Question section  — QDCOUNT × (QNAME, QTYPE, QCLASS)     │
+#   │ Answer section    — ANCOUNT × resource record            │
+#   │ Authority section — NSCOUNT × resource record            │
+#   │ Additional section— ARCOUNT × resource record            │
 #   └──────────────────────────────────────────────────────────┘
 #
-# The variable-length sections use DNS label encoding (length-prefixed
-# labels + 0x00 terminator, plus optional compression pointers 0xC0xx) and
-# resource record structures that the ProtoPoke DSL cannot fully express.
-# They are captured as raw bytes so you can inspect them in the hex dump
-# while the fixed header fields are decoded symbolically.
+# Visualisation notes (and DSL limitations):
+#
+#   QNAME (in the question section) is a sequence of length-prefixed labels
+#   terminated by 0x00.  e.g. "www.example.com" →
+#       03 'w' 'w' 'w' 07 'e' 'x' 'a' 'm' 'p' 'l' 'e' 03 'c' 'o' 'm' 00
+#   We parse it as a NUL-terminated string with ASCII display, so the
+#   domain reads as ".www.example.com" in the tree (the bytes 0x03/0x07
+#   render as "." in ASCII mode).  Cross-reference the hex dump for the
+#   exact bytes.  QNAME in the question section never uses compression.
+#
+#   Resource records (answers/authority/additional) start with a NAME which
+#   in most replies is a 2-byte compression pointer (0xC0 0x0C → the name
+#   from the question section).  We assume this for ANSWERS — true for the
+#   overwhelming majority of replies from real-world resolvers (1.1.1.1,
+#   8.8.8.8, BIND, Unbound, …).  If a response uses a full label sequence
+#   instead of a pointer, the answer array will desynchronise and you'll
+#   see garbled offsets after the first record — fall back to the hex
+#   dump in that case.
+#
+#   RDATA is left as raw bytes regardless of TYPE, because its layout
+#   depends on the record type:
+#     A     (TYPE  1): 4 bytes  → IPv4 address (e.g. 08 08 08 08 = 8.8.8.8)
+#     AAAA  (TYPE 28): 16 bytes → IPv6 address
+#     CNAME (TYPE  5): label sequence (may be compressed)
+#     MX    (TYPE 15): 2 bytes preference + label sequence
+#     TXT   (TYPE 16): one or more length-prefixed strings
+#   The DSL cannot switch field layout on a previously-parsed enum, so
+#   inspect RDATA in the hex dump once you know the TYPE.
+#
+#   Authority + Additional sections are left as a single `extra_sections`
+#   bytes blob.  The Additional section often contains an EDNS OPT record
+#   whose NAME is a single 0x00 byte (the root), which would break the
+#   2-byte compression-pointer assumption used for answers.
 #
 # Matching strategy:
 #   Queries  — QR bit == 0 at flags byte 0, bit 7  → magic match on flags
@@ -58,7 +88,7 @@
 
 protocol:
   name: "DNS"
-  version: "1.0 (RFC 1035, UDP)"
+  version: "1.1 (RFC 1035, UDP)"
   endianness: big     # all DNS integers are big-endian
 
   messages:
@@ -79,15 +109,10 @@ protocol:
           # back in the matching response.
 
         - name: flags
-          type: uint16
-          display: hex
-          # Raw flags word. See the bitfield breakdown below for named bits.
-          # Defined here as a uint16 so it can be edited as a whole during
-          # intercept. flags_decoded gives symbolic access.
-
-        - name: flags_decoded
           type: bitfield
-          # Bit layout (MSB to LSB, numbering from LSB=bit 0):
+          length: 2
+          # The 16-bit Flags word, rendered as hex with its bits broken
+          # out as children. Bit layout (LSB=bit 0):
           #   bit 15: QR      — 0=Query, 1=Response
           #   bit 14-11: OPCODE — 0=QUERY, 1=IQUERY, 2=STATUS
           #   bit 10: AA      — Authoritative Answer (response only)
@@ -99,7 +124,7 @@ protocol:
           #   bit 4:  CD      — Checking Disabled (DNSSEC, RFC 4035)
           #   bit 3-0: RCODE  — 0=NOERROR, 1=FORMERR, 2=SERVFAIL,
           #                     3=NXDOMAIN, 5=REFUSED
-          bits:
+          bits: &flags_bits
             15: qr
             14: opcode_3
             13: opcode_2
@@ -133,16 +158,87 @@ protocol:
           type: uint16
           # Number of Resource Records in the Additional section.
 
-        - name: sections
+        # The Question section is the most useful payload for a query:
+        # one entry per question, each holding the domain name being asked
+        # about (QNAME), the record type (QTYPE = A, AAAA, MX, …) and the
+        # class (QCLASS, almost always IN). The array iterates QDCOUNT
+        # times so it adapts to multi-question queries (rare but legal).
+        - name: questions
+          type: array
+          array:
+            count: "{qdcount}"
+            item:
+              - name: qname
+                type: string
+                null_terminated: true
+                encoding: ascii
+                display: ascii
+                # Label-encoded domain name terminated by 0x00.
+                # ASCII display renders the length-prefix bytes as "."
+                # so the result reads close to the original FQDN.
+              - name: qtype
+                type: uint16
+                display: enum
+                enum: &qtype_enum
+                  1:   "A (IPv4 address)"
+                  2:   "NS (name server)"
+                  5:   "CNAME (canonical name)"
+                  6:   "SOA (zone authority)"
+                  10:  "NULL"
+                  12:  "PTR (reverse lookup)"
+                  13:  "HINFO (host info)"
+                  15:  "MX (mail exchange)"
+                  16:  "TXT (text)"
+                  17:  "RP (responsible person)"
+                  18:  "AFSDB"
+                  24:  "SIG"
+                  25:  "KEY"
+                  28:  "AAAA (IPv6 address)"
+                  29:  "LOC"
+                  33:  "SRV (service)"
+                  35:  "NAPTR"
+                  36:  "KX"
+                  37:  "CERT"
+                  39:  "DNAME"
+                  41:  "OPT (EDNS pseudo-RR)"
+                  43:  "DS"
+                  44:  "SSHFP"
+                  46:  "RRSIG"
+                  47:  "NSEC"
+                  48:  "DNSKEY"
+                  50:  "NSEC3"
+                  51:  "NSEC3PARAM"
+                  52:  "TLSA"
+                  53:  "SMIMEA"
+                  59:  "CDS"
+                  60:  "CDNSKEY"
+                  61:  "OPENPGPKEY"
+                  64:  "SVCB"
+                  65:  "HTTPS"
+                  99:  "SPF"
+                  252: "AXFR (zone transfer)"
+                  253: "MAILB"
+                  254: "MAILA"
+                  255: "ANY (*)"
+                  257: "CAA"
+              - name: qclass
+                type: uint16
+                display: enum
+                enum: &qclass_enum
+                  1:   "IN (Internet)"
+                  2:   "CS (CSNET)"
+                  3:   "CH (CHAOS)"
+                  4:   "HS (Hesiod)"
+                  254: "NONE"
+                  255: "ANY"
+
+        - name: extra_sections
           type: bytes
           length: -1
           display: hex
-          # Everything after the 12-byte header: Question + Answer +
-          # Authority + Additional sections. DNS label encoding and RR
-          # structures cannot be parsed with the DSL — inspect them in the
-          # hex dump. Once you reverse the specific query types you care
-          # about, split this into separate named fields (qname, qtype,
-          # qclass, etc.).
+          # Anything after the questions — should be empty for a query
+          # under normal conditions, but EDNS OPT pseudo-RRs sometimes
+          # appear in the Additional section even on queries.
 
     # ── Recursive query (RD=1, the most common dig/resolver case) ─────────
     - name: "QueryRD"
@@ -153,104 +249,34 @@ protocol:
         offset: 2
         value: "0x01"   # QR=0, OPCODE=0, RD=1
       fields:
-        - { name: id,             type: uint16, display: hex }
-        - { name: flags,          type: uint16, display: hex }
-        - name: flags_decoded
+        - { name: id,       type: uint16, display: hex }
+        - name: flags
           type: bitfield
-          bits:
-            15: qr
-            14: opcode_3
-            13: opcode_2
-            12: opcode_1
-            11: opcode_0
-            10: aa
-            9:  tc
-            8:  rd
-            7:  ra
-            6:  z
-            5:  ad
-            4:  cd
-            3:  rcode_3
-            2:  rcode_2
-            1:  rcode_1
-            0:  rcode_0
-        - { name: qdcount,        type: uint16 }
-        - { name: ancount,        type: uint16 }
-        - { name: nscount,        type: uint16 }
-        - { name: arcount,        type: uint16 }
-        - { name: sections,       type: bytes,  length: -1, display: hex }
-
-    # ── Standard DNS response (QR=1, RA=0, RCODE=NOERROR) ─────────────────
-    - name: "Response"
-      description: "DNS response (QR=1). Flags byte 2 = 0x80 — RA=0, authoritative or non-recursive server."
-      direction: server_to_client
-      match:
-        type: magic
-        offset: 2
-        value: "0x80"
-      fields:
-        - { name: id,             type: uint16, display: hex }
-        - { name: flags,          type: uint16, display: hex }
-        - name: flags_decoded
-          type: bitfield
-          bits:
-            15: qr
-            14: opcode_3
-            13: opcode_2
-            12: opcode_1
-            11: opcode_0
-            10: aa
-            9:  tc
-            8:  rd
-            7:  ra
-            6:  z
-            5:  ad
-            4:  cd
-            3:  rcode_3
-            2:  rcode_2
-            1:  rcode_1
-            0:  rcode_0
-        - { name: qdcount,        type: uint16 }
-        - { name: ancount,        type: uint16 }
-        - { name: nscount,        type: uint16 }
-        - { name: arcount,        type: uint16 }
-        - { name: sections,       type: bytes,  length: -1, display: hex }
-
-    # ── Recursive response (QR=1, RA=1, RCODE=NOERROR) ────────────────────
-    - name: "ResponseRA"
-      description: "DNS response with Recursion Available (flags byte 2 = 0x81). Most resolver responses, including 1.1.1.1 and 8.8.8.8."
-      direction: server_to_client
-      match:
-        type: magic
-        offset: 2
-        value: "0x81"
-      fields:
-        - { name: id,             type: uint16, display: hex }
-        - { name: flags,          type: uint16, display: hex }
-        - name: flags_decoded
-          type: bitfield
-          bits:
-            15: qr
-            14: opcode_3
-            13: opcode_2
-            12: opcode_1
-            11: opcode_0
-            10: aa
-            9:  tc
-            8:  rd
-            7:  ra
-            6:  z
-            5:  ad
-            4:  cd
-            3:  rcode_3
-            2:  rcode_2
-            1:  rcode_1
-            0:  rcode_0
-        - { name: qdcount,        type: uint16 }
-        - { name: ancount,        type: uint16 }
-        - { name: nscount,        type: uint16 }
-        - { name: arcount,        type: uint16 }
-        - { name: sections,       type: bytes,  length: -1, display: hex }
+          length: 2
+          bits: *flags_bits
+        - { name: qdcount,  type: uint16 }
+        - { name: ancount,  type: uint16 }
+        - { name: nscount,  type: uint16 }
+        - { name: arcount,  type: uint16 }
+        - name: questions
+          type: array
+          array:
+            count: "{qdcount}"
+            item: &question_item
+              - name: qname
+                type: string
+                null_terminated: true
+                encoding: ascii
+                display: ascii
+              - name: qtype
+                type: uint16
+                display: enum
+                enum: *qtype_enum
+              - name: qclass
+                type: uint16
+                display: enum
+                enum: *qclass_enum
+        - { name: extra_sections, type: bytes, length: -1, display: hex }
 
     # ── NXDOMAIN response (RCODE=3) ───────────────────────────────────────
     - name: "NXDOMAIN"
@@ -261,23 +287,125 @@ protocol:
         offset: 3         # second byte of the Flags field
         value: "0x83"
       fields:
-        - { name: id,             type: uint16, display: hex }
-        - { name: flags,          type: uint16, display: hex }
-        - name: rcode
-          type: uint8
-          display: enum
-          enum:
-            0: "NOERROR"
-            1: "FORMERR"
-            2: "SERVFAIL"
-            3: "NXDOMAIN"
-            4: "NOTIMP"
-            5: "REFUSED"
-        - { name: qdcount,        type: uint16 }
-        - { name: ancount,        type: uint16 }
-        - { name: nscount,        type: uint16 }
-        - { name: arcount,        type: uint16 }
-        - { name: sections,       type: bytes,  length: -1, display: hex }
+        - { name: id,       type: uint16, display: hex }
+        - name: flags
+          type: bitfield
+          length: 2
+          bits: *flags_bits
+          # Bits rcode_3..rcode_0 spell out RCODE = 3 (NXDOMAIN).
+        - { name: qdcount,  type: uint16 }
+        - { name: ancount,  type: uint16 }
+        - { name: nscount,  type: uint16 }
+        - { name: arcount,  type: uint16 }
+        - name: questions
+          type: array
+          array:
+            count: "{qdcount}"
+            item: *question_item
+        - { name: extra_sections, type: bytes, length: -1, display: hex }
+
+    # ── Standard DNS response (QR=1, RA=0, RCODE=NOERROR) ─────────────────
+    - name: "Response"
+      description: "DNS response (QR=1). Flags byte 2 = 0x80 — RA=0, authoritative or non-recursive server."
+      direction: server_to_client
+      match:
+        type: magic
+        offset: 2
+        value: "0x80"
+      fields:
+        - { name: id,       type: uint16, display: hex }
+        - name: flags
+          type: bitfield
+          length: 2
+          bits: *flags_bits
+        - { name: qdcount,  type: uint16 }
+        - { name: ancount,  type: uint16 }
+        - { name: nscount,  type: uint16 }
+        - { name: arcount,  type: uint16 }
+
+        # The question is echoed back verbatim from the original query.
+        - name: questions
+          type: array
+          array:
+            count: "{qdcount}"
+            item: *question_item
+
+        # Each answer record. We assume the NAME is a 2-byte compression
+        # pointer (0xC0 0x0C → the QNAME at offset 12) — true for almost
+        # every reply from real resolvers. The RDATA's meaning depends on
+        # rrtype:
+        #   A     → 4 bytes IPv4   (e.g. 08 08 08 08 = 8.8.8.8)
+        #   AAAA  → 16 bytes IPv6
+        #   CNAME → label-encoded canonical name (often compressed)
+        #   MX    → 2-byte preference + label-encoded mail-exchange name
+        - name: answers
+          type: array
+          array:
+            count: "{ancount}"
+            item: &rr_item
+              - name: name_ptr
+                type: bytes
+                length: 2
+                display: hex
+                # Compression pointer to the name (typically C0 0C).
+              - name: rrtype
+                type: uint16
+                display: enum
+                enum: *qtype_enum
+              - name: rrclass
+                type: uint16
+                display: enum
+                enum: *qclass_enum
+              - name: ttl
+                type: uint32
+                display: decimal
+              - name: rdlength
+                type: uint16
+                display: decimal
+              - name: rdata
+                type: bytes
+                length: "{rdlength}"
+                display: hex
+                # Interpretation depends on rrtype — see comment above.
+
+        - name: extra_sections
+          type: bytes
+          length: -1
+          display: hex
+          # Authority + Additional sections.  Left raw because the EDNS
+          # OPT pseudo-RR commonly placed here uses a 1-byte NAME (root)
+          # rather than a 2-byte compression pointer, which would break
+          # the assumption used for the answers array above.
+
+    # ── Recursive response (QR=1, RA=1, RCODE=NOERROR) ────────────────────
+    - name: "ResponseRA"
+      description: "DNS response with Recursion Available (flags byte 2 = 0x81). Most resolver responses, including 1.1.1.1 and 8.8.8.8."
+      direction: server_to_client
+      match:
+        type: magic
+        offset: 2
+        value: "0x81"
+      fields:
+        - { name: id,       type: uint16, display: hex }
+        - name: flags
+          type: bitfield
+          length: 2
+          bits: *flags_bits
+        - { name: qdcount,  type: uint16 }
+        - { name: ancount,  type: uint16 }
+        - { name: nscount,  type: uint16 }
+        - { name: arcount,  type: uint16 }
+        - name: questions
+          type: array
+          array:
+            count: "{qdcount}"
+            item: *question_item
+        - name: answers
+          type: array
+          array:
+            count: "{ancount}"
+            item: *rr_item
+        - { name: extra_sections, type: bytes, length: -1, display: hex }
 
     # ── Catch-all: anything not matched above ─────────────────────────────
     # Covers unusual opcodes, DNSSEC-specific flag combinations, etc.
@@ -287,9 +415,17 @@ protocol:
         type: always
       fields:
         - { name: id,       type: uint16, display: hex }
-        - { name: flags,    type: uint16, display: hex }
+        - name: flags
+          type: bitfield
+          length: 2
+          bits: *flags_bits
         - { name: qdcount,  type: uint16 }
         - { name: ancount,  type: uint16 }
         - { name: nscount,  type: uint16 }
         - { name: arcount,  type: uint16 }
-        - { name: sections, type: bytes,  length: -1, display: hex }
+        - name: questions
+          type: array
+          array:
+            count: "{qdcount}"
+            item: *question_item
+        - { name: extra_sections, type: bytes, length: -1, display: hex }
