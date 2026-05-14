@@ -22,7 +22,7 @@ environment — it creates the virtualenv and installs dependencies in one go.
     curl -LsSf https://astral.sh/uv/install.sh | sh
 
     uv venv
-    uv pip install -e ".[dev]"
+    uv pip install -e .
     ```
 
 === "macOS"
@@ -32,7 +32,7 @@ environment — it creates the virtualenv and installs dependencies in one go.
     curl -LsSf https://astral.sh/uv/install.sh | sh
 
     uv venv
-    uv pip install -e ".[dev]"
+    uv pip install -e .
     ```
 
 === "Windows"
@@ -42,12 +42,16 @@ environment — it creates the virtualenv and installs dependencies in one go.
     powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 
     uv venv
-    uv pip install -e ".[dev]"
+    uv pip install -e .
     ```
 
 `uv venv` creates a `.venv` in the project directory. `uv run protopoke`
 runs the TUI inside it without needing to activate anything; or activate the
 venv the usual way (see below).
+
+`pip install -e .` installs everything needed to **use** ProtoPoke. Only
+contributors who run the test suite need the `dev` extra — see
+[Optional extras](#optional-extras) below.
 
 ## Native installation (pip + venv)
 
@@ -60,7 +64,7 @@ works everywhere.
     python3 -m venv .venv
     source .venv/bin/activate
 
-    pip install -e ".[dev]"
+    pip install -e .
     ```
 
 === "macOS"
@@ -69,7 +73,7 @@ works everywhere.
     python3 -m venv .venv
     source .venv/bin/activate
 
-    pip install -e ".[dev]"
+    pip install -e .
     ```
 
     !!! note
@@ -83,7 +87,7 @@ works everywhere.
     py -3 -m venv .venv
     .venv\Scripts\activate
 
-    pip install -e ".[dev]"
+    pip install -e .
     ```
 
     !!! tip
@@ -125,7 +129,7 @@ With uv, replace `pip install` with `uv pip install`.
 # Launch the terminal UI
 protopoke
 
-# Run the test suite
+# Run the test suite (requires the `dev` extra)
 pytest
 ```
 
