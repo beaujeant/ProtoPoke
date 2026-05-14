@@ -74,10 +74,10 @@ Frames pane *displays*, not what is captured.
 
 ## Sending a frame to Forge
 
-Select one or more frames and click **→ Forge** to copy them into the
-[Forge](forge.md) tab — either as a new playbook or appended to an existing
-one. This is the "send from traffic" path: capture something real, then
-replay or edit it.
+Select one or more frames (using shift and arrows) and click **→ Forge** 
+to copy them into the [Forge](forge.md) tab — either as a new playbook or 
+appended to an existing one. This is the "send from traffic" path: 
+capture something real, then replay or edit it.
 
 ## Next
 

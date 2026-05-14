@@ -24,9 +24,6 @@ a custom binary game protocol" — that is ProtoPoke.
   regex, or custom Python script) transform frames as they flow through.
 - **Forges and replays** — hand-craft frames from scratch, replay captured
   sessions (optionally with field edits), or build reusable playbooks.
-- **Half-open sessions** — when one peer disconnects, ProtoPoke keeps the
-  other side open (`only server` / `only client`) so you can keep driving
-  the live connection from Forge.
 - **TLS / MITM** — auto-generated root CA and per-session certificates let
   ProtoPoke decrypt, modify, and re-encrypt TLS traffic.
 - **AI-controllable** — an embedded MCP server exposes every proxy operation
@@ -39,19 +36,13 @@ Fuzzing is also available but **experimental** — see
 
 ## Two ways to use it
 
-ProtoPoke has one engine and two front ends. Pick whichever fits the task —
-they share the same concepts, so the docs are split into two parallel tracks.
+ProtoPoke has one engine and two front ends. Pick whichever fits the task.
 
 | | **User Interface** | **Core Library** |
 |---|---|---|
 | What | A full terminal UI (Textual) with Config, Traffic, Intercept, Forge, Fuzzer, and Logs tabs. | The `ProtoPokeAPI` Python class — the single façade for scripting and automation. |
 | Best for | Interactive exploration, manual reverse engineering. | Automated tests, repeatable workflows, integration into other tools. |
-| Start here | [User Interface → Getting Started](ui/getting-started.md) | [Core Library → Getting Started](core/getting-started.md) |
-
-Both tracks cover the same four areas — **Config**, **Traffic**,
-**Intercept**, and **Forge** — and both lean on the shared
-[Reference](reference/framers.md) pages (framers, protocol definitions,
-custom replace scripts) and worked [Guides](guides/dns.md).
+| Start here | [User Interface](ui/getting-started.md) | [Core Library](core/getting-started.md) |
 
 ---
 
@@ -66,8 +57,10 @@ extensibility, and hackability** over raw throughput.
 ## Quick links
 
 - [Installation](installation.md)
-- [User Interface — Getting Started](ui/getting-started.md)
-- [Core Library — Getting Started](core/getting-started.md)
-- [Protocol Definition reference](reference/protocol-definitions.md)
+- [User Interface](ui/getting-started.md)
+- [Core Library](core/getting-started.md)
+- [Framer](reference/framers.md)
+- [Protocol Definition](reference/protocol-definitions.md)
+- [Replace Scripts](reference/replace-scripts.md)
 - [DNS guide](guides/dns.md)
 - [MCP Server](mcp/overview.md)

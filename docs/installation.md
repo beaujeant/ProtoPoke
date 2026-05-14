@@ -134,5 +134,5 @@ If `protopoke` is not on your `PATH`, make sure the virtualenv is activated
 
 ## Next steps
 
-- Using the terminal UI? → [User Interface — Getting Started](ui/getting-started.md)
-- Scripting with Python? → [Core Library — Getting Started](core/getting-started.md)
+- Using the terminal UI? → [User Interface](ui/getting-started.md)
+- Scripting with Python? → [Core Library](core/getting-started.md)

@@ -109,19 +109,6 @@ UDP and SOCKS5 forwarders cannot enable `tls_listen` (DTLS is not supported,
 and wrapping the SOCKS handshake in TLS is non-standard). UDP forwarders
 always use the `raw` framer (one datagram = one frame).
 
-## Half-Open (Keep-Alive) Sessions
-
-For TCP and SOCKS5, when one side closes its connection the proxy keeps the
-other side open by default instead of propagating a TCP half-close:
-
-- Client disconnects → session → `ONLY_SERVER`; `keep_upstream_on_client_disconnect` (default `True`)
-- Server disconnects → session → `ONLY_CLIENT`; `keep_client_on_server_disconnect` (default `True`)
-
-This lets the operator keep driving the still-open side from the Forge tab.
-Set either flag to `False` to restore the legacy behaviour where the EOF is
-forwarded as a TCP half-close. The session reaches `CLOSED` only when both
-sides are gone (or `terminate_session()` is called).
-
 ## Data Flow
 
 ```
@@ -175,24 +162,3 @@ The asyncio `EventBus` publishes events from background tasks. Textual widgets m
 1. `_register_event_handlers()` subscribes async callbacks on the EventBus
 2. Each callback calls `self.post_message(...)` with a Textual `Message` subclass
 3. Textual dispatches those messages to `on_*` handlers, which safely update widgets
-
-## Extension Points
-
-### Add a Framer
-
-1. Subclass `protopoke.framing.base.Framer`
-2. Implement `feed(data) → list[Frame]`, `flush() → list[Frame]`, `reset()`
-3. Register in `protopoke/framing/__init__.py`:
-   ```python
-   FRAMER_REGISTRY["myframer"] = MyFramer
-   ```
-
-### Add a Mutator
-
-1. Subclass `protopoke.fuzzing.mutators.base.FrameMutator`
-2. Implement `async mutate(frame, parsed_message) → bytes | None`
-3. Pass instances to `api.fuzz_session(..., mutators=[MyMutator()])`
-
-### Add a Protocol Decoder
-
-Write a YAML definition file and call `api.set_protocol_file("my_protocol.yaml")`, or implement `ProtocolDecoder`/`ProtocolEncoder` ABCs for fully custom logic.

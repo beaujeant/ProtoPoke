@@ -168,30 +168,3 @@ def on_flush(state: dict, direction: str) -> list[bytes]:
 | `data` | `bytes` | Raw bytes from the latest `read()` call |
 | `state` | `dict` | Mutable dict shared between both directions for this session; persists for the connection lifetime |
 | `direction` | `str` | `"c2s"` (client → server) or `"s2c"` (server → client) |
-
-### Example: DNS-over-TCP Framer
-
-DNS over TCP prefixes each DNS message with a 2-byte big-endian length field:
-
-```python
-import struct
-
-def on_data(data, state, direction):
-    buf = state.setdefault(direction, bytearray())
-    buf.extend(data)
-    frames = []
-    while len(buf) >= 2:
-        msg_len = struct.unpack("!H", buf[:2])[0]
-        total = 2 + msg_len
-        if len(buf) < total:
-            break
-        frames.append(bytes(buf[:total]))
-        del buf[:total]
-    return frames
-
-def on_flush(state, direction):
-    buf = state.get(direction, b"")
-    return [bytes(buf)] if buf else []
-```
-
-See `examples/dns_framer.py` for a more complete example with error handling.

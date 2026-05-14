@@ -63,9 +63,9 @@ surviving connection stays open, so you can keep driving it from the
 gone. This is on by default; the legacy TCP half-close behaviour can be
 restored per-forwarder.
 
-### TLS / MITM
+### TLS
 
-ProtoPoke can terminate TLS on the client side (MITM) and optionally
+ProtoPoke can terminate TLS on the client side and optionally
 re-encrypt to the upstream:
 
 - **TLS Listen** — terminate TLS coming from the client. On first use

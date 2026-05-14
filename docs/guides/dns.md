@@ -16,69 +16,12 @@ query/response per message, and `dig` is a handy traffic generator.
 
 ---
 
-## 1. The framer — cutting the stream into DNS messages
+## 1. The framer
 
-How DNS is framed depends on the transport:
-
-- **DNS over UDP** — each DNS message is exactly one UDP datagram. There is
-  no length prefix; the datagram boundary *is* the message boundary. A
-  ProtoPoke **UDP forwarder uses the `raw` framer** (one datagram = one
-  frame) and you write **no framer code at all**.
-- **DNS over TCP** — TCP is a byte stream with no boundaries, so DNS over TCP
-  wraps every message in a **2-byte big-endian length prefix** (RFC 1035
-  §4.2.2). Here you need a framer that reads the prefix, buffers that many
-  bytes, and emits one frame per message.
-
-The repo ships that TCP framer:
-[`examples/dns_framer.py`](https://github.com/beaujeant/protopoke/blob/main/examples/dns_framer.py).
-A custom framer is **two plain module-level functions** — no class, no
-ProtoPoke imports:
-
-```python
-import struct
-
-_DNS_MIN_MSG = 12   # smallest valid DNS payload (the fixed 12-byte header)
-_PREFIX_LEN  = 2    # the TCP length prefix is always 2 bytes
-
-def on_data(data: bytes, state: dict, direction: str) -> list[bytes]:
-    buf = state.setdefault(direction, bytearray())
-    buf.extend(data)
-    frames: list[bytes] = []
-    while len(buf) >= _PREFIX_LEN:
-        (msg_len,) = struct.unpack_from(">H", buf, 0)
-        if msg_len < _DNS_MIN_MSG or msg_len > 0xFFFF:
-            # implausible length → desynced: emit the buffer raw, restart
-            frames.append(bytes(buf))
-            buf.clear()
-            break
-        total = _PREFIX_LEN + msg_len
-        if len(buf) < total:
-            break                       # incomplete — wait for more data
-        frames.append(bytes(buf[:total]))
-        del buf[:total]
-    return frames
-
-def on_flush(state: dict, direction: str) -> list[bytes]:
-    buf = state.pop(direction, bytearray())
-    return [bytes(buf)] if buf else []
-```
-
-Key points, which generalise to *any* custom framer:
-
-- **`on_data`** receives raw bytes, the per-connection `state` dict, and the
-  `direction` (`"c2s"` / `"s2c"`). It must handle partial messages, exact
-  messages, and several coalesced messages — so it buffers in
-  `state[direction]` and loops.
-- **`on_flush`** is called when the connection closes; it returns whatever
-  bytes were left buffered so nothing is silently dropped.
-- **Desync handling** — DNS over TCP has no sync marker, so when the declared
-  length is implausible the framer flushes the buffer as one raw frame and
-  restarts. A protocol with a magic prefix could instead scan for the next
-  marker.
-
-Load it on a **TCP** forwarder via *Config → Edit Framer → Custom → Script
-path*, or `custom_framer_path="examples/dns_framer.py"` in the API. The full
-custom-framer contract is in [Framers](../reference/framers.md).
+Each DNS message is exactly one UDP datagram. There is no length prefix; 
+the datagram boundary *is* the message boundary. A ProtoPoke 
+**UDP forwarder uses the `raw` framer** (one datagram = one frame) and 
+you write **no framer code at all**.
 
 ---
 
@@ -220,11 +163,6 @@ documented in [Custom Replace Scripts](../reference/replace-scripts.md).
 6. **Verify** — back on *Traffic* you will see the original frame *and* a
    `framer_name=tamper` frame: the rewritten datagram ProtoPoke actually
    sent. The unmodified frame is always preserved for inspection.
-
-> For DNS over **TCP**, the only change is the forwarder: use a **TCP**
-> forwarder with the custom framer from step 1, pointed at a TCP DNS server.
-> The protocol definition and the replace script work unchanged on the
-> message bytes.
 
 ## Where next
 
