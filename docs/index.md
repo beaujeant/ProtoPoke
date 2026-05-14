@@ -1,4 +1,6 @@
-# ProtoPoke
+---
+title: "ProtoPoke"
+---
 
 **A TCP / UDP / SOCKS5 proxy and protocol-analysis tool — Burp Suite for arbitrary binary protocols.**
 
@@ -30,7 +32,7 @@ a custom binary game protocol" — that is ProtoPoke.
   as a tool, so an AI assistant can drive the same session you see on screen.
 
 Fuzzing is also available but **experimental** — see
-[Fuzzing](reference/fuzzing.md).
+[Fuzzing](/reference/fuzzing).
 
 ---
 
@@ -42,7 +44,7 @@ ProtoPoke has one engine and two front ends. Pick whichever fits the task.
 |---|---|---|
 | What | A full terminal UI (Textual) with Config, Traffic, Intercept, Forge, Fuzzer, and Logs tabs. | The `ProtoPokeAPI` Python class — the single façade for scripting and automation. |
 | Best for | Interactive exploration, manual reverse engineering. | Automated tests, repeatable workflows, integration into other tools. |
-| Start here | [User Interface](ui/getting-started.md) | [Core Library](core/getting-started.md) |
+| Start here | [User Interface](/ui/getting-started) | [Core Library](/core/getting-started) |
 
 ---
 
@@ -56,11 +58,11 @@ extensibility, and hackability** over raw throughput.
 
 ## Quick links
 
-- [Installation](installation.md)
-- [User Interface](ui/getting-started.md)
-- [Core Library](core/getting-started.md)
-- [Framer](reference/framers.md)
-- [Protocol Definition](reference/protocol-definitions.md)
-- [Replace Scripts](reference/replace-scripts.md)
-- [DNS guide](guides/dns.md)
-- [MCP Server](mcp/overview.md)
+- [Installation](/installation)
+- [User Interface](/ui/getting-started)
+- [Core Library](/core/getting-started)
+- [Framer](/reference/framers)
+- [Protocol Definition](/reference/protocol-definitions)
+- [Replace Scripts](/reference/replace-scripts)
+- [DNS guide](/guides/dns)
+- [MCP Server](/mcp/overview)

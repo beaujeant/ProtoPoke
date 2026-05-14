@@ -1,4 +1,6 @@
-# MCP Tool Reference
+---
+title: "MCP Tool Reference"
+---
 
 ProtoPoke exposes 70+ tools through MCP. All tools return JSON-serialisable dicts; bytes fields are hex-encoded strings.
 

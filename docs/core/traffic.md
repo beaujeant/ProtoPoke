@@ -1,4 +1,6 @@
-# Traffic
+---
+title: "Traffic"
+---
 
 Captured traffic lives in an in-memory session registry. The library gives
 you two ways to consume it: **poll** the registry, or **subscribe** to the
@@ -66,7 +68,7 @@ print(f"{reframed} sessions re-framed")
 ```
 
 Built-in framers, their parameters, and the custom-framer script API are
-covered in full in [Framers](../reference/framers.md).
+covered in full in [Framers](/reference/framers).
 
 ## Decoding frames
 
@@ -92,10 +94,10 @@ messages = api.decode_session_frames(session_id)
 A `ParsedMessage` exposes `message_type`, `protocol_name`, `field_by_name()`,
 and `as_dict()`. Field objects carry `value`, `display_value`, `offset`, and
 `size`. The full DSL — message matching, field types, length expressions —
-is documented in [Protocol Definitions](../reference/protocol-definitions.md).
+is documented in [Protocol Definitions](/reference/protocol-definitions).
 
 ## Next
 
-- [Intercept](intercept.md) — the tamper queue and rules
-- [Framers](../reference/framers.md) / [Protocol Definitions](../reference/protocol-definitions.md)
-- [User Interface — Traffic](../ui/traffic.md) — the same, in the TUI
+- [Intercept](/core/intercept) — the tamper queue and rules
+- [Framers](/reference/framers) / [Protocol Definitions](/reference/protocol-definitions)
+- [User Interface — Traffic](/ui/traffic) — the same, in the TUI

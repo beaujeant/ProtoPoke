@@ -1,4 +1,6 @@
-# MCP Server
+---
+title: "MCP Server"
+---
 
 ProtoPoke exposes all proxy operations as [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) tools. Once connected, an AI assistant can fully control the proxy — inspect sessions, tamper and modify frames, forge/replay traffic, manage rules, run fuzzing campaigns, and more — all through natural language.
 
@@ -45,4 +47,4 @@ protopoke --mcp
 ```
 
 Connect an AI client to `http://127.0.0.1:7878/mcp`. See
-[Configuration](configuration.md) for all CLI flags and integration guides.
+[Configuration](/mcp/configuration) for all CLI flags and integration guides.
