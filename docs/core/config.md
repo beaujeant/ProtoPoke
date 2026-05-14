@@ -138,10 +138,8 @@ state = pm2.open("/path/to/project.pp")
 ```
 
 A `.pp` archive contains `project.json`, `forwarders.json`, `rules.json`,
-`forge.json`, `logs.json`, `filters.json`, and `mcp.json`. It carries a
-`format_version` (currently **7**); opening a file from a newer ProtoPoke
-raises an error, older formats are migrated forward where possible. Loading
-is bounded for safety (max 32 members, 100 MB per member).
+`forge.json`, `logs.json`, `filters.json`, and `mcp.json`. Loading is bounded
+for safety (max 32 members, 100 MB per member).
 
 ## Next
 

@@ -117,7 +117,7 @@ A `.pp` archive contains:
 
 | Member | Contents |
 |--------|----------|
-| `project.json` | Metadata: name, format version, timestamps |
+| `project.json` | Metadata: name, timestamps |
 | `forwarders.json` | All forwarder configurations |
 | `rules.json` | Replace rules and intercept rules |
 | `forge.json` | Playbooks, frames, and run history |
@@ -125,9 +125,7 @@ A `.pp` archive contains:
 | `filters.json` | Frame display filters |
 | `mcp.json` | Embedded MCP server settings (enabled, host, port) |
 
-Loading is bounded for safety (max 32 members, 100 MB per member). The file
-carries a `format_version` — opening one written by a newer ProtoPoke raises
-an error; older formats are migrated forward where possible.
+Loading is bounded for safety (max 32 members, 100 MB per member).
 
 ## Next
 

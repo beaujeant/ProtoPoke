@@ -3,7 +3,7 @@ ProjectManager — save/load a named ProtoPoke project.
 
 A *project* is a single ``.pp`` ZIP file that bundles:
 
-    project.json      — metadata (name, version, timestamps)
+    project.json      — metadata (name, timestamps)
     forwarders.json   — list of ForwarderConfig objects
     rules.json        — replace rules + intercept rules
     forge.json        — playbooks (frames, runs/history, connection config)
@@ -45,9 +45,6 @@ from ..filters.frame_filter import FrameDisplayFilter
 from ..mcp.host import MCPSettings
 from ..rules.engine import RulesEngine, InterceptFilter
 from ..forge.models import Playbook
-
-# Project format version — bump when the schema changes incompatibly.
-_FORMAT_VERSION = 7
 
 # Safety limits for ZIP loading.
 _ZIP_MAX_MEMBERS      = 32
@@ -140,7 +137,7 @@ class ProjectManager:
 
         Raises:
             FileNotFoundError: Path does not exist.
-            ValueError:        Project file is invalid or too new.
+            ValueError:        Project file is invalid.
         """
         p = Path(path)
         if not p.is_file():
@@ -173,10 +170,9 @@ class ProjectManager:
         now = time.time()
 
         meta = {
-            "format_version": _FORMAT_VERSION,
-            "name":           self.name,
-            "created_at":     self._created_at,
-            "saved_at":       now,
+            "name":       self.name,
+            "created_at": self._created_at,
+            "saved_at":   now,
         }
 
         rules_data = {
@@ -246,11 +242,6 @@ class ProjectManager:
             if meta_raw is None:
                 raise ValueError(f"Not a valid project file (missing project.json): {zip_path}")
             meta = json.loads(meta_raw)
-            if meta.get("format_version", 1) > _FORMAT_VERSION:
-                raise ValueError(
-                    f"Project was created with a newer version of ProtoPoke "
-                    f"(format_version={meta['format_version']}). Please upgrade."
-                )
 
             forwarders_raw = _read("forwarders.json")
             if forwarders_raw is None:
