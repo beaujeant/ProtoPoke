@@ -36,6 +36,7 @@ fwd = ForwarderConfig(
 | `max_sessions` | int | `0` | Max concurrent sessions (`0` = unlimited) |
 | `keep_upstream_on_client_disconnect` | bool | `True` | Keep upstream open after the client disconnects (→ `ONLY_SERVER`). TCP/SOCKS5 only |
 | `keep_client_on_server_disconnect` | bool | `True` | Keep the client writable after the server disconnects (→ `ONLY_CLIENT`). TCP/SOCKS5 only |
+| `half_open_idle_timeout` | float | `0.0` | Seconds a half-open session may sit idle before its surviving connection is reaped. `0` disables reaping. TCP/SOCKS5 only |
 | `tamper_enabled` | bool | `False` | Enable intercept on startup |
 | `framer_name` | str | `"raw"` | `raw`, `delimiter`, `length_prefix`, `line` (UDP is always `raw`) |
 | `framer_kwargs` | dict | `{}` | Framer-specific parameters |
@@ -92,6 +93,35 @@ with open("protopoke-ca.crt", "wb") as f:
 
 Upstream certificate verification is intentionally disabled — ProtoPoke is a
 reverse-engineering tool, not a production proxy.
+
+## Half-open sessions (TCP / SOCKS5)
+
+When one peer disconnects, ProtoPoke does **not** propagate the EOF to the
+other side. The session transitions to `ONLY_SERVER` or `ONLY_CLIENT` and the
+surviving connection stays fully open so the Forge tab can keep driving it.
+The session reaches `CLOSED` only once both sides are gone. This is controlled
+by `keep_upstream_on_client_disconnect` / `keep_client_on_server_disconnect`
+(both default `True`); set either to `False` to restore the legacy TCP
+half-close.
+
+```python
+fwd = ForwarderConfig(
+    name="svc",
+    listen_port=8080,
+    upstream_host="10.0.0.1",
+    upstream_port=9090,
+    half_open_idle_timeout=120.0,   # reap an idle half-open session after 120s
+)
+```
+
+Because the surviving peer never learns the other side is gone, a keep-alive
+server that never closes would leave the half-open session — and its sockets —
+alive forever, eventually exhausting file descriptors / ephemeral ports.
+`half_open_idle_timeout` guards against this: once a session is half-open, its
+surviving connection is reaped if it sees no traffic for that many seconds.
+Active connections and operator-driven Forge traffic reset the timer. The
+default is `0.0`, which disables reaping — set a positive value for
+long-running, unattended forwarders.
 
 ## Multiple forwarders
 
