@@ -40,6 +40,7 @@ they can mix transports (one TCP, one UDP, one SOCKS5).
 | **Connect timeout** | How long to wait for the upstream connection. |
 | **Read buffer size** | Bytes read per socket read. |
 | **Max sessions** | Concurrency cap (`0` = unlimited). |
+| **Half-open timeout** | Seconds an idle [half-open session](#half-open-sessions-tcp-socks5) may sit before its surviving connection is reaped (`0` = off). TCP/SOCKS5 only. |
 | **Framer** | How the byte stream is cut into frames — `raw`, `delimiter`, `length_prefix`, or a custom script. Configured via the framer sub-modal. See [Framers](/reference/framers). |
 | **Protocol definition** | Path to a YAML/JSON file for decoding frames into named fields. See [Protocol Definitions](/reference/protocol-definitions). |
 | **TLS** | TLS termination on the client side and/or TLS to the upstream — see below. |
@@ -64,6 +65,13 @@ surviving connection stays open, so you can keep driving it from the
 [Forge](/ui/forge) tab. The session only reaches `closed` once both sides are
 gone. This is on by default; the legacy TCP half-close behaviour can be
 restored per-forwarder.
+
+A half-open connection whose surviving peer uses keep-alive may never close on
+its own, leaking its sockets indefinitely. The **Half-open timeout** field
+guards against this: once a session is half-open, its surviving connection is
+reaped after that many seconds with no traffic. Active connections and Forge
+traffic reset the timer. It defaults to `0` (no reaping) — set a positive
+value for long-running, unattended forwarders.
 
 ### TLS
 
