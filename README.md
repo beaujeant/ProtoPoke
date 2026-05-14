@@ -13,7 +13,14 @@ Each forwarder can be a plain **TCP** proxy, a **UDP** proxy (per-client-tuple f
 ```bash
 git clone https://github.com/beaujeant/protopoke.git
 cd protopoke
-pip install -e ".[dev]"
+pip install -e .
+```
+
+This installs everything needed to run the tool. Optional extras:
+
+```bash
+pip install -e ".[mcp]"   # add MCP server support
+pip install -e ".[dev]"   # add the test runner (for contributors)
 ```
 
 ## Launch the TUI
