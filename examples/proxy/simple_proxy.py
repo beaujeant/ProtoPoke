@@ -5,7 +5,7 @@ Starts a proxy and prints every captured frame to stdout.
 No interception — traffic flows through unmodified.
 
 Usage:
-    python examples/simple_proxy.py
+    python examples/proxy/simple_proxy.py
 
     # In another terminal:
     nc 127.0.0.1 8080    # connects through the proxy to 127.0.0.1:9090

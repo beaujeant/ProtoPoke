@@ -40,7 +40,7 @@ Desync recovery:
     The default on_desync() flushes the entire buffer (safe, but lossy).
     Override it to implement protocol-specific forward-scanning — for example,
     searching for a magic byte sequence that marks the start of every frame.
-    See dns_framer.py in the examples/ directory for a worked example.
+    See examples/framers/frame_size_framer.py for a worked example.
 
 The RawFramer in raw.py is the simplest possible implementation and a
 good template to start from.
