@@ -140,7 +140,6 @@ class TestProjectManager:
         with zipfile.ZipFile(out) as zf:
             meta = json.loads(zf.read("project.json"))
         assert meta["name"] == "My Test"
-        assert "format_version" in meta
         assert "saved_at" in meta
 
     def test_captured_sessions_round_trip(self, tmp_path):

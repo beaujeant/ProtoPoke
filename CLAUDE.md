@@ -313,7 +313,7 @@ Match strategies:
 A `.pp` file is a ZIP archive containing:
 
 ```
-project.json      — metadata (name, format_version, timestamps)
+project.json      — metadata (name, timestamps)
 forwarders.json   — list of ForwarderConfig dicts
 rules.json        — {replace: [...], intercept: [...]}
 forge.json        — list of Playbook dicts
@@ -322,10 +322,7 @@ filters.json      — frame display filters
 mcp.json          — embedded MCP server settings (enabled, host, port)
 ```
 
-`_FORMAT_VERSION` is currently **7** (see `project/manager.py`). Opening a
-file written by a newer version raises an error; older formats are migrated
-forward on load where possible. ZIP loading is bounded (max 32 members,
-100 MB per member).
+ZIP loading is bounded (max 32 members, 100 MB per member).
 
 ---
 
