@@ -1,4 +1,4 @@
-"""CreateSessionModal — prompt for host/port/TLS to open a persistent forge session."""
+"""CreateSessionModal — prompt for host/port/TLS to open a persistent TCP forge session."""
 
 from __future__ import annotations
 
@@ -21,8 +21,8 @@ class CreateSessionResult:
 class CreateSessionModal(ModalScreen["CreateSessionResult | None"]):
     """
     Modal that prompts for host, port, and TLS to open a new persistent
-    session.  Dismisses with a :class:`CreateSessionResult` or ``None`` if
-    cancelled.
+    TCP session.  Dismisses with a :class:`CreateSessionResult` or ``None``
+    if cancelled.
     """
 
     DEFAULT_CSS = """
@@ -73,7 +73,7 @@ class CreateSessionModal(ModalScreen["CreateSessionResult | None"]):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label("Create Session", classes="modal-title")
+            yield Label("Create TCP Session", classes="modal-title")
 
             yield Label("Host:")
             yield Input(self._host, placeholder="127.0.0.1", id="cs-host")
