@@ -175,7 +175,7 @@ class ForwarderEditModal(ModalScreen):
         "fm-type",
         "fm-listen-host", "fm-listen-port",
         "fm-upstream-host", "fm-upstream-port",
-        "fm-max-sessions", "fm-read-buffer",
+        "fm-max-sessions", "fm-read-buffer", "fm-half-open-timeout",
         "fm-tls-listen", "fm-tls-upstream",
         "fm-ca-cert", "fm-ca-key", "fm-tls-cert", "fm-tls-key",
         "fm-browse-ca-cert", "fm-browse-ca-key",
@@ -320,6 +320,14 @@ class ForwarderEditModal(ModalScreen):
                         value=str(fwd.read_buffer_size),
                         id="fm-read-buffer",
                         restrict=r"\d*",
+                        classes="field-input",
+                    )
+                with Horizontal(classes="field-row"):
+                    yield Label("Half-open timeout (0=off):", classes="field-label")
+                    yield Input(
+                        value=str(fwd.half_open_idle_timeout),
+                        id="fm-half-open-timeout",
+                        restrict=r"[\d.]*",
                         classes="field-input",
                     )
 
@@ -533,6 +541,12 @@ class ForwarderEditModal(ModalScreen):
             except ValueError:
                 return default
 
+        def _float(wid: str, default: float = 0.0) -> float:
+            try:
+                return float(_str(wid))
+            except ValueError:
+                return default
+
         def _sw(wid: str) -> bool:
             return self.query_one(f"#{wid}", Switch).value
 
@@ -562,6 +576,7 @@ class ForwarderEditModal(ModalScreen):
         fwd.upstream_port = _int("fm-upstream-port", 9090)
         fwd.max_sessions = _int("fm-max-sessions", 0)
         fwd.read_buffer_size = _int("fm-read-buffer", 4096)
+        fwd.half_open_idle_timeout = _float("fm-half-open-timeout", 0.0)
 
         # UDP and SOCKS5 cannot use tls_listen — strip it preemptively so
         # ForwarderConfig.__post_init__ doesn't reject the save.

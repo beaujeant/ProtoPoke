@@ -125,7 +125,7 @@ class ForwarderConfig:
     # surviving peer uses keep-alive and never closes would leak its sockets
     # forever — eventually exhausting file descriptors / ephemeral ports and
     # making new upstream connections time out.  0 disables reaping.
-    half_open_idle_timeout: float = 120.0
+    half_open_idle_timeout: float = 0.0
 
     # Interception
     tamper_enabled: bool = False
