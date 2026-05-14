@@ -577,6 +577,7 @@ class ProxyEngine:
             on_first_disconnect=_on_first_disconnect,
             keep_upstream_on_client_disconnect=self.config.keep_upstream_on_client_disconnect,
             keep_client_on_server_disconnect=self.config.keep_client_on_server_disconnect,
+            half_open_idle_timeout=self.config.half_open_idle_timeout,
         )
 
         self._session_relays[session.id] = relay
