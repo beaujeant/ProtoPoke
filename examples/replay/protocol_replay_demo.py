@@ -9,7 +9,7 @@ Usage:
     nc -lk 9090
 
     # Terminal 2: run this demo
-    python examples/protocol_replay_demo.py examples/protocols/chat.proto.yaml
+    python examples/replay/protocol_replay_demo.py examples/protocols/chat.proto.yaml
 
     # Terminal 3: connect, send a LoginRequest (binary), then Ctrl+D
     # (In practice you'd use a real client or craft bytes with Python)
@@ -21,7 +21,6 @@ import sys
 
 from protopoke.api import ProtoPokeAPI
 from protopoke.config import ForwarderConfig
-from protopoke.models import Direction
 from protopoke.protocol.display import render_field_tree, render_frame_header
 
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
@@ -58,6 +57,9 @@ async def main() -> None:
         upstream_host="127.0.0.1",
         upstream_port=9090,
         protocol_definition_path=proto_path,
+        # Legacy half-close: a client disconnect tears the whole session down
+        # so wait_for_session() sees it become inactive once the client leaves.
+        keep_upstream_on_client_disconnect=False,
     )
 
     api = ProtoPokeAPI([config])

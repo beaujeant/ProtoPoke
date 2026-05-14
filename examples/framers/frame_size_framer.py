@@ -15,7 +15,7 @@ Usage in ProtoPoke
 ------------------
 Config tab → Edit Framer → Custom, then set:
 
-  Script path : /path/to/this/file/frame_size_framer.py
+  Script path : /path/to/examples/framers/frame_size_framer.py
 
 That is all.
 

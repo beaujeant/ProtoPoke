@@ -8,7 +8,7 @@ Usage:
     nc -lk 9090
 
     # Terminal 2: start the replay demo
-    python examples/replay_demo.py
+    python examples/replay/replay_demo.py
 
     # Terminal 3: connect and send something
     nc 127.0.0.1 8080
@@ -47,6 +47,9 @@ async def main() -> None:
         listen_port=8080,
         upstream_host="127.0.0.1",
         upstream_port=9090,
+        # Legacy half-close: a client disconnect tears the whole session down
+        # so wait_for_session() sees it become inactive once the client leaves.
+        keep_upstream_on_client_disconnect=False,
     )
     api = ProtoPokeAPI([config])
     await api.start()
@@ -62,7 +65,6 @@ async def main() -> None:
         await api.stop()
         return
 
-    session = api.get_session(session_id)
     frames = api.get_frames(session_id)
     client_frames = [f for f in frames if f.direction is Direction.CLIENT_TO_SERVER]
 
@@ -79,11 +81,11 @@ async def main() -> None:
 
     if result.success:
         print(f"\nReplay successful!")
-        print(f"  Sent {len(result.client_frames_sent())} frames "
+        print(f"  Sent {len(result.frames_sent())} frames "
               f"({result.total_bytes_sent()} bytes)")
-        print(f"  Received {len(result.server_frames_received())} frames "
+        print(f"  Received {len(result.frames_received())} frames "
               f"({result.total_bytes_received()} bytes)")
-        for f in result.server_frames_received():
+        for f in result.frames_received():
             print(f"  ← {f.raw_bytes!r}")
     else:
         print(f"\nReplay failed: {result.error}")

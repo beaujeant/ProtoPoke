@@ -10,7 +10,7 @@ Usage:
     nc -lk 9090
 
     # Terminal 2: run this demo with a protocol definition
-    python examples/protocol_tamper_demo.py examples/protocols/chat.proto.yaml
+    python examples/proxy/protocol_tamper_demo.py examples/protocols/chat.proto.yaml
 
     # Terminal 3: connect and send binary data
     nc 127.0.0.1 8080
