@@ -342,7 +342,7 @@ The same auto-reload happens if the script file cannot be found or fails to impo
 To force a reload of the script (discarding any module-level state) without waiting for an error:
 
 ```python
-rule = api.get_replace_rule(rule_id)
+rule = api.rules_engine.get_rule(rule_id)
 rule.reset_script_state()
 ```
 
@@ -391,10 +391,10 @@ engine.add_rule(ReplaceRule.create("r1", "41", b"\x42"))
 engine.add_rule(ReplaceRule.create("r2", "42", b"\x43"))
 ```
 
-Reorder rules in the TUI by dragging, or via the API:
+Reorder rules in the TUI, or via the rules engine:
 
 ```python
-api.move_replace_rule(rule_id, new_index=0)
+api.rules_engine.move_rule(rule_id, new_index=0)
 ```
 
 ---
@@ -434,10 +434,14 @@ You can restrict tamper mode to specific directions or sessions:
     from protopoke.models import Direction
 
     # Only intercept client-to-server traffic
-    api.set_tamper_direction_filter(Direction.CLIENT_TO_SERVER)
+    api.tamper_direction_filter = Direction.CLIENT_TO_SERVER
 
-    # Only intercept a specific session
-    api.set_tamper_session_filter(session_id)
+    # Only intercept specific sessions (a set of session IDs)
+    api.tamper_session_filter = {session_id}
+
+    # Clear a filter by assigning None
+    api.tamper_direction_filter = None
+    api.tamper_session_filter = None
     ```
 
 === "MCP"

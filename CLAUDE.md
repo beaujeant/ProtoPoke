@@ -8,11 +8,20 @@ read every file from scratch.
 
 ## What this project is
 
-ProtoPoke is a **personal TCP proxy and protocol-analysis tool** — Burp Suite
-for arbitrary binary protocols. It:
+ProtoPoke is a **personal TCP / UDP / SOCKS5 proxy and protocol-analysis
+tool** — Burp Suite for arbitrary binary protocols. It:
 
-- Intercepts any TCP connection and lets an operator inspect, modify, or drop
-  individual frames in real-time (like Burp Suite's Repeater + Intercept).
+- Intercepts any TCP, UDP, or SOCKS5-proxied connection and lets an operator
+  inspect, modify, or drop individual frames in real-time (like Burp Suite's
+  Repeater + Intercept).
+- Each forwarder picks a transport via `config.forwarder_type` (`tcp` /
+  `udp` / `socks5`). TCP/SOCKS5 share the stream relay; UDP uses per-client
+  -tuple flows; SOCKS5 discovers the upstream target from the handshake.
+- Keeps the surviving side of a connection open when one peer disconnects
+  (half-open sessions: `ONLY_SERVER` / `ONLY_CLIENT`) so the operator can
+  keep driving it from Forge. Controlled by the
+  `keep_upstream_on_client_disconnect` / `keep_client_on_server_disconnect`
+  config flags (both default `True`; set `False` for legacy TCP half-close).
 - Decodes binary frames using a YAML/JSON protocol definition (named fields,
   typed, with size/offset metadata for Wireshark-style display).
 - Replays (Forge) captured sessions against a server, optionally editing fields.
@@ -62,9 +71,13 @@ protopoke/
 │                       forge, fuzz, rules, events, …)
 │
 ├── core/
-│   ├── proxy.py        ProxyEngine — asyncio server, one per forwarder
-│   ├── relay.py        BidirectionalRelay + DirectionalRelay — the data path
-│   └── session.py      Session, SessionRegistry — in-memory session store
+│   ├── proxy.py        ProxyEngine — one per forwarder; start() dispatches on
+│   │                   forwarder_type to the TCP / UDP / SOCKS5 listener
+│   ├── relay.py        BidirectionalRelay + DirectionalRelay — the TCP/SOCKS5
+│   │                   data path, incl. half-open (keep-alive) handling
+│   ├── session.py      Session, SessionRegistry — in-memory session store
+│   ├── socks5.py       SOCKS5 wire protocol (RFC 1928 + RFC 1929 user/pass)
+│   └── udp_proxy.py    UdpFlow + datagram protocols — per-client-tuple UDP
 │
 ├── framing/
 │   ├── base.py         Framer ABC (feed/flush/reset/on_desync)
@@ -122,12 +135,19 @@ protopoke/
 │                       SessionUpdatedEvent, FrameCapturedEvent,
 │                       InterceptCompletedEvent, UpstreamConnectionFailedEvent
 │
+├── filters/
+│   └── frame_filter.py FrameDisplayFilter — Traffic-tab display filters
+│
 ├── project/
-│   └── manager.py      ProjectManager — save/load .pp ZIP files
-│                       (project.json, forwarders.json, rules.json, forge.json)
+│   └── manager.py      ProjectManager — save/load .pp ZIP files (project.json,
+│                       forwarders.json, rules.json, forge.json, logs.json,
+│                       filters.json, mcp.json)
+│
+├── utils/
+│   └── script_loader.py  Loads user Python scripts (custom framers, script rules)
 │
 ├── mcp/
-│   ├── server.py       build_mcp_server() — 70 MCP tools wrapping ProtoPokeAPI
+│   ├── server.py       build_mcp_server() — ~74 MCP tools wrapping ProtoPokeAPI
 │   └── host.py         MCPHost — embedded MCP server lifecycle (start/stop/
 │                       rebind), used by the Textual app to serve tools over
 │                       streamable-http in the same process as the UI
@@ -139,7 +159,8 @@ protopoke/
     │                   fuzzer.py, logs.py
     ├── modals/         project.py, add_rule.py, frame_edit.py,
     │                   forwarder_edit.py, framer_edit.py, …
-    ├── widgets/        rule_table.py, parsed_view.py
+    ├── widgets/        rule_table.py, parsed_view.py, segmented_control.py,
+    │                   help_button.py
     └── utils/
         └── frame_codec.py  bytes↔hex-string helpers used across the UI
 ```
@@ -152,7 +173,7 @@ protopoke/
 Client TCP connection
         │
         ▼
-ProxyEngine._handle_client()        [core/proxy.py]
+ProxyEngine._handle_client()        [core/proxy.py]   (SOCKS5: _handle_socks5_client)
   creates Session in SessionRegistry
   opens upstream TCP connection
   builds two Framer instances (one per direction)
@@ -172,6 +193,19 @@ BidirectionalRelay.run()            [core/relay.py]
                 ▼
           writer.write()            forward (or drop) to other side
 ```
+
+UDP forwarders (`core/udp_proxy.py`) bypass the relay: a single listening
+DatagramTransport fans datagrams out to a `UdpFlow` per `(client_host,
+client_port)` tuple, and each datagram runs through the same
+`RawFramer.feed → RulesEngine.apply → TamperController.process → sendto`
+pipeline in its own task. UDP has no half-close — flows live until the
+forwarder stops or `terminate_session()` is called.
+
+Half-close handling (TCP/SOCKS5): when one side disconnects, the relay does
+NOT propagate EOF to the other side by default — it stops that direction's
+relay, transitions the session to `ONLY_SERVER` / `ONLY_CLIENT`, and leaves
+the surviving side fully open (see the `keep_*` config flags). The session
+reaches `CLOSED` only when both sides are gone.
 
 All data objects (`Frame`, `SessionInfo`, `TamperedUnit`, `ParsedMessage`) are
 plain dataclasses — immutable IDs, serialisable to JSON via `.to_dict()`.
@@ -194,8 +228,8 @@ plain dataclasses — immutable IDs, serialisable to JSON via `.to_dict()`.
 
 ## How the TUI event bridge works
 
-The asyncio `EventBus` publishes events from a background thread context.
-Textual widgets must only be updated from the Textual main loop.
+The asyncio `EventBus` publishes events from relay / proxy tasks. Textual
+widgets must only be updated from the Textual main loop.
 
 `ui/app.py` bridges this gap:
 
@@ -279,19 +313,19 @@ Match strategies:
 A `.pp` file is a ZIP archive containing:
 
 ```
-project.json      — metadata (name, version)
+project.json      — metadata (name, format_version, timestamps)
 forwarders.json   — list of ForwarderConfig dicts
 rules.json        — {replace: [...], intercept: [...]}
 forge.json        — list of Playbook dicts
-traffic.json      — list of serialised Session dicts (optional)
-logs.json         — log records (optional)
+logs.json         — captured sessions + frames (the Traffic tab content)
+filters.json      — frame display filters
+mcp.json          — embedded MCP server settings (enabled, host, port)
 ```
 
-Version history:
-- **v3**: single `config.json` (one forwarder only)
-- **v4**: `forwarders.json` (multi-forwarder; current format)
-
-The `ProjectManager.open()` method auto-migrates v3 files to v4 on load.
+`_FORMAT_VERSION` is currently **7** (see `project/manager.py`). Opening a
+file written by a newer version raises an error; older formats are migrated
+forward on load where possible. ZIP loading is bounded (max 32 members,
+100 MB per member).
 
 ---
 
@@ -299,29 +333,38 @@ The `ProjectManager.open()` method auto-migrates v3 files to v4 on load.
 
 ```
 tests/
-├── conftest.py                   shared fixtures (ForwarderConfig, free port, …)
-├── test_proxy_integration.py     full end-to-end proxy flow
-├── test_session.py               Session + SessionRegistry unit tests
-├── test_framing.py               all four framers (raw, delimiter, length_prefix, line)
-├── test_protocol_parser.py       DefinitionBasedDecoder + Encoder
-├── test_protocol_definition.py   YAML/JSON schema loading
-├── test_protocol_display.py      hexdump and tree renderers
-├── test_tamper.py                QueuedTamperController
-├── test_rules.py                 ReplaceRule + InterceptRule + engines
-├── test_forge.py                 ForgeEngine replay
-├── test_forge_models.py          Playbook / PlaybookFrame / PlaybookRun models
-├── test_fuzzing.py               FuzzerEngine + mutators
-├── test_fuzzing_integration.py   end-to-end fuzzing against a real server
-├── test_events.py                EventBus pub/sub
-├── test_config_serialization.py  ForwarderConfig round-trip
-├── test_project_manager.py       save/open .pp ZIP files
-├── test_models.py                Frame / SessionInfo / TamperedUnit / ParsedMessage
-├── test_tls.py                   TLS MITM (CA generation, cert signing, handshake)
-├── test_send_frame.py            api.send_frame() direct send
-├── test_inject_to_server.py      api.inject_to_server() into live session
-├── test_mcp_server.py            MCP tool coverage
-├── test_to_dict_serialisation.py .to_dict() / .from_dict() round-trips
-└── test_sequence.py              SEQUENCE match strategy
+├── conftest.py                     shared fixtures (ForwarderConfig, free port, …)
+├── test_proxy_integration.py       full end-to-end proxy flow
+├── test_session.py                 Session + SessionRegistry unit tests
+├── test_framing.py                 built-in framers (raw, delimiter, length_prefix, line)
+├── test_protocol_parser.py         DefinitionBasedDecoder + Encoder
+├── test_protocol_definition.py     YAML/JSON schema loading
+├── test_protocol_display.py        hexdump and tree renderers
+├── test_tamper.py                  QueuedTamperController
+├── test_rules.py                   ReplaceRule + InterceptRule + engines
+├── test_forge.py                   ForgeEngine replay
+├── test_forge_models.py            Playbook / PlaybookFrame / PlaybookRun models
+├── test_playbook_custom.py         Playbook custom-transport behaviour
+├── test_fuzzing.py                 FuzzerEngine + mutators
+├── test_fuzzing_integration.py     end-to-end fuzzing against a real server
+├── test_events.py                  EventBus pub/sub
+├── test_config_serialization.py    ForwarderConfig round-trip
+├── test_update_forwarder_config.py hot-swap forwarder name/framer/protocol
+├── test_project_manager.py         save/open .pp ZIP files
+├── test_models.py                  Frame / SessionInfo / TamperedUnit / ParsedMessage
+├── test_tls.py                     TLS MITM (CA generation, cert signing, handshake)
+├── test_socks5_handshake.py        SOCKS5 wire-protocol negotiation
+├── test_socks5_proxy.py            end-to-end SOCKS5 forwarder
+├── test_udp_proxy.py               end-to-end UDP forwarder
+├── test_udp_forge.py               Forge/replay over UDP
+├── test_udp_session_reuse.py       UDP per-tuple flow reuse
+├── test_send_frame.py              api.send_frame() direct send
+├── test_inject_to_server.py        api.inject_to_server() into live session
+├── test_inject_to_client.py        api.inject_to_client() into live session
+├── test_mcp_server.py              MCP tool coverage
+├── test_mcp_host.py                MCPHost lifecycle
+├── test_segmented_control.py       SegmentedControl widget
+└── test_to_dict_serialisation.py   .to_dict() / .from_dict() round-trips
 ```
 
 ---
@@ -332,6 +375,10 @@ tests/
 |------|------|
 | Change what ProtoPokeAPI exposes | `protopoke/api.py` |
 | Change frame capture / interception data path | `protopoke/core/relay.py` |
+| Change TCP/UDP/SOCKS5 listener dispatch | `protopoke/core/proxy.py` |
+| Change UDP flow handling | `protopoke/core/udp_proxy.py` |
+| Change SOCKS5 handshake / wire protocol | `protopoke/core/socks5.py` |
+| Add a forwarder config field | `protopoke/config.py` |
 | Add a framer | `protopoke/framing/` |
 | Add a protocol field type | `protopoke/protocol/parser/fields.py` |
 | Add a match strategy | `protopoke/protocol/parser/matcher.py` |

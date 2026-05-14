@@ -1,6 +1,6 @@
 # MCP Tool Reference
 
-ProtoPoke exposes 70 tools through MCP. All tools return JSON-serialisable dicts; bytes fields are hex-encoded strings.
+ProtoPoke exposes 70+ tools through MCP. All tools return JSON-serialisable dicts; bytes fields are hex-encoded strings.
 
 ## Proxy Lifecycle
 
@@ -15,6 +15,9 @@ ProtoPoke exposes 70 tools through MCP. All tools return JSON-serialisable dicts
 | Tool | Description |
 |------|-------------|
 | `list_forwarders` | All configured forwarders with status |
+| `add_forwarder` | Add a new forwarder (TCP / UDP / SOCKS5) |
+| `update_forwarder` | Update an existing forwarder's full configuration |
+| `remove_forwarder` | Remove a forwarder by name |
 | `start_forwarder` | Start a specific forwarder by name |
 | `stop_forwarder` | Stop a specific forwarder by name |
 | `update_forwarder_config` | Hot-swap name, framer, and/or protocol definition on a running forwarder |
@@ -114,6 +117,7 @@ ProtoPoke exposes 70 tools through MCP. All tools return JSON-serialisable dicts
 
 | Tool | Description |
 |------|-------------|
+| `list_framers` | List the available built-in framers and their parameters |
 | `set_framer` | Hot-swap the active framer on all running sessions without restart |
 
 ## Variables
@@ -122,6 +126,7 @@ ProtoPoke exposes 70 tools through MCP. All tools return JSON-serialisable dicts
 |------|-------------|
 | `get_variables` | Get the current variable store |
 | `set_variable` | Set a variable value |
+| `delete_variable` | Remove a single variable |
 | `clear_variables` | Clear all variables |
 
 ## TLS / CA
@@ -134,6 +139,7 @@ ProtoPoke exposes 70 tools through MCP. All tools return JSON-serialisable dicts
 
 | Tool | Description |
 |------|-------------|
+| `list_mutators` | List the available mutators and their parameters |
 | `fuzz_start` | Start a fuzzing campaign (runs in background) |
 | `fuzz_status` | Poll campaign progress |
 | `fuzz_results` | Fetch results (optionally only interesting ones) |
@@ -153,10 +159,3 @@ ProtoPoke exposes 70 tools through MCP. All tools return JSON-serialisable dicts
 | `field_overflow` | `lengths` (default: [256, 1024, 4096]) | Yes |
 | `null_byte` | — | Yes |
 | `length_mangle` | — | Yes |
-
-## Config
-
-| Tool | Description |
-|------|-------------|
-| `get_config` | Current ForwarderConfig as a JSON dict |
-| `set_config` | Update one or more config fields at runtime |
