@@ -1,6 +1,8 @@
-# Traffic
+---
+title: "Traffic"
+---
 
-The **Traffic** tab (++f2++) is the live capture view. Once a forwarder is
+The **Traffic** tab (`F2`) is the live capture view. Once a forwarder is
 running and a client connects, every message that crosses the wire shows up
 here.
 
@@ -27,8 +29,8 @@ sequence number, the direction arrow (`→` / `←`), a server→client sequence
 number, the framer that produced the frame, its byte length, and a hex
 preview.
 
-Select a single frame with the arrow keys or a click. Hold ++shift++ with
-++up++ / ++down++ to extend a multi-frame selection range (++esc++ cancels it).
+Select a single frame with the arrow keys or a click. Hold `Shift` with
+`Up` / `Down` to extend a multi-frame selection range (`Esc` cancels it).
 
 ### Detail
 
@@ -47,15 +49,15 @@ Every byte that arrives goes through two layers before you see it:
    framer cuts the raw stream into discrete **frames** (one frame = one
    application message). UDP is already message-oriented, so each datagram
    is one frame. The framer is chosen per forwarder on the
-   [Config](config.md) tab. Built-in options: `raw`, `delimiter`,
+   [Config](/ui/config) tab. Built-in options: `raw`, `delimiter`,
    `length_prefix`, `line`, plus custom scripts. Full reference:
-   [Framers](../reference/framers.md).
+   [Framers](/reference/framers).
 
 2. **Protocol definition (parser)** — an optional YAML/JSON file that
    describes the protocol's message types and field layouts. When one is
    loaded, frames are decoded into named, typed fields and the detail pane's
    **Parsed** view comes alive. Full reference:
-   [Protocol Definitions](../reference/protocol-definitions.md).
+   [Protocol Definitions](/reference/protocol-definitions).
 
 A good workflow: start with the `raw` framer, look at the hex in the detail
 pane to spot message boundaries, pick the right framer, then iteratively
@@ -75,12 +77,12 @@ Frames pane *displays*, not what is captured.
 ## Sending a frame to Forge
 
 Select one or more frames (using shift and arrows) and click **→ Forge** 
-to copy them into the [Forge](forge.md) tab — either as a new playbook or 
+to copy them into the [Forge](/ui/forge) tab — either as a new playbook or 
 appended to an existing one. This is the "send from traffic" path: 
 capture something real, then replay or edit it.
 
 ## Next
 
-- [Intercept](intercept.md) — hold and rewrite frames live
-- [Framers](../reference/framers.md) / [Protocol Definitions](../reference/protocol-definitions.md)
-- [Core Library — Traffic](../core/traffic.md) — the same, via the API
+- [Intercept](/ui/intercept) — hold and rewrite frames live
+- [Framers](/reference/framers) / [Protocol Definitions](/reference/protocol-definitions)
+- [Core Library — Traffic](/core/traffic) — the same, via the API

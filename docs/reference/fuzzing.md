@@ -1,9 +1,14 @@
-# Fuzzing (experimental)
+---
+title: "Fuzzing (experimental)"
+---
 
-!!! warning "Experimental"
-    The fuzzer is **experimental**. The API, mutator set, and anomaly
-    heuristics may change, and results should be treated as leads to
-    investigate rather than confirmed findings.
+<Warning>
+  **Experimental**
+
+  The fuzzer is **experimental**. The API, mutator set, and anomaly
+  heuristics may change, and results should be treated as leads to
+  investigate rather than confirmed findings.
+</Warning>
 
 ProtoPoke includes a replay-based fuzzer: it takes a captured session as a
 baseline, mutates frame bytes each iteration, replays the session, and
@@ -12,17 +17,16 @@ size deltas).
 
 ## Running a campaign
 
-=== "User Interface"
-
-    On the **Fuzzer** tab (++f5++): pick a captured session, choose which
+<Tabs>
+  <Tab title="User Interface">
+    On the **Fuzzer** tab (`F5`): pick a captured session, choose which
     mutators to enable, set an iteration count, optionally tick "Stop on
     crash", and click **▶ Start Campaign**. Results stream into a table
     flagged with `C` (connection reset), `T` (timeout), and `★`
     (interesting). Click a row to open the mutated bytes in the
-    [Forge](../ui/forge.md) tab for replay.
-
-=== "Core Library"
-
+    [Forge](/ui/forge) tab for replay.
+  </Tab>
+  <Tab title="Core Library">
     ```python
     from protopoke.fuzzing.mutators.raw import BitFlipMutator, KnownBadMutator
 
@@ -37,6 +41,8 @@ size deltas).
         print(f"iteration {r.iteration} ({r.mutator_name}): "
               f"reset={r.connection_reset} timed_out={r.timed_out}")
     ```
+  </Tab>
+</Tabs>
 
 ## Built-in mutators
 

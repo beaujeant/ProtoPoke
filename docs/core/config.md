@@ -1,4 +1,6 @@
-# Config
+---
+title: "Config"
+---
 
 In the library, configuration is a `ForwarderConfig` dataclass per
 forwarder. `ProtoPokeAPI` takes a list of them and wires up the shared
@@ -143,5 +145,5 @@ for safety (max 32 members, 100 MB per member).
 
 ## Next
 
-- [Traffic](traffic.md) — sessions, events, and decoding frames
-- [User Interface — Config](../ui/config.md) — the same, in the TUI
+- [Traffic](/core/traffic) — sessions, events, and decoding frames
+- [User Interface — Config](/ui/config) — the same, in the TUI

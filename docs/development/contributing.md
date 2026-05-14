@@ -1,4 +1,6 @@
-# Contributing
+---
+title: "Contributing"
+---
 
 ## Setup
 
@@ -76,4 +78,4 @@ tests/
 
 ## Project Structure
 
-See [Architecture](architecture.md) for a detailed breakdown of the codebase.
+See [Architecture](/development/architecture) for a detailed breakdown of the codebase.

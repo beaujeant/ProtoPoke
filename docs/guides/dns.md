@@ -1,4 +1,6 @@
-# Guide: DNS
+---
+title: "Guide: DNS"
+---
 
 This guide is a worked example that ties together the three customisation
 points ProtoPoke gives you, using DNS as the target protocol:
@@ -86,7 +88,7 @@ What this demonstrates about the DSL:
 Load it via *Config → Protocol Definition*, or
 `protocol_definition_path="examples/protocols/dns.proto.yaml"`. The full
 field-type and matcher reference is in
-[Protocol Definitions](../reference/protocol-definitions.md).
+[Protocol Definitions](/reference/protocol-definitions).
 
 ---
 
@@ -141,7 +143,7 @@ Add it as a **Custom script** replace rule:
 | Scope | `Traffic` only |
 
 The `apply()` contract, the shared `variables` store, and auto-reload are
-documented in [Custom Replace Scripts](../reference/replace-scripts.md).
+documented in [Custom Replace Scripts](/reference/replace-scripts).
 
 ---
 
@@ -166,7 +168,7 @@ documented in [Custom Replace Scripts](../reference/replace-scripts.md).
 
 ## Where next
 
-- [Framers](../reference/framers.md) — the full custom-framer reference
-- [Protocol Definitions](../reference/protocol-definitions.md) — every field type and matcher
-- [Custom Replace Scripts](../reference/replace-scripts.md) — the `apply()` API in depth
-- [SSH-BPP guide](ssh-bpp.md) — a second worked example *(in progress)*
+- [Framers](/reference/framers) — the full custom-framer reference
+- [Protocol Definitions](/reference/protocol-definitions) — every field type and matcher
+- [Custom Replace Scripts](/reference/replace-scripts) — the `apply()` API in depth
+- [SSH-BPP guide](/guides/ssh-bpp) — a second worked example *(in progress)*

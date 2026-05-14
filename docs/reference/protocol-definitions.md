@@ -1,4 +1,6 @@
-# Protocol Definitions
+---
+title: "Protocol Definitions"
+---
 
 ProtoPoke can decode raw frames into named, typed fields using a YAML or JSON protocol definition file. This gives you Wireshark-style display with per-field colour-coded hex dumps and a nested field tree — without writing any code.
 
@@ -43,12 +45,11 @@ protocol:
 
 ## Loading a Definition
 
-=== "TUI"
-
+<Tabs>
+  <Tab title="TUI">
     Config tab → set **Protocol Definition File** to the path of your `.yaml` file → click **Apply**.
-
-=== "Python API"
-
+  </Tab>
+  <Tab title="Python API">
     ```python
     # Via config (loaded on start)
     fwd = ForwarderConfig(
@@ -66,12 +67,13 @@ protocol:
         "messages": [...],
     })
     ```
-
-=== "MCP"
-
+  </Tab>
+  <Tab title="MCP">
     ```
     set_protocol_file(path="/path/to/myproto.yaml")
     ```
+  </Tab>
+</Tabs>
 
 ## Match Strategies
 

@@ -1,4 +1,6 @@
-# MCP Configuration
+---
+title: "MCP Configuration"
+---
 
 The MCP server runs **embedded in the ProtoPoke UI process**, bound to the
 same `ProtoPokeAPI` instance. AI clients connect to it over HTTP

@@ -1,4 +1,6 @@
-# Intercept
+---
+title: "Intercept"
+---
 
 The tamper system has two parts: the **intercept queue** (frames paused for
 a manual verdict) and the **rules engine** (intercept rules that decide what
@@ -145,7 +147,7 @@ api.add_replace_rule(ReplaceRule.create(
 
 The `apply(data, variables)` contract, the shared `variables` store,
 module-level state, and auto-reload are documented in
-[Custom Replace Scripts](../reference/replace-scripts.md).
+[Custom Replace Scripts](/reference/replace-scripts).
 
 ### Managing rules
 
@@ -157,6 +159,6 @@ api.rules_engine.move_rule(rule_id, new_index=0)   # reorder
 
 ## Next
 
-- [Custom Replace Scripts](../reference/replace-scripts.md)
-- [Forge](forge.md) — send, replay, playbooks
-- [User Interface — Intercept](../ui/intercept.md) — the same, in the TUI
+- [Custom Replace Scripts](/reference/replace-scripts)
+- [Forge](/core/forge) — send, replay, playbooks
+- [User Interface — Intercept](/ui/intercept) — the same, in the TUI

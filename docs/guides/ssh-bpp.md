@@ -1,14 +1,19 @@
-# Guide: SSH Binary Packet Protocol
+---
+title: "Guide: SSH Binary Packet Protocol"
+---
 
-!!! note "In progress"
-    This guide is a placeholder. It will document the SSH Binary Packet
-    Protocol (BPP) exercise built for ProtoPoke. The outline below is the
-    intended structure — content to follow.
+<Note>
+  **In progress**
+
+  This guide is a placeholder. It will document the SSH Binary Packet
+  Protocol (BPP) exercise built for ProtoPoke. The outline below is the
+  intended structure — content to follow.
+</Note>
 
 The SSH transport layer wraps everything above it in the **Binary Packet
 Protocol** (RFC 4253 §6): each packet carries a length, a padding length,
 a payload, random padding, and — once a key exchange completes — a MAC.
-That makes it a good second worked example after the [DNS guide](dns.md),
+That makes it a good second worked example after the [DNS guide](/guides/dns),
 because it exercises the same three customisation points against a more
 involved, partly-encrypted protocol.
 
@@ -42,7 +47,7 @@ involved, partly-encrypted protocol.
 
 ## Where next
 
-- [DNS guide](dns.md) — the completed worked example
-- [Framers](../reference/framers.md)
-- [Protocol Definitions](../reference/protocol-definitions.md)
-- [Custom Replace Scripts](../reference/replace-scripts.md)
+- [DNS guide](/guides/dns) — the completed worked example
+- [Framers](/reference/framers)
+- [Protocol Definitions](/reference/protocol-definitions)
+- [Custom Replace Scripts](/reference/replace-scripts)

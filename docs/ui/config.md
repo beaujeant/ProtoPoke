@@ -1,6 +1,8 @@
-# Config
+---
+title: "Config"
+---
 
-The **Config** tab (++f1++) is where you define forwarders, control logging,
+The **Config** tab (`F1`) is where you define forwarders, control logging,
 manage the embedded MCP server, and save your work as a project. Nothing is
 proxied until you start a forwarder here.
 
@@ -38,8 +40,8 @@ they can mix transports (one TCP, one UDP, one SOCKS5).
 | **Connect timeout** | How long to wait for the upstream connection. |
 | **Read buffer size** | Bytes read per socket read. |
 | **Max sessions** | Concurrency cap (`0` = unlimited). |
-| **Framer** | How the byte stream is cut into frames — `raw`, `delimiter`, `length_prefix`, or a custom script. Configured via the framer sub-modal. See [Framers](../reference/framers.md). |
-| **Protocol definition** | Path to a YAML/JSON file for decoding frames into named fields. See [Protocol Definitions](../reference/protocol-definitions.md). |
+| **Framer** | How the byte stream is cut into frames — `raw`, `delimiter`, `length_prefix`, or a custom script. Configured via the framer sub-modal. See [Framers](/reference/framers). |
+| **Protocol definition** | Path to a YAML/JSON file for decoding frames into named fields. See [Protocol Definitions](/reference/protocol-definitions). |
 | **TLS** | TLS termination on the client side and/or TLS to the upstream — see below. |
 | **Log level** | Optional per-forwarder override of the global log level. |
 
@@ -59,7 +61,7 @@ they can mix transports (one TCP, one UDP, one SOCKS5).
 When one peer disconnects, ProtoPoke does **not** immediately tear down the
 other side. The session moves to `only server` or `only client` and the
 surviving connection stays open, so you can keep driving it from the
-[Forge](forge.md) tab. The session only reaches `closed` once both sides are
+[Forge](/ui/forge) tab. The session only reaches `closed` once both sides are
 gone. This is on by default; the legacy TCP half-close behaviour can be
 restored per-forwarder.
 
@@ -86,7 +88,7 @@ A **log level** dropdown on the Config tab (`DEBUG` / `INFO` / `WARNING` /
 `ERROR`) sets the global logging level for all forwarders. A forwarder can
 override it in its own edit form.
 
-Log output itself is shown on the **Logs** tab (++f6++): a table of timestamp,
+Log output itself is shown on the **Logs** tab (`F6`): a table of timestamp,
 level, logger name, and message, colour-coded by severity, with a level
 filter dropdown. Use `DEBUG` while reverse engineering a protocol, then dial
 it back once things work.
@@ -99,7 +101,7 @@ it back once things work.
 Below the forwarder table is the **MCP** section. Toggle it on to start the
 embedded MCP server, which exposes ProtoPoke's operations as AI tools bound
 to the *same* state the UI shows. Configure host/port and reveal the
-connection URL here. See [MCP Server](../mcp/overview.md).
+connection URL here. See [MCP Server](/mcp/overview).
 
 ## Projects
 
@@ -108,10 +110,10 @@ archive) so you can save and reopen it later.
 
 | Action | Shortcut |
 |--------|----------|
-| New project | ++ctrl+n++ |
-| Open project | ++ctrl+o++ |
-| Save project | ++ctrl+s++ |
-| Save as… | ++ctrl+shift+s++ |
+| New project | `Ctrl+N` |
+| Open project | `Ctrl+O` |
+| Save project | `Ctrl+S` |
+| Save as… | `Ctrl+Shift+S` |
 
 A `.pp` archive contains:
 
@@ -129,5 +131,5 @@ Loading is bounded for safety (max 32 members, 100 MB per member).
 
 ## Next
 
-- [Traffic](traffic.md) — read captured traffic, choose framers and parsers
-- [Core Library — Config](../core/config.md) — the same, via `ForwarderConfig`
+- [Traffic](/ui/traffic) — read captured traffic, choose framers and parsers
+- [Core Library — Config](/core/config) — the same, via `ForwarderConfig`

@@ -1,4 +1,6 @@
-# Framing
+---
+title: "Framing"
+---
 
 TCP is a byte stream — the OS delivers bytes in arbitrary chunks that bear no relation to application message boundaries. A single `read()` may return half a message, exactly one message, or three messages fused together.
 
@@ -11,11 +13,14 @@ client ──bytes──▶ [client→server framer] ──frames──▶ tampe
 server ──bytes──▶ [server→client framer] ──frames──▶ tamper / parse / log
 ```
 
-!!! note "UDP forwarders"
-    Framing only applies to the stream-oriented transports (TCP and SOCKS5).
-    UDP is already message-oriented — one datagram is one frame — so UDP
-    forwarders always use the `raw` framer and the framer selector is
-    disabled for them.
+<Note>
+  **UDP forwarders**
+
+  Framing only applies to the stream-oriented transports (TCP and SOCKS5).
+  UDP is already message-oriented — one datagram is one frame — so UDP
+  forwarders always use the `raw` framer and the framer selector is
+  disabled for them.
+</Note>
 
 ## Choosing a Framer
 
@@ -28,8 +33,11 @@ server ──bytes──▶ [server→client framer] ──frames──▶ tampe
 | Line-oriented with mixed endings | `line` | HTTP/1.x, any `\r\n` or `\n` protocol |
 | Custom boundary logic | Custom framer script | Anything else |
 
-!!! tip "How to find the right framer"
-    Capture a few frames with `raw` first, open them in a hex editor, and look for patterns. A 2- or 4-byte integer at the start whose value matches the remaining byte count is a length prefix. Repeated `\r\n` or `\x00` terminations mean a delimiter framer.
+<Tip>
+  **How to find the right framer**
+
+  Capture a few frames with `raw` first, open them in a hex editor, and look for patterns. A 2- or 4-byte integer at the start whose value matches the remaining byte count is a length prefix. Repeated `\r\n` or `\x00` terminations mean a delimiter framer.
+</Tip>
 
 ## Built-in Framers
 
@@ -37,8 +45,8 @@ server ──bytes──▶ [server→client framer] ──frames──▶ tampe
 
 Every `read()` chunk becomes one frame immediately. No buffering or boundary detection. Good for initial observation; unreliable for parsing.
 
-=== "Python API"
-
+<Tabs>
+  <Tab title="Python API">
     ```python
     fwd = ForwarderConfig(
         listen_port=8080,
@@ -47,17 +55,18 @@ Every `read()` chunk becomes one frame immediately. No buffering or boundary det
         # framer_name defaults to "raw"
     )
     ```
-
-=== "TUI"
-
+  </Tab>
+  <Tab title="TUI">
     Config tab → Framer: `raw`
+  </Tab>
+</Tabs>
 
 ### `delimiter`
 
 Accumulates bytes until a configurable byte sequence appears, then emits everything before it as one frame. The delimiter is consumed and not included in the frame.
 
-=== "Python API"
-
+<Tabs>
+  <Tab title="Python API">
     ```python
     # Split on CRLF
     fwd = ForwarderConfig(
@@ -73,17 +82,18 @@ Accumulates bytes until a configurable byte sequence appears, then emits everyth
         framer_kwargs={"delimiter": b"\x00"},
     )
     ```
-
-=== "TUI"
-
+  </Tab>
+  <Tab title="TUI">
     Config tab → Framer: `delimiter` → set delimiter bytes
+  </Tab>
+</Tabs>
 
 ### `length_prefix`
 
 Reads a fixed-size integer header that declares the payload length, buffers until that many bytes arrive, then emits the full `prefix + payload` as one frame.
 
-=== "Python API"
-
+<Tabs>
+  <Tab title="Python API">
     ```python
     # 4-byte big-endian length field
     fwd = ForwarderConfig(
@@ -104,10 +114,11 @@ Reads a fixed-size integer header that declares the payload length, buffers unti
         },
     )
     ```
-
-=== "TUI"
-
+  </Tab>
+  <Tab title="TUI">
     Config tab → Framer: `length_prefix` → configure prefix length, byte order, offset, and length adjustment
+  </Tab>
+</Tabs>
 
 **Parameters:**
 
@@ -132,8 +143,8 @@ When none of the built-in framers fit, write a Python script with two functions.
 
 ### Loading a Custom Framer
 
-=== "Python API"
-
+<Tabs>
+  <Tab title="Python API">
     ```python
     fwd = ForwarderConfig(
         listen_port=8080,
@@ -142,10 +153,11 @@ When none of the built-in framers fit, write a Python script with two functions.
         custom_framer_path="/path/to/my_framer.py",
     )
     ```
-
-=== "TUI"
-
+  </Tab>
+  <Tab title="TUI">
     Config tab → Edit Framer → Custom → Script path
+  </Tab>
+</Tabs>
 
 `custom_framer_path` takes precedence over `framer_name`.
 
