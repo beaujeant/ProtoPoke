@@ -39,15 +39,22 @@ python -m protopoke.ui.app
 
 ## Config Tab
 
-The Config tab is where you set up the proxy before starting it:
+The Config tab is where you manage forwarders before starting them. Each
+forwarder is edited in a modal with:
 
+- **Type** — `TCP`, `UDP`, or `SOCKS5`. The form adapts to the choice:
+  UDP and SOCKS5 hide the TLS-listen option, UDP locks the framer to `raw`,
+  and SOCKS5 shows username/password auth fields instead of an upstream
+  host/port (the target comes from each client's SOCKS handshake).
 - **Listener settings** — bind address and port
-- **Upstream settings** — target host and port
-- **TLS** — enable TLS termination on the client side (MITM) and/or TLS to the upstream
+- **Upstream settings** — target host and port (TCP/UDP only)
+- **TLS** — enable TLS termination on the client side (MITM) and/or TLS to the upstream (TCP only)
 - **Framing** — select a framer (raw, delimiter, length_prefix, line) and configure its parameters, or load a custom framer script
 - **Protocol definition** — path to a YAML/JSON file for protocol decoding
 
-Multiple forwarders can be configured to proxy several targets simultaneously.
+Multiple forwarders can be configured to proxy several targets — and several
+transports — simultaneously. The Config tab also hosts the embedded MCP
+server controls (enable switch, host, port).
 
 ## Traffic Tab
 

@@ -4,16 +4,19 @@ ProtoPoke can save and load your work as project files (`.pp`), preserving proxy
 
 ## Project File Format
 
-A `.pp` file is a ZIP archive containing:
+A `.pp` file is a standard ZIP archive containing:
 
 | File | Contents |
 |------|----------|
-| `project.json` | Project metadata (name, version) |
+| `project.json` | Project metadata (name, format version, timestamps) |
 | `forwarders.json` | List of forwarder configurations |
 | `rules.json` | Replace rules and intercept rules |
-| `forge.json` | Playbook definitions |
-| `traffic.json` | Captured session data (optional) |
-| `logs.json` | Log records (optional) |
+| `forge.json` | Playbook definitions (frames, run history, connection config) |
+| `logs.json` | Captured sessions and frames (the Traffic tab content) |
+| `filters.json` | Frame display filters |
+| `mcp.json` | Embedded MCP server settings (enabled flag, host, port) |
+
+The archive is loaded with safety limits (max 32 members, 100 MB per member).
 
 ## Managing Projects
 
@@ -28,24 +31,31 @@ A `.pp` file is a ZIP archive containing:
 
 ### Python API
 
+`ProjectManager` holds the project state in memory; `open()` returns a
+`ProjectState` you can wire into a running `ProtoPokeAPI`.
+
 ```python
 from protopoke.project.manager import ProjectManager
 
-manager = ProjectManager()
+pm = ProjectManager()
 
-# Save
-manager.save("/path/to/project.pp", api)
+# Start a fresh project and save it to a path
+pm.new("My Capture")
+pm.forwarders[0].listen_port = 9000
+pm.save_as("/path/to/project.pp")
 
-# Load
-state = manager.open("/path/to/project.pp")
-# state contains forwarders, rules, playbooks, traffic
+# Re-save to the same path later
+pm.save()
+
+# Load an existing project
+pm2 = ProjectManager()
+state = pm2.open("/path/to/project.pp")
+# state.forwarders, state.rules_engine, state.intercept_filter,
+# state.playbooks, state.captured_sessions, state.mcp_settings, ...
 ```
 
-## Version History
+## Format Version
 
-| Version | Format |
-|---------|--------|
-| v3 | Single `config.json` (one forwarder only) |
-| v4 | `forwarders.json` (multi-forwarder support) — current format |
-
-The `ProjectManager.open()` method automatically migrates v3 files to v4 on load.
+Project files carry a `format_version` field (currently **7**). Opening a
+file created by a *newer* version of ProtoPoke raises an error asking you to
+upgrade; older formats are migrated forward on load where possible.

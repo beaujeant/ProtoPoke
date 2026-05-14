@@ -11,6 +11,12 @@ client ──bytes──▶ [client→server framer] ──frames──▶ tampe
 server ──bytes──▶ [server→client framer] ──frames──▶ tamper / parse / log
 ```
 
+!!! note "UDP forwarders"
+    Framing only applies to the stream-oriented transports (TCP and SOCKS5).
+    UDP is already message-oriented — one datagram is one frame — so UDP
+    forwarders always use the `raw` framer and the framer selector is
+    disabled for them.
+
 ## Choosing a Framer
 
 | Protocol style | Framer | Example protocols |

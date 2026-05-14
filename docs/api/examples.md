@@ -21,9 +21,9 @@ async def main():
     api = ProtoPokeAPI([fwd])
 
     # Subscribe to events
-    api.on_session_opened(lambda e: print(f"Session opened: {e.session_id}"))
-    api.on_session_closed(lambda e: print(f"Session closed: {e.session_id}"))
-    api.on_frame_captured(lambda e: print(f"Frame captured: {e.frame_id}"))
+    api.on_session_opened(lambda e: print(f"Session opened: {e.session.id}"))
+    api.on_session_closed(lambda e: print(f"Session closed: {e.session.id}"))
+    api.on_frame_captured(lambda e: print(f"Frame captured: {e.frame.id}"))
 
     await api.start()
     await api.serve_forever()
@@ -118,10 +118,13 @@ async def main():
 
     sessions = api.list_sessions()
     if sessions:
+        # forge_session() returns a ForgeResult wrapping a new replayed Session.
         result = await api.forge_session(sessions[0].id)
-        for entry in result.entries:
-            print(f"Sent: {entry.sent_bytes.hex()}")
-            print(f"Received: {entry.received_bytes.hex()}")
+        print(f"Replay success: {result.success}")
+        for frame in result.frames_sent():
+            print(f"Sent:     {frame.raw_bytes.hex()}")
+        for frame in result.frames_received():
+            print(f"Received: {frame.raw_bytes.hex()}")
 
     await api.stop()
 

@@ -1,8 +1,10 @@
 # ProtoPoke
 
-A TCP proxy and protocol analysis tool — Burp Suite for arbitrary binary protocols.
+A TCP / UDP / SOCKS5 proxy and protocol analysis tool — Burp Suite for arbitrary binary protocols.
 
-Intercept any TCP connection, inspect and modify frames in real time, decode binary protocols with a YAML definition, replay sessions, fuzz with pluggable mutators, and let an AI assistant drive it all via MCP.
+Intercept any TCP, UDP, or SOCKS5-proxied connection, inspect and modify frames in real time, decode binary protocols with a YAML definition, replay sessions, fuzz with pluggable mutators, and let an AI assistant drive it all via MCP.
+
+Each forwarder can be a plain **TCP** proxy, a **UDP** proxy (per-client-tuple flows), or a **SOCKS5** proxy (per-connection target discovered from the SOCKS handshake). When the client or upstream server disconnects, ProtoPoke keeps the other side open by default — the session moves to `only server` / `only client` so you can keep driving the live connection from the Forge tab.
 
 ## Installation
 
@@ -71,6 +73,7 @@ from protopoke.config import ForwarderConfig
 async def main():
     fwd = ForwarderConfig(
         name="Default",
+        forwarder_type="tcp",      # "tcp" | "udp" | "socks5"
         listen_port=8080,
         upstream_host="10.0.0.1",
         upstream_port=9090,

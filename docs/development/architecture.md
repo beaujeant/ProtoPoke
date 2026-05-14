@@ -10,9 +10,13 @@ protopoke/
 ├── api.py              ProtoPokeAPI — the single public facade
 │
 ├── core/
-│   ├── proxy.py        ProxyEngine — asyncio server, one per forwarder
-│   ├── relay.py        BidirectionalRelay + DirectionalRelay — the data path
-│   └── session.py      Session, SessionRegistry — in-memory session store
+│   ├── proxy.py        ProxyEngine — one per forwarder; dispatches on
+│   │                   forwarder_type to the TCP / UDP / SOCKS5 listener
+│   ├── relay.py        BidirectionalRelay + DirectionalRelay — the TCP data
+│   │                   path, incl. half-open (keep-alive) handling
+│   ├── session.py      Session, SessionRegistry — in-memory session store
+│   ├── socks5.py       SOCKS5 wire protocol (RFC 1928 + RFC 1929 auth)
+│   └── udp_proxy.py    UdpFlow + datagram protocols — per-client-tuple UDP
 │
 ├── framing/
 │   ├── base.py         Framer ABC
@@ -64,15 +68,17 @@ protopoke/
 ├── events/
 │   └── bus.py          EventBus (pub/sub) + event types
 │
+├── filters/
+│   └── frame_filter.py FrameDisplayFilter — Traffic-tab display filters
+│
 ├── project/
 │   └── manager.py      ProjectManager — save/load .pp ZIP files
 │
-├── storage/
-│   ├── base.py         StorageBackend ABC, NullStorageBackend, MemoryStorageBackend
-│   └── sqlite.py       SqliteStorageBackend
+├── utils/
+│   └── script_loader.py  Loads user Python scripts (custom framers, rules)
 │
 ├── mcp/
-│   ├── server.py       build_mcp_server() — 50+ MCP tools
+│   ├── server.py       build_mcp_server() — 70+ MCP tools
 │   └── host.py         MCPHost — embedded server lifecycle (start/stop/
 │                       rebind) running inside the Textual app process
 │
@@ -80,10 +86,41 @@ protopoke/
     ├── app.py          ProtoPoke(App) — Textual root + event bridge
     ├── tabs/           config, traffic, tamper, forge, fuzzer, logs
     ├── modals/         project, add_rule, frame_edit, forwarder_edit, etc.
-    ├── widgets/        rule_table, parsed_view
+    ├── widgets/        rule_table, parsed_view, segmented_control, etc.
     └── utils/
         └── frame_codec.py  bytes ↔ hex-string helpers
 ```
+
+Sessions and frames are kept entirely in memory for the lifetime of the
+process; the only persistence is the `.pp` project file written by
+`ProjectManager`. There is no database or storage-backend layer.
+
+## Forwarder Types
+
+`ProxyEngine.start()` dispatches on `config.forwarder_type`:
+
+| Type | Listener | Session model |
+|------|----------|---------------|
+| `tcp` (default) | `asyncio.start_server` | One `BidirectionalRelay` per accepted connection |
+| `socks5` | `asyncio.start_server` + RFC 1928/1929 handshake | Same as TCP, but the upstream target is discovered per-connection from the SOCKS `CONNECT` request; `socks_auth_user`/`socks_auth_pass` enable username/password auth |
+| `udp` | `loop.create_datagram_endpoint` | One `UdpFlow` per `(client_host, client_port)` tuple; no half-open / FIN — flows live until terminated or the forwarder stops |
+
+UDP and SOCKS5 forwarders cannot enable `tls_listen` (DTLS is not supported,
+and wrapping the SOCKS handshake in TLS is non-standard). UDP forwarders
+always use the `raw` framer (one datagram = one frame).
+
+## Half-Open (Keep-Alive) Sessions
+
+For TCP and SOCKS5, when one side closes its connection the proxy keeps the
+other side open by default instead of propagating a TCP half-close:
+
+- Client disconnects → session → `ONLY_SERVER`; `keep_upstream_on_client_disconnect` (default `True`)
+- Server disconnects → session → `ONLY_CLIENT`; `keep_client_on_server_disconnect` (default `True`)
+
+This lets the operator keep driving the still-open side from the Forge tab.
+Set either flag to `False` to restore the legacy behaviour where the EOF is
+forwarded as a TCP half-close. The session reaches `CLOSED` only when both
+sides are gone (or `terminate_session()` is called).
 
 ## Data Flow
 
@@ -112,16 +149,21 @@ BidirectionalRelay.run()            [core/relay.py]
           writer.write()            forward (or drop) to other side
 ```
 
+The UDP path (`core/udp_proxy.py`) mirrors the same per-frame pipeline —
+`RawFramer.feed` → `RulesEngine.apply` → `TamperController.process` →
+`sendto` — but each datagram is processed in its own task rather than via a
+long-lived relay loop.
+
 ## Design Principles
 
 | Principle | How it manifests |
 |-----------|-----------------|
 | **No global state** | Every component receives dependencies as constructor args. ProtoPokeAPI wires them together. |
-| **Async-only I/O** | Everything is `asyncio`. No threads except the SQLite executor bridge. |
+| **Async-only I/O** | Everything is `asyncio`. No threads. |
 | **Single event loop** | All tasks share one loop. Session registry and intercept queue need no locks. |
 | **Immutable IDs** | Frame/Session/Rule IDs are UUID4 strings, set at creation, never changed. |
 | **Layered isolation** | Transport knows nothing about framing. Framer knows nothing about protocol semantics. Parser knows nothing about network I/O. |
-| **Pluggable via ABC** | Framers, decoders/encoders, mutators, storage backends all expose abstract interfaces. |
+| **Pluggable via ABC** | Framers, decoders/encoders, and mutators all expose abstract interfaces. |
 | **Explicit over magic** | No metaclasses, no auto-discovery. Registration (e.g. `FRAMER_REGISTRY`) is explicit. |
 
 ## TUI Event Bridge
@@ -154,7 +196,3 @@ The asyncio `EventBus` publishes events from background tasks. Textual widgets m
 ### Add a Protocol Decoder
 
 Write a YAML definition file and call `api.set_protocol_file("my_protocol.yaml")`, or implement `ProtocolDecoder`/`ProtocolEncoder` ABCs for fully custom logic.
-
-### Add a Storage Backend
-
-Subclass `protopoke.storage.base.StorageBackend`, implement the five async methods (`save_session`, `load_session`, `list_sessions`, `save_frame`, `load_frames`), and pass it to `ProtoPokeAPI(forwarders, storage=MyBackend())`.

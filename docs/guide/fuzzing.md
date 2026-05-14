@@ -24,17 +24,20 @@ ProtoPoke includes a replay-based fuzzer that mutates captured session traffic a
 ```python
 from protopoke.fuzzing.mutators.raw import BitFlipMutator, KnownBadMutator
 
-results = await api.fuzz_session(
+# fuzz_session() returns a FuzzCampaign with all results populated.
+campaign = await api.fuzz_session(
     session_id=session_id,
     mutators=[BitFlipMutator(), KnownBadMutator()],
     iterations=100,
     stop_on_crash=True,
 )
 
-for result in results:
-    if result.is_interesting:
-        print(f"Anomaly: {result.anomaly_type}")
-        print(f"Mutated frame: {result.mutated_bytes.hex()}")
+# campaign.results is the full list; .interesting_results / .crash_results
+# are convenience filters.
+for result in campaign.interesting_results:
+    print(f"iteration {result.iteration} ({result.mutator_name}): "
+          f"reset={result.connection_reset} timed_out={result.timed_out}")
+    print(f"  mutated frame: {result.mutated_bytes.hex()}")
 ```
 
 ### MCP
@@ -85,25 +88,29 @@ These require a loaded protocol definition and operate on parsed field boundarie
 
 ## Custom Mutators
 
-Create a custom mutator by subclassing `FrameMutator`:
+Create a custom mutator by subclassing `FrameMutator`. `mutate()` receives
+the `Frame` about to be sent and its `ParsedMessage` (or `None` when no
+protocol definition matched), and returns the bytes to send instead — or
+`None` to leave the frame unchanged:
 
 ```python
 from protopoke.fuzzing.mutators.base import FrameMutator
-from protopoke.models import ParsedMessage
+from protopoke.models import Frame, ParsedMessage
 
 class MyMutator(FrameMutator):
-    async def mutate(self, frame_bytes: bytes, parsed: ParsedMessage | None) -> bytes | None:
+    async def mutate(self, frame: Frame, parsed: ParsedMessage | None) -> bytes | None:
         """Return mutated bytes, or None to skip this frame."""
-        # Example: swap first two bytes
-        if len(frame_bytes) < 2:
+        data = frame.raw_bytes
+        # Example: swap the first two bytes
+        if len(data) < 2:
             return None
-        return frame_bytes[1:2] + frame_bytes[0:1] + frame_bytes[2:]
+        return data[1:2] + data[0:1] + data[2:]
 ```
 
 Pass custom mutators directly:
 
 ```python
-results = await api.fuzz_session(
+campaign = await api.fuzz_session(
     session_id=session_id,
     mutators=[MyMutator()],
     iterations=50,

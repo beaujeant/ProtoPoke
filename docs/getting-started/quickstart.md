@@ -12,8 +12,10 @@ The terminal UI opens with six tabs. You start on the **Config** tab.
 
 ## 2. Configure the Proxy
 
-In the **Config** tab, set:
+In the **Config** tab, edit the default forwarder and set:
 
+- **Type**: `TCP` (a forwarder can also be `UDP` or `SOCKS5` — see the
+  [DNS over UDP tutorial](tutorial-dns.md) for a UDP walkthrough)
 - **Listen Host**: `127.0.0.1`
 - **Listen Port**: `8080`
 - **Upstream Host**: the IP or hostname of your target server

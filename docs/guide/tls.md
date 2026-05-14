@@ -54,10 +54,17 @@ For the MITM to work, clients must trust the ProtoPoke CA certificate.
 === "Python API"
 
     ```python
-    ca_pem = api.get_ca_cert()
+    # api.ca is the active CertificateAuthority (None unless TLS-listen is on
+    # in auto-CA mode). cert_pem is the PEM-encoded CA certificate.
+    ca_pem = api.ca.cert_pem
+    with open("protopoke-ca.crt", "wb") as f:
+        f.write(ca_pem)
     ```
 
-The CA certificate and key are auto-generated and stored in memory by default. You can also provide your own CA certificate and key via `ForwarderConfig`:
+By default the CA certificate and key are auto-generated on first use and
+stored at `~/.protopoke/ca.crt` and `~/.protopoke/ca.key`, so the same CA is
+reused across proxy restarts. You can also provide your own CA certificate
+and key via `ForwarderConfig`:
 
 ```python
 fwd = ForwarderConfig(
@@ -69,8 +76,13 @@ fwd = ForwarderConfig(
 )
 ```
 
+For a one-off leaf certificate (skipping the auto-CA entirely), set
+`tls_cert_path` and `tls_key_path` instead — useful for wildcard certs or
+certs the client already trusts unconditionally.
+
 ## Notes
 
 - Upstream TLS certificate verification is always disabled in proxy mode — ProtoPoke is a reverse engineering tool, not a production proxy
 - The CA is generated using `cryptography >= 41`
 - Per-session certificates are generated on-the-fly and cached
+- `tls_listen` is rejected for UDP forwarders (DTLS is not supported) and for SOCKS5 forwarders (wrapping the SOCKS handshake in TLS is non-standard)
