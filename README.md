@@ -94,7 +94,11 @@ asyncio.run(main())
 
 Full documentation is available at **[beaujeant.github.io/protopoke](https://beaujeant.github.io/protopoke/)**.
 
-Covers the TUI, framing strategies, protocol definition DSL, tamper/intercept, forge/replay, fuzzing, TLS MITM, MCP tool reference, Python API, architecture, and more.
+It is split into two parallel tracks — **User Interface** (the terminal UI)
+and **Core Library** (the `ProtoPokeAPI`) — each covering Config, Traffic,
+Intercept, and Forge, plus shared **Reference** pages (framers, protocol
+definition DSL, custom replace scripts, fuzzing), worked **Guides** (DNS,
+SSH-BPP), the MCP tool reference, and architecture notes.
 
 ## Running Tests
 

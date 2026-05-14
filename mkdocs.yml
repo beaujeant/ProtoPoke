@@ -51,26 +51,31 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Getting Started:
-    - Installation: getting-started/installation.md
-    - Quick Start: getting-started/quickstart.md
-    - Tutorial — DNS over UDP: getting-started/tutorial-dns.md
-  - User Guide:
-    - Terminal UI: guide/tui.md
-    - Framing: guide/framing.md
-    - Protocol Definitions: guide/protocol-definitions.md
-    - Tamper & Intercept: guide/tamper.md
-    - Forge & Replay: guide/forge.md
-    - Fuzzing: guide/fuzzing.md
-    - TLS / MITM: guide/tls.md
-    - Projects: guide/projects.md
+  - Installation: installation.md
+  - User Interface:
+    - Getting Started: ui/getting-started.md
+    - Config: ui/config.md
+    - Traffic: ui/traffic.md
+    - Intercept: ui/intercept.md
+    - Forge: ui/forge.md
+  - Core Library:
+    - Getting Started: core/getting-started.md
+    - Config: core/config.md
+    - Traffic: core/traffic.md
+    - Intercept: core/intercept.md
+    - Forge: core/forge.md
+  - Reference:
+    - Framers: reference/framers.md
+    - Protocol Definitions: reference/protocol-definitions.md
+    - Custom Replace Scripts: reference/replace-scripts.md
+    - Fuzzing (experimental): reference/fuzzing.md
+  - Guides:
+    - DNS: guides/dns.md
+    - SSH-BPP: guides/ssh-bpp.md
   - MCP Server:
     - Overview: mcp/overview.md
     - Configuration: mcp/configuration.md
     - Tool Reference: mcp/tools.md
-  - Python API:
-    - Usage: api/usage.md
-    - Examples: api/examples.md
   - Development:
     - Architecture: development/architecture.md
     - Contributing: development/contributing.md
