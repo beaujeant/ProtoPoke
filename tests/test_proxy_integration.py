@@ -208,6 +208,66 @@ class TestPassthroughProxy:
                 await api.stop()
 
     @pytest.mark.asyncio
+    async def test_half_open_session_is_reaped_after_idle_timeout(self):
+        """
+        A half-open session whose surviving peer uses keep-alive (never closes)
+        must be reaped after ``half_open_idle_timeout`` seconds — otherwise the
+        session leaks its sockets forever.
+        """
+        from protopoke.models import SessionState
+
+        # Upstream that accepts connections and holds them open silently,
+        # mimicking an HTTP keep-alive server that never closes on its own.
+        held_writers: list[asyncio.StreamWriter] = []
+
+        async def hold_handler(reader, writer):
+            held_writers.append(writer)
+            try:
+                await reader.read()  # never returns until the proxy closes us
+            except Exception:
+                pass
+
+        upstream = await asyncio.start_server(hold_handler, "127.0.0.1", 0)
+        upstream_port = upstream.sockets[0].getsockname()[1]
+
+        listen_port = free_port()
+        config = ForwarderConfig(
+            name="Test",
+            listen_host="127.0.0.1", listen_port=listen_port,
+            upstream_host="127.0.0.1", upstream_port=upstream_port,
+            half_open_idle_timeout=0.5,
+        )
+        api = ProtoPokeAPI([config])
+        await api.start()
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", listen_port)
+            writer.write(b"hello")
+            await writer.drain()
+            await asyncio.sleep(0.1)
+
+            sessions = api.list_active_sessions()
+            assert len(sessions) == 1
+            session_id = sessions[0].id
+
+            # Client goes away; upstream stays open → session is ONLY_SERVER.
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            await asyncio.sleep(0.1)
+            assert api.get_session(session_id).state is SessionState.ONLY_SERVER
+
+            # After the idle timeout elapses the half-open session is reaped.
+            await asyncio.sleep(0.8)
+            assert api.get_session(session_id).state is SessionState.CLOSED
+            assert api.list_active_sessions() == []
+        finally:
+            await api.stop()
+            upstream.close()
+            await upstream.wait_closed()
+
+    @pytest.mark.asyncio
     async def test_event_bus_frame_events(self):
         async with echo_server_ctx() as (upstream_host, upstream_port):
             listen_port = free_port()

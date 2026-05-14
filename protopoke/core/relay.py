@@ -91,6 +91,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class _HalfOpenIdleTimeout(Exception):
+    """Internal signal: a half-open session's surviving side went idle."""
+
+
 class DirectionalRelay:
     """
     One-way relay: source reader → framer → tamper controller → dest writer.
@@ -111,6 +115,7 @@ class DirectionalRelay:
         read_buffer_size:     int = 4096,
         rules_engine:         "Optional[RulesEngine]" = None,
         propagate_eof:        bool = True,
+        half_open_idle_timeout: float = 0.0,
     ) -> None:
         """
         Args:
@@ -130,6 +135,12 @@ class DirectionalRelay:
                                connection fully open — used for the upstream direction
                                so a client disconnect does not tear down the server
                                connection (Forge can still inject into it).
+            half_open_idle_timeout:
+                               When > 0 and the peer relay direction has finished
+                               (the session is half-open), this relay is reaped if
+                               its source stays idle for this many seconds.  Stops
+                               half-open sessions from leaking sockets forever when
+                               the surviving peer uses keep-alive and never closes.
         """
         self._session              = session
         self._direction            = direction
@@ -141,7 +152,18 @@ class DirectionalRelay:
         self._read_buffer_size     = read_buffer_size
         self._rules_engine         = rules_engine
         self._propagate_eof        = propagate_eof
+        self._half_open_idle_timeout = half_open_idle_timeout
+        self._peer_gone            = False
         self._running              = False
+
+    def mark_peer_gone(self) -> None:
+        """
+        Signal that the opposite relay direction has finished.
+
+        After this, an idle read timeout means the surviving half-open
+        connection should be reaped instead of waited on indefinitely.
+        """
+        self._peer_gone = True
 
     async def run(self) -> None:
         """
@@ -157,9 +179,15 @@ class DirectionalRelay:
         try:
             while self._running:
                 try:
-                    data = await self._source_reader.read(self._read_buffer_size)
+                    data = await self._read_with_idle_timeout()
                 except asyncio.IncompleteReadError:
                     logger.info("Source closed unexpectedly [%s]", label)
+                    break
+                except _HalfOpenIdleTimeout:
+                    logger.info(
+                        "Half-open session idle for %.0fs; reaping surviving side [%s]",
+                        self._half_open_idle_timeout, label,
+                    )
                     break
 
                 if not data:
@@ -198,6 +226,34 @@ class DirectionalRelay:
             self._running = False
             if self._propagate_eof:
                 await self._send_eof_to_dest()
+
+    async def _read_with_idle_timeout(self) -> bytes:
+        """
+        Read from the source, applying the half-open idle timeout.
+
+        While both sides are still connected the timeout is just a periodic
+        wakeup — the loop retries transparently.  Once the peer direction has
+        finished (``_peer_gone``), a timeout means the surviving half-open
+        connection has been idle long enough to reap: raise
+        ``_HalfOpenIdleTimeout``.
+
+        Cancelling a pending ``StreamReader.read()`` via ``wait_for`` is safe:
+        buffered bytes and EOF state live on the StreamReader, not the
+        coroutine, so a subsequent read picks up exactly where this one left off.
+        """
+        idle = self._half_open_idle_timeout
+        if idle <= 0:
+            return await self._source_reader.read(self._read_buffer_size)
+        while True:
+            try:
+                return await asyncio.wait_for(
+                    self._source_reader.read(self._read_buffer_size),
+                    timeout=idle,
+                )
+            except asyncio.TimeoutError:
+                if self._peer_gone:
+                    raise _HalfOpenIdleTimeout from None
+                # Both sides still connected — just a wakeup; keep waiting.
 
     async def _process_frame(self, frame: Frame) -> None:
         """
@@ -345,6 +401,7 @@ class BidirectionalRelay:
         on_first_disconnect:  "Optional[Callable[[Direction], Awaitable[None]]]" = None,
         keep_upstream_on_client_disconnect: bool = True,
         keep_client_on_server_disconnect:   bool = True,
+        half_open_idle_timeout: float = 0.0,
     ) -> None:
         """
         Args:
@@ -383,6 +440,13 @@ class BidirectionalRelay:
                                  server→client frames.  Set to False for the legacy
                                  behaviour where a server EOF is forwarded as a TCP
                                  half-close to the client.
+            half_open_idle_timeout:
+                                 When > 0, a half-open session (one side gone, the
+                                 other kept alive by the keep_* flags) whose
+                                 surviving side stays idle for this many seconds is
+                                 reaped.  Prevents half-open sessions from leaking
+                                 sockets forever when the surviving peer uses
+                                 keep-alive and never closes.
         """
         self._session              = session
         self._client_writer        = client_writer
@@ -403,6 +467,7 @@ class BidirectionalRelay:
             # server — keep the server connection alive so Forge can keep using
             # it.  The session ends when the server closes or the user terminates.
             propagate_eof=not keep_upstream_on_client_disconnect,
+            half_open_idle_timeout=half_open_idle_timeout,
         )
 
         self._downstream = DirectionalRelay(
@@ -420,6 +485,7 @@ class BidirectionalRelay:
             # server→client frames.  The session ends when the client closes or
             # the user terminates.
             propagate_eof=not keep_client_on_server_disconnect,
+            half_open_idle_timeout=half_open_idle_timeout,
         )
 
     def framer_for(self, direction: Direction) -> Framer:
@@ -449,6 +515,9 @@ class BidirectionalRelay:
             await self._upstream.run()
             # Only reached on normal completion (CancelledError is re-raised
             # by DirectionalRelay.run(), so this line is skipped on cancel).
+            # Tell the surviving direction its peer is gone so it can apply
+            # the half-open idle timeout instead of blocking on read() forever.
+            self._downstream.mark_peer_gone()
             if not first_done:
                 first_done.append(Direction.CLIENT_TO_SERVER)
                 if self._on_first_disconnect:
@@ -456,6 +525,7 @@ class BidirectionalRelay:
 
         async def _run_downstream() -> None:
             await self._downstream.run()
+            self._upstream.mark_peer_gone()
             if not first_done:
                 first_done.append(Direction.SERVER_TO_CLIENT)
                 if self._on_first_disconnect:
