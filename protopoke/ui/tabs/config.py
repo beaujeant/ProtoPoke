@@ -215,9 +215,10 @@ class ConfigTab(Widget):
         dt.add_column("Status", key="status")
         self._refresh_table()
         if not _mcp_package_available():
-            self._disable_mcp_controls(
-                "  mcp package not installed — run: pip install 'protopoke[mcp]'"
+            logger.info(
+                "mcp package not installed — run: pip install 'protopoke[mcp]'"
             )
+            self._disable_mcp_controls()
 
     # ------------------------------------------------------------------
     # Table helpers
@@ -465,8 +466,8 @@ class ConfigTab(Widget):
         finally:
             self._suppress_mcp_emit = False
 
-    def _disable_mcp_controls(self, hint: str) -> None:
-        """Disable the MCP widgets and replace the URL line with *hint*."""
+    def _disable_mcp_controls(self) -> None:
+        """Disable the MCP widgets and hide the URL line."""
         for wid_id, cls in (
             ("mcp-enabled", Switch),
             ("mcp-host",    Input),
@@ -478,9 +479,7 @@ class ConfigTab(Widget):
             except Exception:
                 pass
         try:
-            url_widget = self.query_one("#mcp-url", Static)
-            url_widget.update(hint)
-            url_widget.styles.display = "block"
+            self.query_one("#mcp-url", Static).styles.display = "none"
         except Exception:
             pass
 
