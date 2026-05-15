@@ -432,3 +432,60 @@ class TestReplaySessionTool:
         fn = get_tool(mcp_server, "forge_session")
         result = await fn("any-session", direction="bad_dir")
         assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# Authoring guides (resources + fallback tools)
+# ---------------------------------------------------------------------------
+
+class TestAuthoringGuides:
+    def test_list_includes_all_guides(self, mcp_server):
+        fn = get_tool(mcp_server, "list_authoring_guides")
+        result = fn()
+        slugs = {entry["slug"] for entry in result}
+        assert {"framers", "protocol-definitions", "replace-scripts"} <= slugs
+
+    def test_list_entries_carry_uri(self, mcp_server):
+        fn = get_tool(mcp_server, "list_authoring_guides")
+        for entry in fn():
+            assert entry["uri"] == f"protopoke://guides/{entry['slug']}"
+            assert entry["title"]
+            assert entry["description"]
+
+    def test_get_known_guide_returns_markdown(self, mcp_server):
+        fn = get_tool(mcp_server, "get_authoring_guide")
+        result = fn("framers")
+        assert result["slug"] == "framers"
+        assert "Authoring a Framer" in result["content"]
+        assert "on_data" in result["content"]
+
+    def test_get_unknown_guide_returns_error(self, mcp_server):
+        fn = get_tool(mcp_server, "get_authoring_guide")
+        result = fn("does-not-exist")
+        assert "error" in result
+        assert "framers" in result["available"]
+
+    def test_protocol_definitions_guide_loads(self, mcp_server):
+        fn = get_tool(mcp_server, "get_authoring_guide")
+        body = fn("protocol-definitions")["content"]
+        assert "endianness" in body
+        assert "tlv_sequence" in body
+
+    def test_replace_scripts_guide_loads(self, mcp_server):
+        fn = get_tool(mcp_server, "get_authoring_guide")
+        body = fn("replace-scripts")["content"]
+        assert "def apply" in body
+        assert "variables" in body
+
+    def test_resources_registered(self, mcp_server):
+        resources = {str(r.uri) for r in mcp_server._resource_manager.list_resources()}
+        assert "protopoke://guides" in resources
+        assert "protopoke://guides/framers" in resources
+        assert "protopoke://guides/protocol-definitions" in resources
+        assert "protopoke://guides/replace-scripts" in resources
+
+    def test_index_resource_lists_every_guide(self, mcp_server):
+        resources = {str(r.uri): r for r in mcp_server._resource_manager.list_resources()}
+        body = resources["protopoke://guides"].fn()
+        for slug in ("framers", "protocol-definitions", "replace-scripts"):
+            assert f"protopoke://guides/{slug}" in body
