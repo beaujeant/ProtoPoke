@@ -25,6 +25,15 @@ _LOG_LEVEL_OPTIONS = [
 ]
 
 
+def _mcp_package_available() -> bool:
+    """Return True if the optional ``mcp`` package can be imported."""
+    try:
+        import mcp.server.fastmcp  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 class ConfigTab(Widget):
     """
     Tab 1 — Forwarder configuration.
@@ -160,6 +169,10 @@ class ConfigTab(Widget):
         # Track last upstream error per forwarder name (empty string = no error)
         self._fwd_errors: dict[str, str] = {}
         self._mcp_settings: MCPSettings = mcp_settings or MCPSettings()
+        # When True, on_switch_changed / on_input_submitted will not re-emit
+        # MCPSettingsChanged. Used when the app programmatically reverts the
+        # widget state after an apply failure.
+        self._suppress_mcp_emit: bool = False
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -201,6 +214,10 @@ class ConfigTab(Widget):
         dt.add_column("TLS Upstream", key="tls_upstream")
         dt.add_column("Status", key="status")
         self._refresh_table()
+        if not _mcp_package_available():
+            self._disable_mcp_controls(
+                "  mcp package not installed — run: pip install 'protopoke[mcp]'"
+            )
 
     # ------------------------------------------------------------------
     # Table helpers
@@ -394,12 +411,16 @@ class ConfigTab(Widget):
             pass
 
     def _emit_mcp_settings(self) -> None:
+        if self._suppress_mcp_emit:
+            return
         from dataclasses import replace
         self.post_message(self.MCPSettingsChanged(replace(self._mcp_settings)))
         self._refresh_mcp_url()
 
     def on_switch_changed(self, event: Switch.Changed) -> None:
         if event.switch.id == "mcp-enabled":
+            if self._suppress_mcp_emit:
+                return
             self._mcp_settings.enabled = event.value
             self._emit_mcp_settings()
 
@@ -429,9 +450,44 @@ class ConfigTab(Widget):
     # Public API (called by app.py)
     # ------------------------------------------------------------------
 
+    def revert_mcp_enabled(self, enabled: bool) -> None:
+        """Force the MCP switch back to *enabled* without emitting a change event.
+
+        Used by the app when ``apply_mcp_settings`` raises so the UI state
+        matches the actual host state.
+        """
+        self._mcp_settings.enabled = enabled
+        self._suppress_mcp_emit = True
+        try:
+            self.query_one("#mcp-enabled", Switch).value = enabled
+        except Exception:
+            pass
+        finally:
+            self._suppress_mcp_emit = False
+
+    def _disable_mcp_controls(self, hint: str) -> None:
+        """Disable the MCP widgets and replace the URL line with *hint*."""
+        for wid_id, cls in (
+            ("mcp-enabled", Switch),
+            ("mcp-host",    Input),
+            ("mcp-port",    Input),
+            ("mcp-url-btn", Button),
+        ):
+            try:
+                self.query_one(f"#{wid_id}", cls).disabled = True
+            except Exception:
+                pass
+        try:
+            url_widget = self.query_one("#mcp-url", Static)
+            url_widget.update(hint)
+            url_widget.styles.display = "block"
+        except Exception:
+            pass
+
     def load_mcp_settings(self, settings: MCPSettings) -> None:
         """Replace the displayed MCP settings (e.g. after project open)."""
         self._mcp_settings = settings
+        self._suppress_mcp_emit = True
         try:
             self.query_one("#mcp-enabled", Switch).value = settings.enabled
             self.query_one("#mcp-host",    Input).value  = settings.host
@@ -439,6 +495,8 @@ class ConfigTab(Widget):
         except Exception:
             # Widgets not yet composed — _refresh_mcp_url runs after on_mount.
             pass
+        finally:
+            self._suppress_mcp_emit = False
         self._refresh_mcp_url()
 
     def confirm_remove_forwarder(self, name: str) -> None:

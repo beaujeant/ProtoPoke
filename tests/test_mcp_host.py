@@ -200,6 +200,24 @@ async def test_apply_noop_when_nothing_changed(api, patched_run_async):
         await host.stop()
 
 
+async def test_apply_rolls_back_settings_on_start_failure(api, monkeypatch):
+    """If start() raises (e.g. ImportError when mcp pkg is missing), the
+    stored settings revert so the next apply() sees the real state."""
+    host = MCPHost(api, MCPSettings(enabled=False, port=18003))
+
+    async def boom() -> None:
+        raise ImportError("the 'mcp' package is required")
+
+    monkeypatch.setattr(host, "start", boom)
+
+    with pytest.raises(ImportError):
+        await host.apply(MCPSettings(enabled=True, port=18003))
+
+    # Settings rolled back: enabled=False, no task running.
+    assert host.settings.enabled is False
+    assert host.is_running is False
+
+
 # ---------------------------------------------------------------------------
 # Rebind — tests against the real build_mcp_server (no transport).
 # ---------------------------------------------------------------------------

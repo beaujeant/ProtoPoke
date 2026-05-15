@@ -383,10 +383,32 @@ class ProtoPoke(App):
     async def on_config_tab_mcpsettings_changed(self, event: ConfigTab.MCPSettingsChanged) -> None:
         """User edited the embedded MCP server settings — apply them."""
         logger.debug("MCPSettingsChanged received: enabled=%s", event.settings.enabled)
+        previous_enabled = self._mcp_host.settings.enabled
         try:
             await self.apply_mcp_settings(event.settings)
-        except Exception:
+        except ImportError as exc:
+            logger.error("MCP server cannot start: %s", exc)
+            self.notify(
+                "MCP server unavailable: install with `pip install protopoke[mcp]`.",
+                severity="error",
+                timeout=8,
+            )
+            self._revert_mcp_switch(previous_enabled)
+        except Exception as exc:
             logger.exception("apply_mcp_settings failed")
+            self.notify(
+                f"Failed to apply MCP settings: {exc}",
+                severity="error",
+                timeout=8,
+            )
+            self._revert_mcp_switch(previous_enabled)
+
+    def _revert_mcp_switch(self, enabled: bool) -> None:
+        """Roll the MCP switch back to *enabled* after a failed apply."""
+        try:
+            self.query_one("#config-tab", ConfigTab).revert_mcp_enabled(enabled)
+        except Exception:
+            logger.debug("revert_mcp_enabled: ConfigTab not available", exc_info=True)
 
     async def _start_forwarder(self, name: str) -> None:
         try:
@@ -842,10 +864,22 @@ class ProtoPoke(App):
         return settings if isinstance(settings, MCPSettings) else MCPSettings()
 
     async def apply_mcp_settings(self, new_settings: MCPSettings) -> None:
-        """Persist and apply new MCP settings (called from the Config tab)."""
+        """Persist and apply new MCP settings (called from the Config tab).
+
+        If ``MCPHost.apply`` raises, it rolls its own settings back; we
+        mirror that by restoring the previous project settings so the UI,
+        host, and project stay consistent.
+        """
+        previous = self._project.mcp_settings \
+            if isinstance(self._project.mcp_settings, MCPSettings) \
+            else MCPSettings()
         self._project.mcp_settings = new_settings
         self._project.mark_dirty()
-        await self._mcp_host.apply(new_settings)
+        try:
+            await self._mcp_host.apply(new_settings)
+        except Exception:
+            self._project.mcp_settings = previous
+            raise
         self._update_title()
 
 

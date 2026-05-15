@@ -176,6 +176,11 @@ class MCPHost:
         """
         Replace the current settings. Restart the server if the transport-
         visible settings (enabled / host / port) changed.
+
+        If applying fails (e.g. the optional ``mcp`` package is not
+        installed and :meth:`start` raises ``ImportError``), the stored
+        settings are rolled back so future ``apply`` diffs compare against
+        the real state, not the failed attempt.
         """
         old = self._settings
         self._settings = replace(new_settings)
@@ -192,10 +197,14 @@ class MCPHost:
         if not transport_changed:
             return
 
-        if self.is_running:
-            await self.stop()
-        if new_settings.enabled:
-            await self.start()
+        try:
+            if self.is_running:
+                await self.stop()
+            if new_settings.enabled:
+                await self.start()
+        except Exception:
+            self._settings = old
+            raise
 
     # ------------------------------------------------------------------
     # Rebinding
