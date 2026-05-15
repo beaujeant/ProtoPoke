@@ -2,7 +2,7 @@
 title: "MCP Tool Reference"
 ---
 
-ProtoPoke exposes 70+ tools through MCP. All tools return JSON-serialisable dicts; bytes fields are hex-encoded strings.
+ProtoPoke exposes 90+ tools through MCP. All tools return JSON-serialisable dicts; bytes fields are hex-encoded strings.
 
 ## Proxy Lifecycle
 
@@ -47,6 +47,28 @@ ProtoPoke exposes 70+ tools through MCP. All tools return JSON-serialisable dict
 | `set_protocol_file` | Load a YAML/JSON protocol definition file |
 | `set_protocol_dict` | Load a protocol definition from an inline dict |
 | `get_protocol_info` | Currently loaded decoder/encoder names and status |
+
+## Protocol Definition Editing
+
+Incrementally build or modify the active `ProtocolDefinition` over MCP. Edits
+take effect immediately — `decode_frames`, `tamper_modify_field_and_forward`,
+and the Wireshark-style parsed view in the TUI all use the updated definition
+on the next call. Save the result with `save_protocol_to_file` to commit it
+as a regular `.yaml` / `.json` protocol file. See the
+[Protocol Reversing guide](/mcp/analysis) for a worked example.
+
+| Tool | Description |
+|------|-------------|
+| `get_protocol_definition` | The active definition as a YAML-compatible dict |
+| `create_protocol_definition` | Start a new empty definition (replaces the active one) |
+| `add_message_definition` | Append a `MessageDefinition` (packet type) |
+| `update_message_definition` | Replace an existing `MessageDefinition` by name |
+| `remove_message_definition` | Remove a `MessageDefinition` by name |
+| `reorder_message_definition` | Move a `MessageDefinition` in the match-priority list |
+| `add_field_to_message` | Append or insert a `FieldDefinition` |
+| `update_field_in_message` | Replace a `FieldDefinition` (may rename it) |
+| `remove_field_from_message` | Remove a `FieldDefinition` by name |
+| `save_protocol_to_file` | Serialise the active definition to `.yaml` / `.yml` / `.json` |
 
 ## Tamper Control
 
@@ -136,6 +158,41 @@ ProtoPoke exposes 70+ tools through MCP. All tools return JSON-serialisable dict
 | Tool | Description |
 |------|-------------|
 | `get_ca_cert` | Export the CA certificate PEM |
+
+## Analysis
+
+Protocol-agnostic analytical helpers for reverse engineering. Every tool
+operates on the frames already captured in a session — no I/O, no
+configuration changes. Most analysis tools accept the same scoping
+parameters (`direction`, `size_bytes`, `byte_patterns`) so you can focus on
+one packet type at a time. See the [Protocol Reversing guide](/mcp/analysis)
+for the typical workflow.
+
+| Tool | Description |
+|------|-------------|
+| `list_field_types` | Every type name accepted by `decode_field` and `offset_correlations` |
+| `get_frame_stats` | Bucket frames by `(prefix, size)`, with per-offset change rate and Shannon entropy per bucket |
+| `entropy_map` | Per-offset entropy across a same-size bucket — find constant padding vs encrypted regions |
+| `cluster_frames` | Auto-discover packet-type clusters by `(prefix, size)` |
+| `filter_frames` | Paginated direction / size / byte-pattern filter — replaces dumping everything to disk |
+| `decode_field` | Decode `bytes[offset:offset+size]` as a given type across frames; `deduplicate=True` only emits rows when the value changes |
+| `compare_frames` | Byte-level diff between two specific frames, with coalesced ranges and integer delta |
+| `diff_frames_in_bucket` | Column-by-column diff matrix across same-size frames — surfaces which offsets carry information |
+| `analyze_byte_ranges` | Per-offset + per-range heuristics: candidate types, constant/ASCII/counter/length flags |
+| `find_length_fields` | Offsets whose value tracks frame length (`value == len(frame) - C`), works across mixed-size frames |
+| `offset_correlations` | Pearson correlation and change-pairing between two offsets |
+
+### Field types for `decode_field` / `offset_correlations`
+
+Numeric types come in explicit endianness variants (`uint16_le`, `float32_be`,
+…). Use `list_field_types` for the full live list. Non-numeric helpers
+accepted by `decode_field`:
+
+| Name | Behaviour |
+|------|-----------|
+| `ascii` | Bytes rendered as printable ASCII with `.` for non-printables |
+| `bytes` | Raw bytes as a hex string |
+| `cstring` | Bytes up to the first NUL, decoded as UTF-8 |
 
 ## Fuzzing
 

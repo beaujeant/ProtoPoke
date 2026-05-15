@@ -9,6 +9,7 @@ ProtoPoke exposes all proxy operations as [Model Context Protocol](https://model
 | Capability | Example prompts |
 |-----------|----------------|
 | **Session inspection** | "List all sessions", "Show me the frames from session X", "Decode the frames and show field values" |
+| **Protocol reversing** | "Cluster the frames by packet type", "Find the length field", "Decode bytes 2–5 as float32_le and show me when it changes", "Add a `position` message to the active protocol with these fields and save it as `mv.yaml`" |
 | **Live tamper** | "Enable tamper mode", "Show pending frames", "Forward the first one but change the username field to admin" |
 | **Rules** | "Add an intercept rule for client→server frames starting with 0x01", "Clear all replace rules" |
 | **Search** | "Find all frames containing the bytes FF FF 00" |
