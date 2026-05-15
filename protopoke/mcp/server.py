@@ -13,6 +13,12 @@ Tools are grouped by concern:
                               terminate_session, delete_session, export_session
     Protocol management     : set_protocol_file, set_protocol_dict,
                               get_protocol_info
+    Protocol definition edit: get_protocol_definition,
+                              create_protocol_definition,
+                              add_message_definition, update_message_definition,
+                              remove_message_definition, reorder_message_definition,
+                              add_field_to_message, update_field_in_message,
+                              remove_field_from_message, save_protocol_to_file
     Tamper control          : tamper_status, tamper_toggle,
                               list_intercepted, tamper_decode_pending,
                               tamper_forward, tamper_drop,
@@ -40,6 +46,11 @@ Tools are grouped by concern:
     TLS / CA                : get_ca_cert
     Fuzzing                 : fuzz_start, fuzz_status, fuzz_results,
                               fuzz_stop, list_campaigns, list_mutators
+    Analysis                : list_field_types, get_frame_stats, entropy_map,
+                              cluster_frames, filter_frames, decode_field,
+                              compare_frames, diff_frames_in_bucket,
+                              analyze_byte_ranges, find_length_fields,
+                              offset_correlations
 """
 
 from __future__ import annotations
@@ -81,6 +92,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
             "Install it with: pip install mcp"
         ) from exc
 
+    from protopoke import analysis
     from protopoke.models import Direction
     from protopoke.rules.rule import ReplaceRule, InterceptRule, RuleAction
     from protopoke.forge.models import Playbook, PlaybookFrame
@@ -2206,6 +2218,641 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
             {"name": "null_byte",      "parameters": {},                                 "requires_protocol": True},
             {"name": "length_mangle",  "parameters": {},                                 "requires_protocol": True},
         ]
+
+    # ------------------------------------------------------------------ #
+    # Analytical helpers (binary protocol reversing)                        #
+    # ------------------------------------------------------------------ #
+
+    def _parse_direction(d: Optional[str]) -> Optional[Direction]:
+        if d is None:
+            return None
+        try:
+            return Direction(d)
+        except ValueError:
+            raise ValueError(
+                f"Invalid direction {d!r}; use 'client_to_server' or 'server_to_client'."
+            )
+
+    def _select_session_frames(
+        session_id:    str,
+        direction:     Optional[str],
+        size_bytes:    Optional[int],
+        min_size:      Optional[int],
+        max_size:      Optional[int],
+        byte_patterns: Optional[list[dict]],
+    ) -> list:
+        """Common selection step used by every analysis tool."""
+        dir_enum = _parse_direction(direction)
+        all_frames = api.get_frames(session_id, dir_enum)
+        return analysis.select_frames(
+            all_frames,
+            direction=None,  # already applied via api.get_frames
+            size_bytes=size_bytes,
+            min_size=min_size,
+            max_size=max_size,
+            byte_patterns=byte_patterns,
+        )
+
+    @mcp.tool()
+    def list_field_types() -> list[str]:
+        """
+        Return the field-type names accepted by ``decode_field`` /
+        ``offset_correlations``.
+
+        Numeric types come in explicit endianness variants (e.g. ``uint16_le``,
+        ``float32_be``).  Non-numeric helpers: ``ascii`` (printable rendering),
+        ``bytes`` (hex string), ``cstring`` (NUL-terminated UTF-8).
+        """
+        return analysis.supported_field_types()
+
+    @mcp.tool()
+    def get_frame_stats(
+        session_id:     str,
+        direction:      Optional[str] = None,
+        size_bytes:     Optional[int] = None,
+        bucket_prefix_len: int        = 2,
+        max_bucket_offsets: int       = 256,
+    ) -> dict:
+        """
+        Summary statistics for a session's frames.
+
+        Buckets frames by ``(first-N-byte prefix, frame length)`` — the
+        natural shape of "packet types" in most binary protocols — then for
+        each bucket with ≥3 frames reports per-offset change-rate, distinct-
+        value count, and Shannon entropy.  Also returns the size distribution,
+        prefix distributions for 1/2/4-byte prefixes, and the timestamp range.
+
+        Args:
+            session_id:         Session UUID.
+            direction:          Optional direction filter.
+            size_bytes:         If set, only consider frames of this exact size.
+            bucket_prefix_len:  How many leading bytes define a "packet type"
+                                bucket (default 2 — covers most opcodes).
+            max_bucket_offsets: Cap per-offset stats per bucket (default 256).
+        """
+        try:
+            frames = _select_session_frames(
+                session_id, direction, size_bytes, None, None, None
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return analysis.frame_stats(
+            frames,
+            bucket_prefix_len=bucket_prefix_len,
+            max_bucket_offsets=max_bucket_offsets,
+        )
+
+    @mcp.tool()
+    def entropy_map(
+        session_id:    str,
+        direction:     Optional[str] = None,
+        size_bytes:    Optional[int] = None,
+        byte_patterns: Optional[list[dict]] = None,
+    ) -> dict:
+        """
+        Per-offset Shannon entropy across a bucket of same-size frames.
+
+        Useful for quickly spotting constant padding (entropy ≈ 0),
+        encrypted/compressed regions (entropy near 8), and structured fields
+        (somewhere in between).
+
+        All selected frames MUST be the same size.  Use ``size_bytes`` and/or
+        ``byte_patterns`` to scope to a single packet type.
+        """
+        try:
+            frames = _select_session_frames(
+                session_id, direction, size_bytes, None, None, byte_patterns
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return analysis.entropy_map(frames)
+
+    @mcp.tool()
+    def cluster_frames(
+        session_id: str,
+        direction:  Optional[str] = None,
+        prefix_len: int           = 2,
+    ) -> dict:
+        """
+        Auto-discover packet-type clusters by ``(first-N-bytes, length)``.
+
+        Cheap alternative to guessing prefix lengths manually.  Returns one
+        entry per cluster with count, sequence-number range, and a sample
+        hex dump of the first frame in the cluster.
+        """
+        try:
+            frames = _select_session_frames(
+                session_id, direction, None, None, None, None
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return analysis.cluster_frames(frames, prefix_len=prefix_len)
+
+    @mcp.tool()
+    def filter_frames(
+        session_id:    str,
+        direction:     Optional[str]        = None,
+        size_bytes:    Optional[int]        = None,
+        min_size:      Optional[int]        = None,
+        max_size:      Optional[int]        = None,
+        byte_patterns: Optional[list[dict]] = None,
+        limit:         int                  = 50,
+        offset_cursor: int                  = 0,
+    ) -> dict:
+        """
+        Return a filtered, paginated slice of a session's frames.
+
+        Replaces the "dump everything to disk and grep" workflow.  All filters
+        are ANDed.  ``byte_patterns`` is a list of ``{"offset": int,
+        "hex": "6d76"}`` dicts; every pattern must match its exact offset.
+
+        Returns ``{total_matching, returned, next_cursor, frames: [...]}``.
+        ``frames`` uses the same schema as ``get_frames``.
+        """
+        try:
+            frames = _select_session_frames(
+                session_id, direction, size_bytes, min_size, max_size, byte_patterns
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        page, next_cursor = analysis.paginate(frames, limit, offset_cursor)
+        return {
+            "total_matching": len(frames),
+            "returned":       len(page),
+            "next_cursor":    next_cursor,
+            "frames":         [f.to_dict() for f in page],
+        }
+
+    @mcp.tool()
+    def decode_field(
+        session_id:        str,
+        offset:            int,
+        size:              int,
+        type:              str,
+        direction:         Optional[str]        = None,
+        size_bytes:        Optional[int]        = None,
+        byte_patterns:     Optional[list[dict]] = None,
+        deduplicate:       bool                 = False,
+        include_timestamps: bool                = True,
+        limit:             int                  = 500,
+    ) -> dict:
+        """
+        Decode ``raw_bytes[offset:offset+size]`` as ``type`` in every selected
+        frame.
+
+        Use ``list_field_types`` for the full type list (e.g. ``uint16_le``,
+        ``float32_be``, ``int8``, ``ascii``, ``cstring``).
+
+        ``deduplicate=True`` only emits a row when the decoded value changes
+        — the single highest-leverage primitive for spotting state changes
+        in a long capture.  Combine with ``size_bytes`` and/or
+        ``byte_patterns`` to scope to one packet type.
+
+        Returns ``{total_returned, truncated, rows}``.  ``rows`` may be
+        truncated to ``limit``; the truncation flag tells you to refine the
+        filter rather than raise the limit.
+        """
+        try:
+            frames = _select_session_frames(
+                session_id, direction, size_bytes, None, None, byte_patterns
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        try:
+            rows = analysis.decode_field(
+                frames,
+                offset=offset,
+                size=size,
+                type_name=type,
+                deduplicate=deduplicate,
+                include_timestamps=include_timestamps,
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        truncated = len(rows) > limit
+        return {
+            "total_returned": min(len(rows), limit),
+            "truncated":      truncated,
+            "rows":           rows[:limit],
+        }
+
+    @mcp.tool()
+    def compare_frames(
+        session_id:  str,
+        frame_id_a:  str,
+        frame_id_b:  str,
+    ) -> dict:
+        """
+        Byte-level diff between two specific frames.
+
+        Returns a coalesced list of differing byte runs (with offsets and an
+        integer delta where it makes sense), the common prefix / suffix
+        length, and a 16-byte-row side-by-side hex view.
+        """
+        session = api.get_session(session_id)
+        if session is None:
+            return {"error": f"Session {session_id} not found"}
+        fa = next((f for f in session.frames if f.id == frame_id_a), None)
+        fb = next((f for f in session.frames if f.id == frame_id_b), None)
+        if fa is None:
+            return {"error": f"frame_id_a={frame_id_a} not found in session"}
+        if fb is None:
+            return {"error": f"frame_id_b={frame_id_b} not found in session"}
+        return analysis.compare_two_frames(fa, fb)
+
+    @mcp.tool()
+    def diff_frames_in_bucket(
+        session_id:    str,
+        direction:     Optional[str]        = None,
+        size_bytes:    Optional[int]        = None,
+        byte_patterns: Optional[list[dict]] = None,
+        max_offsets:   int                  = 64,
+    ) -> dict:
+        """
+        Column-by-column diff matrix across all selected frames.
+
+        All selected frames must be the same size.  Returns the offsets whose
+        values vary at least once, sorted by most-varying first, each as a
+        single hex string of one byte per frame in capture order.  Cheap way
+        to find which offsets actually carry information in a packet type.
+        """
+        try:
+            frames = _select_session_frames(
+                session_id, direction, size_bytes, None, None, byte_patterns
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return analysis.diff_bucket(frames, max_offsets=max_offsets)
+
+    @mcp.tool()
+    def analyze_byte_ranges(
+        session_id:    str,
+        direction:     Optional[str]        = None,
+        size_bytes:    Optional[int]        = None,
+        byte_patterns: Optional[list[dict]] = None,
+    ) -> dict:
+        """
+        Per-offset + per-range heuristics across a bucket of same-size frames.
+
+        For each contiguous run of varying offsets, scores candidate types
+        (uint/int LE/BE at 1/2/4/8 bytes, plus float32 LE/BE for 4-byte
+        widths) and flags generic patterns:
+
+          - ``looks_like_length``: value == frame_size - C for all frames.
+          - ``looks_like_counter``: values are (mostly) monotonic.
+          - ``looks_like_ascii_run``: ≥80% printable ASCII bytes.
+
+        No domain-specific value-range checks.  All selected frames must be
+        the same size; use ``size_bytes`` and/or ``byte_patterns`` to scope.
+        """
+        try:
+            frames = _select_session_frames(
+                session_id, direction, size_bytes, None, None, byte_patterns
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return analysis.analyze_byte_ranges(frames)
+
+    @mcp.tool()
+    def find_length_fields(
+        session_id:    str,
+        direction:     Optional[str]        = None,
+        byte_patterns: Optional[list[dict]] = None,
+    ) -> dict:
+        """
+        Find offsets whose integer value tracks frame length.
+
+        Works across MIXED-size frames in the bucket — most generic length-
+        prefix detection happens by correlating ``value`` with ``len(frame)``
+        across frames of different sizes.  Reports every offset/width/
+        byteorder combination where ``value == len(frame) - constant`` for
+        the SAME constant across every selected frame.
+
+        Heads up: a length field at offset 0 will produce both a "true"
+        candidate and several lower-confidence ones if the protocol packs a
+        type byte next to it — review the constants.
+        """
+        try:
+            frames = _select_session_frames(
+                session_id, direction, None, None, None, byte_patterns
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return analysis.find_length_field_candidates(frames)
+
+    @mcp.tool()
+    def offset_correlations(
+        session_id:    str,
+        offset_a:      int,
+        offset_b:      int,
+        type_a:        str                  = "uint8",
+        type_b:        str                  = "uint8",
+        direction:     Optional[str]        = None,
+        size_bytes:    Optional[int]        = None,
+        byte_patterns: Optional[list[dict]] = None,
+    ) -> dict:
+        """
+        Pearson correlation between values at two offsets across the bucket.
+
+        Useful for detecting paired fields (paired counters, related flags)
+        without baking in domain assumptions.  Also returns ``change_pairing``:
+        the fraction of consecutive frames where A and B both changed (or both
+        stayed put).  High values → tightly coupled.
+        """
+        try:
+            frames = _select_session_frames(
+                session_id, direction, size_bytes, None, None, byte_patterns
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        try:
+            return analysis.offset_correlations(
+                frames,
+                offset_a=offset_a,
+                offset_b=offset_b,
+                type_a=type_a,
+                type_b=type_b,
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+
+    # ------------------------------------------------------------------ #
+    # Protocol definition editing (in-place mutation of the active def)    #
+    # ------------------------------------------------------------------ #
+
+    def _active_definition():
+        """Return the active ProtocolDefinition or raise RuntimeError."""
+        from protopoke.protocol.parser import DefinitionBasedDecoder
+        if not isinstance(api._decoder, DefinitionBasedDecoder):
+            raise RuntimeError(
+                "No protocol definition is loaded.  Call "
+                "create_protocol_definition() or set_protocol_file() first."
+            )
+        return api._decoder._def
+
+    def _reapply_definition(defn) -> None:
+        """Re-attach the protocol after mutating its dataclasses."""
+        from protopoke.protocol.parser import (
+            DefinitionBasedDecoder, DefinitionBasedEncoder
+        )
+        api.set_protocol(
+            DefinitionBasedDecoder(defn),
+            DefinitionBasedEncoder(defn),
+        )
+
+    @mcp.tool()
+    def get_protocol_definition() -> dict:
+        """
+        Return the active ProtocolDefinition as a YAML-compatible dict.
+
+        Round-trips with ``set_protocol_dict``: the returned dict is exactly
+        what the loader accepts.  Returns ``{"error": ...}`` if no
+        definition-based protocol is loaded.
+        """
+        from protopoke.protocol.definition import protocol_to_dict
+        try:
+            defn = _active_definition()
+        except RuntimeError as exc:
+            return {"error": str(exc)}
+        return protocol_to_dict(defn)
+
+    @mcp.tool()
+    def create_protocol_definition(
+        name:       str,
+        endianness: str = "big",
+        version:    str = "1.0",
+    ) -> dict:
+        """
+        Start a new, empty ProtocolDefinition and attach it as the active
+        decoder/encoder.
+
+        Replaces any currently loaded protocol.  Add packet types with
+        ``add_message_definition`` and fields with ``add_field_to_message``,
+        then save to disk with ``save_protocol_to_file``.
+        """
+        if endianness not in ("big", "little"):
+            return {"error": "endianness must be 'big' or 'little'"}
+        from protopoke.protocol.definition import ProtocolDefinition
+        defn = ProtocolDefinition(name=name, version=version, endianness=endianness)
+        _reapply_definition(defn)
+        return {"ok": True, "protocol_name": name}
+
+    @mcp.tool()
+    def add_message_definition(message: dict) -> dict:
+        """
+        Append a MessageDefinition to the active protocol.
+
+        ``message`` uses the same schema as the loader — the same dict you'd
+        write inside ``messages: [...]`` in YAML.  Example::
+
+            {
+              "name": "mv_position",
+              "match": {"type": "magic", "offset": 0, "value": [0x6d, 0x76]},
+              "direction": "client_to_server",
+              "fields": [
+                {"name": "type", "type": "bytes", "length": 2},
+                {"name": "x",    "type": "float32"},
+                {"name": "y",    "type": "float32"},
+                {"name": "z",    "type": "float32"}
+              ]
+            }
+
+        Returns ``{"ok": True, "message_count": N}`` on success.  Errors if
+        a message with the same name already exists.
+        """
+        from protopoke.protocol.definition.loader import _parse_message
+        try:
+            defn = _active_definition()
+        except RuntimeError as exc:
+            return {"error": str(exc)}
+        name = message.get("name")
+        if not isinstance(name, str) or not name:
+            return {"error": "message.name is required"}
+        if any(m.name == name for m in defn.messages):
+            return {"error": f"Message {name!r} already exists; use update_message_definition()"}
+        try:
+            msg_def = _parse_message(message, len(defn.messages), "<mcp>")
+        except ValueError as exc:
+            return {"error": str(exc)}
+        defn.messages.append(msg_def)
+        _reapply_definition(defn)
+        return {"ok": True, "message_count": len(defn.messages)}
+
+    @mcp.tool()
+    def update_message_definition(name: str, message: dict) -> dict:
+        """
+        Replace the MessageDefinition called ``name`` with the given dict.
+
+        The new dict's ``name`` field can differ — the message will be renamed.
+        Use this when you want to overwrite an existing packet type wholesale
+        rather than editing individual fields.
+        """
+        from protopoke.protocol.definition.loader import _parse_message
+        try:
+            defn = _active_definition()
+        except RuntimeError as exc:
+            return {"error": str(exc)}
+        idx = next((i for i, m in enumerate(defn.messages) if m.name == name), None)
+        if idx is None:
+            return {"error": f"Message {name!r} not found"}
+        try:
+            new_msg = _parse_message(message, idx, "<mcp>")
+        except ValueError as exc:
+            return {"error": str(exc)}
+        defn.messages[idx] = new_msg
+        _reapply_definition(defn)
+        return {"ok": True}
+
+    @mcp.tool()
+    def remove_message_definition(name: str) -> dict:
+        """Remove a MessageDefinition from the active protocol by name."""
+        try:
+            defn = _active_definition()
+        except RuntimeError as exc:
+            return {"error": str(exc)}
+        before = len(defn.messages)
+        defn.messages = [m for m in defn.messages if m.name != name]
+        if len(defn.messages) == before:
+            return {"error": f"Message {name!r} not found"}
+        _reapply_definition(defn)
+        return {"ok": True, "message_count": len(defn.messages)}
+
+    @mcp.tool()
+    def reorder_message_definition(name: str, new_index: int) -> dict:
+        """
+        Move a MessageDefinition to ``new_index`` (0-based) in the active
+        protocol's ``messages`` list.
+
+        Order matters: the decoder tries match rules in list order and uses
+        the first hit — put specific magic-byte messages before catch-alls
+        (``match.type: always``).
+        """
+        try:
+            defn = _active_definition()
+        except RuntimeError as exc:
+            return {"error": str(exc)}
+        idx = next((i for i, m in enumerate(defn.messages) if m.name == name), None)
+        if idx is None:
+            return {"error": f"Message {name!r} not found"}
+        if new_index < 0 or new_index >= len(defn.messages):
+            return {"error": f"new_index {new_index} out of range [0, {len(defn.messages)-1}]"}
+        msg = defn.messages.pop(idx)
+        defn.messages.insert(new_index, msg)
+        _reapply_definition(defn)
+        return {"ok": True}
+
+    @mcp.tool()
+    def add_field_to_message(
+        message_name: str,
+        field:        dict,
+        index:        Optional[int] = None,
+    ) -> dict:
+        """
+        Append (or insert) a FieldDefinition into a MessageDefinition.
+
+        ``field`` uses the same schema as the loader.  ``index=None`` (default)
+        appends to the end; otherwise the field is inserted at ``index``.
+        """
+        from protopoke.protocol.definition.loader import _parse_field
+        try:
+            defn = _active_definition()
+        except RuntimeError as exc:
+            return {"error": str(exc)}
+        msg = next((m for m in defn.messages if m.name == message_name), None)
+        if msg is None:
+            return {"error": f"Message {message_name!r} not found"}
+        fname = field.get("name")
+        if not isinstance(fname, str) or not fname:
+            return {"error": "field.name is required"}
+        if any(f.name == fname for f in msg.fields):
+            return {"error": f"Field {fname!r} already exists in {message_name!r}"}
+        try:
+            new_field = _parse_field(field, len(msg.fields), f"<mcp:{message_name}>")
+        except ValueError as exc:
+            return {"error": str(exc)}
+        if index is None:
+            msg.fields.append(new_field)
+        else:
+            if index < 0 or index > len(msg.fields):
+                return {"error": f"index {index} out of range [0, {len(msg.fields)}]"}
+            msg.fields.insert(index, new_field)
+        _reapply_definition(defn)
+        return {"ok": True, "field_count": len(msg.fields)}
+
+    @mcp.tool()
+    def update_field_in_message(
+        message_name: str,
+        field_name:   str,
+        field:        dict,
+    ) -> dict:
+        """
+        Replace a FieldDefinition with a new one.  ``field`` may rename it.
+        """
+        from protopoke.protocol.definition.loader import _parse_field
+        try:
+            defn = _active_definition()
+        except RuntimeError as exc:
+            return {"error": str(exc)}
+        msg = next((m for m in defn.messages if m.name == message_name), None)
+        if msg is None:
+            return {"error": f"Message {message_name!r} not found"}
+        idx = next((i for i, f in enumerate(msg.fields) if f.name == field_name), None)
+        if idx is None:
+            return {"error": f"Field {field_name!r} not found in {message_name!r}"}
+        try:
+            new_field = _parse_field(field, idx, f"<mcp:{message_name}>")
+        except ValueError as exc:
+            return {"error": str(exc)}
+        msg.fields[idx] = new_field
+        _reapply_definition(defn)
+        return {"ok": True}
+
+    @mcp.tool()
+    def remove_field_from_message(message_name: str, field_name: str) -> dict:
+        """Remove a FieldDefinition from a MessageDefinition by name."""
+        try:
+            defn = _active_definition()
+        except RuntimeError as exc:
+            return {"error": str(exc)}
+        msg = next((m for m in defn.messages if m.name == message_name), None)
+        if msg is None:
+            return {"error": f"Message {message_name!r} not found"}
+        before = len(msg.fields)
+        msg.fields = [f for f in msg.fields if f.name != field_name]
+        if len(msg.fields) == before:
+            return {"error": f"Field {field_name!r} not found in {message_name!r}"}
+        _reapply_definition(defn)
+        return {"ok": True, "field_count": len(msg.fields)}
+
+    @mcp.tool()
+    def save_protocol_to_file(path: str) -> dict:
+        """
+        Serialise the active ProtocolDefinition to a ``.yaml`` / ``.yml`` /
+        ``.json`` file at ``path``.
+
+        Choose the format via the file extension.  YAML requires PyYAML.
+        """
+        import json
+        from pathlib import Path
+        from protopoke.protocol.definition import protocol_to_dict
+        try:
+            defn = _active_definition()
+        except RuntimeError as exc:
+            return {"error": str(exc)}
+        p = Path(path)
+        suffix = p.suffix.lower()
+        data = protocol_to_dict(defn)
+        if suffix in (".yaml", ".yml"):
+            try:
+                import yaml  # type: ignore[import]
+            except ImportError:
+                return {"error": "PyYAML not installed; use .json or `pip install pyyaml`"}
+            p.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        elif suffix == ".json":
+            p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        else:
+            return {"error": f"Unsupported extension {suffix!r}; use .yaml/.yml/.json"}
+        return {"ok": True, "path": str(p.resolve())}
 
     # Expose the rebind hook so MCPHost can swap the bound API without
     # tearing down the server task.
