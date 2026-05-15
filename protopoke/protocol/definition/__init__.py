@@ -13,6 +13,12 @@ from .schema import (
     BitfieldConfig,
 )
 from .loader import load_protocol, load_protocol_file
+from .serializer import (
+    field_to_dict,
+    match_to_dict,
+    message_to_dict,
+    protocol_to_dict,
+)
 
 __all__ = [
     "ProtocolDefinition",
@@ -27,4 +33,8 @@ __all__ = [
     "BitfieldConfig",
     "load_protocol",
     "load_protocol_file",
+    "protocol_to_dict",
+    "message_to_dict",
+    "match_to_dict",
+    "field_to_dict",
 ]
