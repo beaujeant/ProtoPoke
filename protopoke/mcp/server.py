@@ -51,6 +51,9 @@ Tools are grouped by concern:
                               compare_frames, diff_frames_in_bucket,
                               analyze_byte_ranges, find_length_fields,
                               offset_correlations
+    Authoring guides        : list_authoring_guides, get_authoring_guide
+                              (also exposed as ``protopoke://guides`` and
+                              ``protopoke://guides/<slug>`` MCP resources)
 """
 
 from __future__ import annotations
@@ -96,6 +99,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
     from protopoke.models import Direction
     from protopoke.rules.rule import ReplaceRule, InterceptRule, RuleAction
     from protopoke.forge.models import Playbook, PlaybookFrame
+    from protopoke.mcp.guides import GUIDES, build_index, load_guide
 
     def _rebind(new_api: "ProtoPokeAPI") -> None:
         """Swap the api bound to all tool closures. Called by MCPHost."""
@@ -103,6 +107,66 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         api = new_api
 
     mcp = FastMCP(name)
+
+    # ------------------------------------------------------------------ #
+    # Authoring guides                                                      #
+    # ------------------------------------------------------------------ #
+    # Expose the protopoke/mcp/guides/*.md documents both as MCP resources
+    # (preferred — surfaced in the client's resource picker) and as a tool
+    # (fallback — works on clients that ignore resources).
+
+    @mcp.resource(
+        "protopoke://guides",
+        name="protopoke_guides_index",
+        description="Index of authoring guides for ProtoPoke extension points.",
+        mime_type="text/markdown",
+    )
+    def _guides_index() -> str:
+        return build_index()
+
+    def _register_guide(slug: str, title: str, description: str) -> None:
+        @mcp.resource(
+            f"protopoke://guides/{slug}",
+            name=f"protopoke_guide_{slug.replace('-', '_')}",
+            description=description,
+            mime_type="text/markdown",
+        )
+        def _guide_body() -> str:
+            return load_guide(slug)
+
+    for _slug, (_filename, _title, _desc) in GUIDES.items():
+        _register_guide(_slug, _title, _desc)
+
+    @mcp.tool()
+    def list_authoring_guides() -> list[dict]:
+        """
+        List authoring guides shipped with the MCP server.
+
+        Each guide explains how to write a ProtoPoke extension point
+        (custom framer, protocol definition YAML, custom replace script).
+        Read a guide with ``get_authoring_guide(slug)``, or fetch the same
+        content as the MCP resource ``protopoke://guides/<slug>``.
+        """
+        return [
+            {"slug": slug, "title": title, "description": desc,
+             "uri": f"protopoke://guides/{slug}"}
+            for slug, (_, title, desc) in GUIDES.items()
+        ]
+
+    @mcp.tool()
+    def get_authoring_guide(slug: str) -> dict:
+        """
+        Return the markdown body of one of the authoring guides.
+
+        Valid slugs come from ``list_authoring_guides()`` (e.g. ``"framers"``,
+        ``"protocol-definitions"``, ``"replace-scripts"``). Use this when
+        you are about to write a custom framer, a protocol definition, or
+        a script replace rule and want the authoritative format spec.
+        """
+        if slug not in GUIDES:
+            return {"error": f"Unknown guide {slug!r}",
+                    "available": list(GUIDES.keys())}
+        return {"slug": slug, "content": load_guide(slug)}
 
     # In-memory playbook store (MCP-side, mirrors UI Forge tab)
     _playbooks: dict[str, Playbook] = {}

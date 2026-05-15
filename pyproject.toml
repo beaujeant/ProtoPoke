@@ -35,3 +35,6 @@ testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 include = ["protopoke*"]
+
+[tool.setuptools.package-data]
+"protopoke.mcp.guides" = ["*.md"]
