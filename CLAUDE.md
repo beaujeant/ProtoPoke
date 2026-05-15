@@ -91,7 +91,10 @@ protopoke/
 │   ├── base.py         ProtocolDecoder/Encoder ABCs, PassthroughDecoder
 │   ├── definition/
 │   │   ├── schema.py   ProtocolDefinition, MessageDefinition, FieldDefinition
-│   │   └── loader.py   load_protocol_file() / load_protocol() (YAML/JSON)
+│   │   ├── loader.py   load_protocol_file() / load_protocol() (YAML/JSON)
+│   │   └── serializer.py protocol_to_dict()/message_to_dict()/field_to_dict()
+│   │                     — round-trips with the loader (powers MCP protocol
+│   │                     definition editing tools and save_protocol_to_file)
 │   ├── parser/
 │   │   ├── engine.py   DefinitionBasedDecoder, DefinitionBasedEncoder
 │   │   ├── fields.py   parse_field() / encode_field() per FieldType
@@ -124,6 +127,16 @@ protopoke/
 │       │               KnownBadMutator, RadamsaMutator, ChainMutator
 │       └── field.py    FieldBoundaryMutator, FieldOverflowMutator,
 │                       NullByteMutator, LengthMangleMutator
+│
+├── analysis.py         Pure analytical helpers used by the MCP reverse-
+│                       engineering tools. Protocol-agnostic; takes a list
+│                       of Frame objects and returns plain dicts. Covers
+│                       bucketing/stats (frame_stats, entropy_map,
+│                       cluster_frames), filtering (select_frames),
+│                       diffing (compare_two_frames, diff_bucket),
+│                       decoding (decode_field), and heuristics
+│                       (analyze_byte_ranges, find_length_field_candidates,
+│                       offset_correlations).
 │
 ├── tls/
 │   ├── ca.py           CertificateAuthority — generate/sign per-session certs
@@ -360,6 +373,8 @@ tests/
 ├── test_inject_to_client.py        api.inject_to_client() into live session
 ├── test_mcp_server.py              MCP tool coverage
 ├── test_mcp_host.py                MCPHost lifecycle
+├── test_mcp_analysis_tools.py      MCP analysis + protocol-definition editing tools
+├── test_analysis.py                protopoke/analysis.py helpers (pure unit tests)
 ├── test_segmented_control.py       SegmentedControl widget
 └── test_to_dict_serialisation.py   .to_dict() / .from_dict() round-trips
 ```
@@ -380,7 +395,9 @@ tests/
 | Add a protocol field type | `protopoke/protocol/parser/fields.py` |
 | Add a match strategy | `protopoke/protocol/parser/matcher.py` |
 | Add a mutator | `protopoke/fuzzing/mutators/` |
+| Add an analytical helper (stats / diff / heuristic) | `protopoke/analysis.py` |
 | Add an MCP tool | `protopoke/mcp/server.py` |
+| Change how a ProtocolDefinition serialises back to dict/YAML | `protopoke/protocol/definition/serializer.py` |
 | Change the TUI layout | `protopoke/ui/app.py`, `protopoke/ui/tabs/` |
 | Change project save/load format | `protopoke/project/manager.py` |
 | Change TLS certificate behaviour | `protopoke/tls/ca.py`, `protopoke/tls/handler.py` |

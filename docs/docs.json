@@ -58,7 +58,8 @@
         "pages": [
           "mcp/overview",
           "mcp/configuration",
-          "mcp/tools"
+          "mcp/tools",
+          "mcp/analysis"
         ]
       },
       {
