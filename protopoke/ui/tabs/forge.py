@@ -1056,17 +1056,33 @@ class ForgeTab(Widget):
                         yield Btn("Cancel", variant="default", id="btn-cancel")
                         yield Btn("Export", variant="primary",  id="btn-save")
 
-        def _on_path(path: str | None) -> None:
-            if not path:
-                return
-            if not path.endswith(".json"):
-                path += ".json"
+        def _write(path: str) -> None:
             try:
                 import pathlib
                 pathlib.Path(path).write_text(json.dumps(export_data, indent=2), encoding="utf-8")
                 logger.info("Playbook exported to %s", path)
             except Exception as exc:
                 logger.error("Export failed: %s", exc)
+
+        def _on_path(path: str | None) -> None:
+            if not path:
+                return
+            if not path.endswith(".json"):
+                path += ".json"
+            import pathlib
+            if pathlib.Path(path).exists():
+                from ..modals.confirm import ConfirmModal
+                self.app.push_screen(
+                    ConfirmModal(
+                        title="File already exists",
+                        body=f"'{path}' already exists.\nOverwrite it?",
+                        confirm_label="Overwrite",
+                        confirm_variant="warning",
+                    ),
+                    lambda confirmed, _p=path: _write(_p) if confirmed else None,
+                )
+            else:
+                _write(path)
 
         self.app.push_screen(_ExportModal(""), _on_path)
 
