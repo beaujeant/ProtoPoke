@@ -55,6 +55,47 @@ message to/from the HTTP endpoint, and exits when the client closes.
 Always start the TUI first with `protopoke --mcp` so the bridge has
 somewhere to connect to.
 
+## Running without installing on the host (`uv`)
+
+If you'd rather not install ProtoPoke globally, [`uv`](https://docs.astral.sh/uv/)
+can run both the TUI and the stdio bridge from an ephemeral environment.
+Replace the git ref below with a tag or commit if you want to pin a
+specific version.
+
+Run the TUI once in a terminal:
+
+```bash
+uvx --from "git+https://github.com/beaujeant/ProtoPoke[mcp]" protopoke --mcp
+```
+
+Point the AI client at `uvx` instead of `protopoke-mcp`:
+
+```json
+{
+  "mcpServers": {
+    "protopoke": {
+      "command": "uvx",
+      "args": [
+        "--from", "git+https://github.com/beaujeant/ProtoPoke[mcp]",
+        "protopoke-mcp"
+      ]
+    }
+  }
+}
+```
+
+`uvx` caches the environment after the first run, so subsequent bridge
+launches are fast. If your client can't find `uvx` in its `PATH`, replace
+`"uvx"` with the absolute path (`which uvx` on macOS/Linux).
+
+For a one-time, persistent install (still isolated from system Python):
+
+```bash
+uv tool install --from "git+https://github.com/beaujeant/ProtoPoke[mcp]" protopoke
+# then use the plain "protopoke-mcp" / "protopoke" commands in all the
+# configs below.
+```
+
 ## Claude Desktop
 
 Add a `protopoke` entry to your Claude Desktop MCP configuration:
