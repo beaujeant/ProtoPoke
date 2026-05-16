@@ -133,6 +133,72 @@ byte-level diff between two frames:
 - common prefix / suffix lengths
 - 16-byte-row side-by-side hex view
 
+### `find_constant_byte_sequences`
+
+Finds byte n-grams that appear in at least `min_coverage` of the selected
+frames regardless of offset. Surfaces magic markers, version stamps, and
+trailers that constant-offset stats miss. Strict substrings of a longer hit
+with the same coverage are suppressed automatically.
+
+### `align_frames`
+
+Needleman-Wunsch global alignment of mixed-size frames against the first
+selected frame. Returns the aligned rows as hex strings (with `--` for
+gaps), a consensus row (`xx` where every row agrees, `??` where rows
+differ, `--` for gaps), and the coalesced variable regions. Use this for
+clusters that share structure but have different lengths.
+
+### `extract_strings`
+
+`strings(1)` for captured frames — every printable-ASCII run of length ≥
+`min_length` with its frame ID and offset. Set `include_utf16_le=True`
+for Windows-style strings (printable bytes interleaved with NULs).
+
+### `detect_tlv`
+
+Tries every Type-Length-Value layout (`type_width` ∈ {1, 2},
+`length_width` ∈ {1, 2, 4}, BE/LE, length-includes-header / value-only)
+at the given `start_offsets` and reports shapes that consume entire
+frames as a chain of records. Each candidate also reports the most
+common type values seen — often the actual opcode / tag enumeration.
+
+### `detect_checksums_crcs`
+
+Tries `sum8`, `xor8`, `sum16`, `fletcher16`, `crc16_ccitt`,
+`crc16_xmodem`, `crc32_ieee`, `adler32` against every plausible offset
+in every frame. For multi-byte algorithms both endiannesses are tried.
+The algorithm is computed over the frame's bytes *excluding* the
+candidate field, so a match means the field really is a checksum of
+the rest.
+
+### `detect_timestamps`
+
+For every `(offset, width ∈ {4, 8}, byteorder)` candidate, checks how
+many frames' decoded value falls in each known epoch range
+(`unix_seconds`, `unix_milliseconds`, `ntp_seconds`,
+`windows_filetime`). Reports the Pearson correlation between the
+decoded value and the frame's capture timestamp — use the correlation
+to disambiguate LE vs BE.
+
+### `detect_compression_encryption`
+
+Per-frame: scans for known magic signatures (gzip, zlib, lz4, zstd,
+ZIP, 7z, RAR, PNG, JPEG, GIF, PDF, ELF, PE, ASN.1 SEQUENCE, TLS
+handshake records, SSH banners, …) and reports sliding-window
+high-entropy regions (Shannon entropy ≥ `high_entropy_min` over
+`window_size` bytes — default 128 bytes / 6.5 bits, which catches
+compressed and encrypted payloads while ignoring structured binary).
+
+### `echo_detection`
+
+Walks the session in capture order. For each source frame and width
+(default `[2, 4, 8]`), checks whether any non-trivial value sent at
+`src_offset` reappears at a fixed `dst_offset` in the next
+`max_distance` frames in the opposite direction. Triples
+`(src_offset, dst_offset, width)` with at least `min_coverage` of
+source frames echoed are reported — the classic transaction-ID /
+session-token pattern.
+
 ## 6. Annotate the protocol
 
 Once you've figured out the structure, persist it by editing the active

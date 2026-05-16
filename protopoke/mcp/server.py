@@ -2783,6 +2783,320 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         except ValueError as exc:
             return {"error": str(exc)}
 
+    @mcp.tool()
+    def find_constant_byte_sequences(
+        session_id:    str,
+        direction:     Optional[str]        = None,
+        size_bytes:    Optional[int]        = None,
+        byte_patterns: Optional[list[dict]] = None,
+        min_length:    int                  = 2,
+        max_length:    int                  = 8,
+        min_coverage:  float                = 0.8,
+        max_results:   int                  = 50,
+    ) -> dict:
+        """
+        Find byte n-grams that appear in at least ``min_coverage`` of the
+        selected frames, regardless of offset.
+
+        Surfaces magic markers, version stamps, trailers, and recurring
+        substrings that constant-offset stats miss.  Strict substrings of a
+        longer hit with the same coverage are suppressed — the longest
+        distinct pattern wins.
+
+        Each result includes up to three sample frames with the offset(s) at
+        which the pattern occurs so the caller can pivot from "this exists"
+        to "here is where".
+        """
+        try:
+            frames = _select_session_frames(
+                session_id, direction, size_bytes, None, None, byte_patterns
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return analysis.find_constant_byte_sequences(
+            frames,
+            min_length=min_length,
+            max_length=max_length,
+            min_coverage=min_coverage,
+            max_results=max_results,
+        )
+
+    @mcp.tool()
+    def align_frames(
+        session_id:     str,
+        direction:      Optional[str]        = None,
+        size_bytes:     Optional[int]        = None,
+        byte_patterns:  Optional[list[dict]] = None,
+        max_frames:     int                  = 20,
+        max_frame_size: int                  = 512,
+    ) -> dict:
+        """
+        Needleman-Wunsch global alignment of mixed-size frames against the
+        first selected frame.
+
+        Draws field boundaries even when prefixes shift — for clusters that
+        share structure but have different lengths (TLV chains, string
+        bodies, variable headers).  Returns the aligned rows as hex strings
+        with ``--`` for gaps, plus a consensus string (``xx`` where every
+        row agrees, ``??`` where rows differ, ``--`` where any gap is
+        present) and the list of variable regions for quick inspection.
+
+        Inputs are capped: at most ``max_frames`` frames, each truncated to
+        ``max_frame_size`` bytes for the alignment (cost is ``O(n*m)`` per
+        pair).
+        """
+        try:
+            frames = _select_session_frames(
+                session_id, direction, size_bytes, None, None, byte_patterns
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return analysis.align_frames(
+            frames,
+            max_frames=max_frames,
+            max_frame_size=max_frame_size,
+        )
+
+    @mcp.tool()
+    def extract_strings(
+        session_id:    str,
+        direction:     Optional[str]        = None,
+        size_bytes:    Optional[int]        = None,
+        byte_patterns: Optional[list[dict]] = None,
+        min_length:    int                  = 4,
+        max_per_frame: int                  = 50,
+        include_utf16_le: bool              = False,
+    ) -> dict:
+        """
+        ``strings(1)`` for captured frames: report every printable-ASCII run
+        of length ≥ ``min_length``, with its frame ID and offset.
+
+        Stops a run at NUL or any non-printable byte.  If ``include_utf16_le``
+        is True, also reports Windows-style UTF-16-LE strings (printable
+        ASCII bytes interleaved with NUL bytes).
+
+        The fastest way to spot embedded usernames, hostnames, paths, error
+        messages, or any other human-readable content the protocol carries.
+        """
+        try:
+            frames = _select_session_frames(
+                session_id, direction, size_bytes, None, None, byte_patterns
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        try:
+            return analysis.extract_strings(
+                frames,
+                min_length=min_length,
+                max_per_frame=max_per_frame,
+                include_utf16_le=include_utf16_le,
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+
+    @mcp.tool()
+    def detect_tlv(
+        session_id:    str,
+        direction:     Optional[str]        = None,
+        size_bytes:    Optional[int]        = None,
+        byte_patterns: Optional[list[dict]] = None,
+        start_offsets: Optional[list[int]]  = None,
+        min_records:   int                  = 2,
+        min_coverage:  float                = 0.6,
+        max_results:   int                  = 10,
+    ) -> dict:
+        """
+        Try Type-Length-Value layouts and score how well each one explains
+        the selected frames.
+
+        For every combination of ``(type_width in {1, 2}, length_width in
+        {1, 2, 4}, length_byteorder, length_includes_header)`` and every
+        starting offset in ``start_offsets`` (default ``[0]``), walk each
+        frame as a TLV chain.  A frame "matches" a shape if the walk
+        consumes the entire buffer (no leftover bytes) and produces at least
+        ``min_records`` records.
+
+        For each surviving candidate the response includes the most common
+        type values seen, which often directly map to opcode / tag names
+        in the spec.
+        """
+        try:
+            frames = _select_session_frames(
+                session_id, direction, size_bytes, None, None, byte_patterns
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        offsets = tuple(start_offsets) if start_offsets else (0,)
+        return analysis.detect_tlv(
+            frames,
+            start_offsets=offsets,
+            min_records=min_records,
+            min_coverage=min_coverage,
+            max_results=max_results,
+        )
+
+    @mcp.tool()
+    def detect_checksums_crcs(
+        session_id:    str,
+        direction:     Optional[str]        = None,
+        size_bytes:    Optional[int]        = None,
+        byte_patterns: Optional[list[dict]] = None,
+        min_coverage:  float                = 0.9,
+        max_results:   int                  = 20,
+    ) -> dict:
+        """
+        Try standard checksum / CRC / Adler / Fletcher algorithms over each
+        frame and report ``(offset, algorithm, byteorder, coverage)`` hits.
+
+        Algorithms tried: ``sum8``, ``xor8``, ``sum16``, ``fletcher16``,
+        ``crc16_ccitt`` (init 0xFFFF), ``crc16_xmodem`` (init 0),
+        ``crc32_ieee`` (zlib), ``adler32`` (zlib).
+
+        For each candidate offset+algorithm, the algorithm is computed over
+        the frame's bytes *excluding* the candidate field.  If the stored
+        value matches the computed value in at least ``min_coverage`` of
+        frames, the candidate is reported.  For multi-byte algorithms, both
+        little- and big-endian interpretations are tried.
+
+        Reports the algorithm name, offset, byteorder, and coverage —
+        enough to add the checksum as a field in the protocol definition
+        and tag it for `tamper` probes.
+        """
+        try:
+            frames = _select_session_frames(
+                session_id, direction, size_bytes, None, None, byte_patterns
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return analysis.detect_checksums_crcs(
+            frames,
+            min_coverage=min_coverage,
+            max_results=max_results,
+        )
+
+    @mcp.tool()
+    def detect_timestamps(
+        session_id:    str,
+        direction:     Optional[str]        = None,
+        size_bytes:    Optional[int]        = None,
+        byte_patterns: Optional[list[dict]] = None,
+        min_coverage:  float                = 0.8,
+        max_results:   int                  = 20,
+    ) -> dict:
+        """
+        Find offsets whose decoded unsigned integer value lies in a plausible
+        real-world timestamp range across most selected frames.
+
+        For each ``(offset, width in {4, 8}, byteorder in {little, big})``
+        candidate, check the fraction of frames where the value falls inside
+        each known epoch range — ``unix_seconds``, ``unix_milliseconds``,
+        ``ntp_seconds``, ``windows_filetime``.  Each surviving candidate also
+        reports the Pearson correlation between the decoded value and the
+        frame's capture timestamp — a value near 1.0 strongly confirms it's
+        a real timestamp rather than an integer that happens to be in range.
+
+        Use the correlation to break ties between LE/BE candidates: the
+        endianness with the higher ``pearson_r_with_capture_time`` is
+        almost always the right one.
+        """
+        try:
+            frames = _select_session_frames(
+                session_id, direction, size_bytes, None, None, byte_patterns
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return analysis.detect_timestamps(
+            frames,
+            min_coverage=min_coverage,
+            max_results=max_results,
+        )
+
+    @mcp.tool()
+    def detect_compression_encryption(
+        session_id:       str,
+        direction:        Optional[str]        = None,
+        size_bytes:       Optional[int]        = None,
+        byte_patterns:    Optional[list[dict]] = None,
+        high_entropy_min: float                = 7.5,
+        window_size:      int                  = 64,
+        window_step:      int                  = 16,
+        max_per_frame:    int                  = 6,
+    ) -> dict:
+        """
+        Per-frame detection of compressed/encrypted regions and known
+        file/stream magic signatures.
+
+        Two passes per frame:
+
+        - **Signature scan** — every byte position is checked against a small
+          catalogue of well-known magic strings (gzip, zlib, lz4, zstd, png,
+          jpeg, zip, ELF, PE, ASN.1 SEQUENCE, TLS handshake records, SSH
+          banners, …).
+        - **Entropy windows** — a sliding ``window_size``-byte window
+          (stepping by ``window_step``) is scored for Shannon entropy;
+          windows at or above ``high_entropy_min`` bits are reported (capped
+          at ``max_per_frame`` per frame).
+
+        Useful for spotting embedded blobs (compressed payloads,
+        ciphertext, nested protocols) you'd otherwise miss in a hex dump.
+        """
+        try:
+            frames = _select_session_frames(
+                session_id, direction, size_bytes, None, None, byte_patterns
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return analysis.detect_compression_encryption(
+            frames,
+            high_entropy_min=high_entropy_min,
+            window_size=window_size,
+            window_step=window_step,
+            max_per_frame=max_per_frame,
+        )
+
+    @mcp.tool()
+    def echo_detection(
+        session_id:    str,
+        size_bytes:    Optional[int]        = None,
+        byte_patterns: Optional[list[dict]] = None,
+        widths:        Optional[list[int]]  = None,
+        max_distance:  int                  = 5,
+        min_coverage:  float                = 0.5,
+        max_results:   int                  = 20,
+    ) -> dict:
+        """
+        Find values sent in one direction that reappear in the opposite
+        direction shortly after — the classic transaction-ID / session-token /
+        echo pattern.
+
+        Walks the session's frames in capture order.  For every source
+        frame F and each width in ``widths`` (default ``[2, 4, 8]``),
+        slides a window over F; for each non-trivial value (rejects all-
+        zero and all-same-byte values), looks in the next ``max_distance``
+        frames in the OPPOSITE direction.  Triples
+        ``(src_offset, dst_offset, width)`` that hit in at least
+        ``min_coverage`` of opportunities are reported with a sample value
+        — strong evidence the same field is being echoed.
+
+        Note: both directions are needed, so this tool does not accept a
+        ``direction`` filter.
+        """
+        # All frames, both directions
+        try:
+            frames = _select_session_frames(
+                session_id, None, size_bytes, None, None, byte_patterns
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        w_tuple = tuple(widths) if widths else (2, 4, 8)
+        return analysis.echo_detection(
+            frames,
+            widths=w_tuple,
+            max_distance=max_distance,
+            min_coverage=min_coverage,
+            max_results=max_results,
+        )
+
     # ------------------------------------------------------------------ #
     # Protocol definition editing (in-place mutation of the active def)    #
     # ------------------------------------------------------------------ #

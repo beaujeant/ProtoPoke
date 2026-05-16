@@ -223,6 +223,14 @@ for the typical workflow.
 | `analyze_byte_ranges` | Per-offset + per-range heuristics: candidate types, constant/ASCII/counter/length flags |
 | `find_length_fields` | Offsets whose value tracks frame length (`value == len(frame) - C`), works across mixed-size frames |
 | `offset_correlations` | Pearson correlation and change-pairing between two offsets |
+| `find_constant_byte_sequences` | Recurring byte n-grams that appear in ≥X% of frames regardless of offset — magic markers, version stamps, trailers |
+| `align_frames` | Needleman-Wunsch global alignment of mixed-size frames against the first frame — draws field boundaries when prefixes shift |
+| `extract_strings` | `strings(1)` for captured frames — printable-ASCII (and optionally UTF-16-LE) runs of length ≥ N |
+| `detect_tlv` | Try Type-Length-Value layouts (T width 1/2, L width 1/2/4, BE/LE, length-includes-header) and score completion per shape |
+| `detect_checksums_crcs` | Try sum8/xor8/sum16/fletcher16/CRC-16-CCITT/CRC-16-XMODEM/CRC-32-IEEE/Adler-32 against every offset and report matches |
+| `detect_timestamps` | Offsets whose uint32/uint64 value lies in a plausible epoch range (unix sec/ms, NTP, Windows FILETIME), ranked by correlation with capture time |
+| `detect_compression_encryption` | Per-frame magic-signature scan (gzip, zlib, lz4, zstd, PNG, JPEG, ZIP, ELF, PE, ASN.1, TLS records, SSH banners, …) plus high-entropy windows |
+| `echo_detection` | Find values sent in one direction that reappear at a fixed offset in the opposite direction — transaction IDs, session tokens |
 
 ### Field types for `decode_field` / `offset_correlations`
 

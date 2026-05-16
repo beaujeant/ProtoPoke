@@ -139,6 +139,80 @@ Bytes that **change between frames** carry information; bytes that
 **stay the same** are protocol structure. The single most reliable way
 to draw field boundaries is to find runs of co-varying bytes.
 
+For **mixed-size** clusters (same prefix, different sizes), the
+above tools require same-size frames. Two cheap alternatives:
+
+```text
+align_frames(session_id=session_id,
+             byte_patterns=[{"offset": 0, "hex": "6d76"}])
+detect_tlv(session_id=session_id,
+           byte_patterns=[{"offset": 0, "hex": "6d76"}],
+           start_offsets=[2])           # skip the magic
+```
+
+`align_frames` runs a Needleman-Wunsch alignment against the first
+frame — gap columns mark where one frame inserted/removed bytes,
+``??`` columns mark variable bytes, ``xx`` columns mark constant
+ones. `detect_tlv` tries every Type-Length-Value shape (T width
+1/2, L width 1/2/4, BE/LE, length-includes-header) and reports the
+ones that consume the whole frame as a record chain — the fastest
+way to recognise TLV-shaped protocols (ASN.1, BACnet, Modbus, many
+proprietary game protocols).
+
+## 4b. Specialised field hunts
+
+Generic stats catch most fields but miss the ones with well-defined
+semantics. Run these three in parallel on the cluster:
+
+```text
+detect_checksums_crcs(session_id=session_id, ...same scoping...)
+detect_timestamps(session_id=session_id, ...same scoping...)
+detect_compression_encryption(session_id=session_id, ...same scoping...)
+```
+
+- **Checksums**: tries `sum8`, `xor8`, `sum16`, `fletcher16`,
+  `crc16_ccitt`, `crc16_xmodem`, `crc32_ieee`, `adler32` against every
+  candidate offset, in both endiannesses. A `coverage: 1.0` candidate
+  is essentially proof that the field is a checksum of the rest of the
+  frame — annotate it and `tamper` a byte-flip to confirm the server
+  enforces it.
+- **Timestamps**: finds uint32/uint64 fields whose value lies in a
+  plausible unix-time / NTP / Windows-FILETIME range AND correlates with
+  the frame's capture timestamp. The correlation breaks LE/BE ties.
+- **Compression / encryption**: signature scan (gzip, zlib, lz4, zstd,
+  PNG, ZIP, ELF, ASN.1, TLS records, …) plus high-entropy sliding
+  windows. High-entropy regions inside an otherwise structured frame
+  are usually nested ciphertext or compressed blobs — recurse into them
+  with a separate framer / decoder.
+
+Also scan for embedded human-readable content:
+
+```text
+extract_strings(session_id=session_id, min_length=4,
+                byte_patterns=[{"offset": 0, "hex": "6d76"}])
+```
+
+Often the server name, app version, error message, or a username sits
+in plain ASCII inside a frame and immediately tells you what the
+message is for.
+
+## 4c. Find recurring patterns regardless of offset
+
+Many protocols sprinkle a 2-8 byte marker (frame trailer, record
+separator, embedded magic) somewhere inside a variable-length payload.
+Standard per-offset analysis can't see them; this one can:
+
+```text
+find_constant_byte_sequences(session_id=session_id,
+                             direction="client_to_server",
+                             min_length=2, max_length=8,
+                             min_coverage=0.8)
+```
+
+Each reported n-gram comes with sample frame offsets — use those to
+decide whether it's a fixed-position marker (just an unrecognised
+opcode) or a true free-floating sentinel.
+
 ## 5. Spot relationships between fields
 
 Some fields reference others (length-of, offset-of, count-of, hash-of).

@@ -134,9 +134,14 @@ protopoke/
 │                       bucketing/stats (frame_stats, entropy_map,
 │                       cluster_frames), filtering (select_frames),
 │                       diffing (compare_two_frames, diff_bucket),
-│                       decoding (decode_field), and heuristics
+│                       decoding (decode_field), heuristics
 │                       (analyze_byte_ranges, find_length_field_candidates,
-│                       offset_correlations).
+│                       offset_correlations), structure discovery
+│                       (find_constant_byte_sequences, align_frames,
+│                       extract_strings, detect_tlv), and semantic
+│                       field detection (detect_checksums_crcs,
+│                       detect_timestamps, detect_compression_encryption,
+│                       echo_detection).
 │
 ├── tls/
 │   ├── ca.py           CertificateAuthority — generate/sign per-session certs

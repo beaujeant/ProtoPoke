@@ -504,3 +504,150 @@ class TestProtocolDefinitionEditing:
         get_tool(mcp_server, "remove_message_definition")("FirstMsg")
         msgs2 = decode(session.id)
         assert msgs2[0]["message_type"] != "FirstMsg"
+
+
+# ---------------------------------------------------------------------------
+# Structure discovery / semantic detection tools
+# ---------------------------------------------------------------------------
+
+class TestFindConstantByteSequences:
+    def test_finds_recurring_magic(self, mcp_server, api):
+        session = api.session_registry.create("127.0.0.1", 80, "10.0.0.1", 443)
+        for i in range(5):
+            session.add_frame(Frame.create(
+                session.id, Direction.CLIENT_TO_SERVER,
+                b"PROTO" + bytes([i]) + b"data", i,
+            ))
+        fn = get_tool(mcp_server, "find_constant_byte_sequences")
+        out = fn(session.id, min_length=3, max_length=5)
+        assert out["frame_count"] == 5
+        hexes = {s["hex"] for s in out["sequences"]}
+        assert "50524f544f" in hexes  # "PROTO"
+
+
+class TestAlignFrames:
+    def test_aligns_variable_length(self, mcp_server, api):
+        session = api.session_registry.create("127.0.0.1", 80, "10.0.0.1", 443)
+        # Mixed sizes: HEAD<n>TAIL where n is 1, 2, or 3 bytes
+        bodies = [b"\x01", b"\x02\x02", b"\x03\x03\x03"]
+        for i, body in enumerate(bodies):
+            session.add_frame(Frame.create(
+                session.id, Direction.CLIENT_TO_SERVER,
+                b"HEAD" + body + b"TAIL", i,
+            ))
+        fn = get_tool(mcp_server, "align_frames")
+        out = fn(session.id)
+        assert out["frame_count"] == 3
+        assert any(r["kind"] in ("differ", "gap") for r in out["variable_regions"])
+
+
+class TestExtractStrings:
+    def test_finds_ascii(self, mcp_server, api):
+        session = api.session_registry.create("127.0.0.1", 80, "10.0.0.1", 443)
+        session.add_frame(Frame.create(
+            session.id, Direction.CLIENT_TO_SERVER,
+            b"\x00\x01hello world\x00bye\x00", 0,
+        ))
+        fn = get_tool(mcp_server, "extract_strings")
+        out = fn(session.id, min_length=3)
+        values = {s["value"] for s in out["strings"]}
+        assert "hello world" in values
+        assert "bye" in values
+
+
+class TestDetectTlv:
+    def test_detects_chain(self, mcp_server, api):
+        session = api.session_registry.create("127.0.0.1", 80, "10.0.0.1", 443)
+        chain = b"\x01\x02ab\x02\x03xyz"
+        for i in range(3):
+            session.add_frame(Frame.create(
+                session.id, Direction.CLIENT_TO_SERVER, chain, i,
+            ))
+        fn = get_tool(mcp_server, "detect_tlv")
+        out = fn(session.id)
+        assert out["candidates"]
+        top = out["candidates"][0]
+        assert top["type_width"] == 1
+        assert top["length_width"] == 1
+        assert top["coverage"] == 1.0
+
+
+class TestDetectChecksumsCrcs:
+    def test_sum8_detected(self, mcp_server, api):
+        import struct
+        session = api.session_registry.create("127.0.0.1", 80, "10.0.0.1", 443)
+        for i in range(8):
+            payload = bytes([i, i + 1, i + 2, i + 3])
+            session.add_frame(Frame.create(
+                session.id, Direction.CLIENT_TO_SERVER,
+                payload + bytes([sum(payload) & 0xFF]), i,
+            ))
+        fn = get_tool(mcp_server, "detect_checksums_crcs")
+        out = fn(session.id)
+        assert any(
+            c["algorithm"] == "sum8" and c["offset"] == 4
+            for c in out["candidates"]
+        )
+
+
+class TestDetectTimestamps:
+    def test_unix_seconds(self, mcp_server, api):
+        import struct
+        session = api.session_registry.create("127.0.0.1", 80, "10.0.0.1", 443)
+        base = 1_700_000_000
+        for i in range(10):
+            f = Frame.create(
+                session.id, Direction.CLIENT_TO_SERVER,
+                struct.pack("<I", base + i) + b"data", i,
+            )
+            session.add_frame(f)
+        fn = get_tool(mcp_server, "detect_timestamps")
+        out = fn(session.id)
+        assert any(
+            c["offset"] == 0 and c["byteorder"] == "little"
+            and c["epoch"] == "unix_seconds"
+            for c in out["candidates"]
+        )
+
+
+class TestDetectCompressionEncryption:
+    def test_known_magic(self, mcp_server, api):
+        session = api.session_registry.create("127.0.0.1", 80, "10.0.0.1", 443)
+        session.add_frame(Frame.create(
+            session.id, Direction.CLIENT_TO_SERVER,
+            b"prefix\x1f\x8bgzip_body_here" + bytes(range(50)), 0,
+        ))
+        fn = get_tool(mcp_server, "detect_compression_encryption")
+        out = fn(session.id)
+        names = {s["name"] for f in out["findings"] for s in f["signatures"]}
+        assert "gzip" in names
+
+
+class TestEchoDetection:
+    def test_transaction_id_echo(self, mcp_server, api):
+        import struct
+        session = api.session_registry.create("127.0.0.1", 80, "10.0.0.1", 443)
+        seq = 0
+        for i in range(8):
+            txn = struct.pack("<I", 0xDEADBEEF + i)
+            session.add_frame(Frame.create(
+                session.id, Direction.CLIENT_TO_SERVER,
+                b"\x01" + txn + b"req", seq,
+            ))
+            seq += 1
+            session.add_frame(Frame.create(
+                session.id, Direction.SERVER_TO_CLIENT,
+                b"\x81" + txn + b"reply", seq,
+            ))
+            seq += 1
+        fn = get_tool(mcp_server, "echo_detection")
+        out = fn(session.id)
+        # Echo at offset 1 width 4 (the txn ID) should be in the candidates
+        good = [
+            c for c in out["candidates"]
+            if c["src_offset"] == 1 and c["dst_offset"] == 1
+            and c["width"] == 4
+            and c["src_direction"] == "client_to_server"
+        ]
+        assert good
+        assert good[0]["coverage"] >= 0.9

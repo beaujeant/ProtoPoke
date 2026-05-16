@@ -122,6 +122,19 @@ offset_correlations(session_id=session_id,
 
 (Pearson `r` ≈ 1.0 confirms the pairing.)
 
+For a hands-off discovery of every echoed value across the session,
+let ProtoPoke find them automatically:
+
+```text
+echo_detection(session_id=session_id, widths=[2, 4, 8], max_distance=5)
+```
+
+Each reported candidate is a `(src_direction, src_offset, dst_offset,
+width)` triple with a coverage score — high coverage means the same
+field offset is echoed across most request/response pairs, which is
+the strongest possible signal for a transaction ID, session token, or
+correlated handle.
+
 ## 5. Identify periodic / keep-alive messages
 
 Frames that appear at near-uniform intervals with no triggering client
