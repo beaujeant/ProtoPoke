@@ -489,3 +489,18 @@ class TestAuthoringGuides:
         body = resources["protopoke://guides"].fn()
         for slug in ("framers", "protocol-definitions", "replace-scripts"):
             assert f"protopoke://guides/{slug}" in body
+
+    def test_replace_scripts_guide_documents_mcp_handoff(self, mcp_server):
+        fn = get_tool(mcp_server, "get_authoring_guide")
+        body = fn("replace-scripts")["content"]
+        assert "For MCP Clients" in body
+        assert "get_script_load_instructions" in body
+
+    def test_script_load_instructions_shape(self, mcp_server):
+        fn = get_tool(mcp_server, "get_script_load_instructions")
+        result = fn()
+        assert isinstance(result["steps"], list) and len(result["steps"]) >= 3
+        assert all(isinstance(s, str) and s for s in result["steps"])
+        assert "Tamper" in result["ui_path"]
+        assert any("Script" in s for s in result["steps"])
+        assert isinstance(result["notes"], list) and result["notes"]

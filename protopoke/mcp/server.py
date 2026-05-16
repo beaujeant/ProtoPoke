@@ -51,9 +51,10 @@ Tools are grouped by concern:
                               compare_frames, diff_frames_in_bucket,
                               analyze_byte_ranges, find_length_fields,
                               offset_correlations
-    Authoring guides        : list_authoring_guides, get_authoring_guide
-                              (also exposed as ``protopoke://guides`` and
-                              ``protopoke://guides/<slug>`` MCP resources)
+    Authoring guides        : list_authoring_guides, get_authoring_guide,
+                              get_script_load_instructions
+                              (guides also exposed as ``protopoke://guides``
+                              and ``protopoke://guides/<slug>`` MCP resources)
 """
 
 from __future__ import annotations
@@ -167,6 +168,52 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
             return {"error": f"Unknown guide {slug!r}",
                     "available": list(GUIDES.keys())}
         return {"slug": slug, "content": load_guide(slug)}
+
+    @mcp.tool()
+    def get_script_load_instructions() -> dict:
+        """
+        Return the operator-facing steps to load a custom replace script.
+
+        ProtoPoke does not expose any MCP tool to persist a script file or
+        register a script-type replace rule — script rules execute arbitrary
+        Python in the proxy process, so the operator must be the one to
+        accept the code.  Call this tool after generating an ``apply()``
+        script so you can quote the exact click-path back to the user.
+
+        Returns a dict with ``steps`` (ordered list of plain-text
+        instructions), ``ui_path`` (a short breadcrumb), and ``notes``
+        (caveats worth mentioning in the hand-off).
+        """
+        return {
+            "ui_path": "Tamper tab (F3) → Global Replace Rules → Add",
+            "steps": [
+                "Save the script shown above to a readable path on disk, "
+                "for example ./scripts/<descriptive_name>.py.",
+                "In ProtoPoke, switch to the Tamper tab (press F3).",
+                "In the Global Replace Rules pane, press the Add button.",
+                "Set Mechanism to 'Script'.",
+                "Click Browse next to 'Script path' and select the file you "
+                "just saved (or paste the absolute path).",
+                "Give the rule a Label, pick the Direction "
+                "(client_to_server / server_to_client / leave blank for both), "
+                "and tick the Scope checkboxes you want "
+                "(Traffic / Tamper / Forge).",
+                "Press Save.  The rule appears in the table and is applied "
+                "to every matching frame from this point on.",
+            ],
+            "notes": [
+                "Auto-reload: if you edit the script file later, the next "
+                "frame that hits the rule reloads the module from disk "
+                "automatically — no need to remove and re-add the rule.",
+                "If the script raises, ProtoPoke logs the error (Logs tab), "
+                "clears the cached module, and passes the original frame "
+                "through unchanged.  Use the Reset button on the rules table "
+                "to force a reload without waiting for an error.",
+                "Script rules execute arbitrary Python in the proxy process. "
+                "Read the file before saving it and only load scripts you "
+                "trust.",
+            ],
+        }
 
     # In-memory playbook store (MCP-side, mirrors UI Forge tab)
     _playbooks: dict[str, Playbook] = {}
