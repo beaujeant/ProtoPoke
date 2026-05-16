@@ -211,6 +211,7 @@ class TrafficTab(Widget):
         fdt.add_column("Framer",  key="framer")
         fdt.add_column("Len",     key="len")
         fdt.add_column("Preview", key="preview")
+        fdt.add_column("Time",    key="time")
 
     # ------------------------------------------------------------------
     # Public API — driven by app event bridge
@@ -288,6 +289,7 @@ class TrafficTab(Widget):
             self._update_frames_label()
 
     def _add_frame_row(self, dt: DataTable, frame: Frame) -> None:
+        import time as _time
         is_c2s    = frame.direction is Direction.CLIENT_TO_SERVER
         seq_c2s   = str(frame.sequence_number) if is_c2s else ""
         seq_s2c   = str(frame.sequence_number) if not is_c2s else ""
@@ -295,6 +297,9 @@ class TrafficTab(Widget):
         preview   = frame.raw_bytes[:24].hex()
         if len(frame.raw_bytes) > 24:
             preview += "…"
+        ts_local = _time.localtime(frame.timestamp)
+        ts_ms = int((frame.timestamp - int(frame.timestamp)) * 1000)
+        timestamp = f"{_time.strftime('%Y-%m-%d %H:%M:%S', ts_local)}.{ts_ms:03d}"
         values = (
             seq_c2s,
             direction,
@@ -302,6 +307,7 @@ class TrafficTab(Widget):
             frame.framer_name,
             str(len(frame.raw_bytes)),
             preview,
+            timestamp,
         )
         self._row_data[frame.id] = values
         self._row_directions[frame.id] = frame.direction
@@ -331,7 +337,7 @@ class TrafficTab(Widget):
                 self.query_one("#parsed-view", ParsedView).show_frame(frame, message)
                 return
 
-    _COL_KEYS = ("seq_c2s", "dir", "seq_s2c", "framer", "len", "preview")
+    _COL_KEYS = ("seq_c2s", "dir", "seq_s2c", "framer", "len", "preview", "time")
     _SELECTED_STYLE = "bold underline"
     _DIR_TINTED_KEYS = frozenset({"seq_c2s", "dir", "seq_s2c"})
     _C2S_STYLE = "green"
