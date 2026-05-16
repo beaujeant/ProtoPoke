@@ -55,6 +55,12 @@ Tools are grouped by concern:
                               get_script_load_instructions
                               (guides also exposed as ``protopoke://guides``
                               and ``protopoke://guides/<slug>`` MCP resources)
+    Workflow recipes        : list_workflow_recipes, get_workflow_recipe
+                              (also exposed as ``protopoke://recipes`` and
+                              ``protopoke://recipes/<slug>`` MCP resources)
+    Tool index              : ``protopoke://tools`` MCP resource — a
+                              curated cheat-sheet of every tool grouped
+                              by concern, useful for client discovery.
 """
 
 from __future__ import annotations
@@ -96,11 +102,22 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
             "Install it with: pip install mcp"
         ) from exc
 
+    from importlib import resources as _pkg_resources
+
     from protopoke import analysis
     from protopoke.models import Direction
     from protopoke.rules.rule import ReplaceRule, InterceptRule, RuleAction
     from protopoke.forge.models import Playbook, PlaybookFrame
-    from protopoke.mcp.guides import GUIDES, build_index, load_guide
+    from protopoke.mcp.guides import (
+        GUIDES,
+        build_index as build_guides_index,
+        load_guide,
+    )
+    from protopoke.mcp.recipes import (
+        RECIPES,
+        build_index as build_recipes_index,
+        load_recipe,
+    )
 
     def _rebind(new_api: "ProtoPokeAPI") -> None:
         """Swap the api bound to all tool closures. Called by MCPHost."""
@@ -123,7 +140,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         mime_type="text/markdown",
     )
     def _guides_index() -> str:
-        return build_index()
+        return build_guides_index()
 
     def _register_guide(slug: str, title: str, description: str) -> None:
         @mcp.resource(
@@ -214,6 +231,85 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
                 "trust.",
             ],
         }
+
+    # ------------------------------------------------------------------ #
+    # Workflow recipes                                                      #
+    # ------------------------------------------------------------------ #
+    # End-to-end task walkthroughs that chain several tools together.
+    # Same dual exposure as guides: MCP resources + tool fallback.
+
+    @mcp.resource(
+        "protopoke://recipes",
+        name="protopoke_recipes_index",
+        description="Index of workflow recipes for ProtoPoke end-to-end tasks.",
+        mime_type="text/markdown",
+    )
+    def _recipes_index() -> str:
+        return build_recipes_index()
+
+    def _register_recipe(slug: str, title: str, description: str) -> None:
+        @mcp.resource(
+            f"protopoke://recipes/{slug}",
+            name=f"protopoke_recipe_{slug.replace('-', '_')}",
+            description=description,
+            mime_type="text/markdown",
+        )
+        def _recipe_body() -> str:
+            return load_recipe(slug)
+
+    for _slug, (_filename, _title, _desc) in RECIPES.items():
+        _register_recipe(_slug, _title, _desc)
+
+    @mcp.tool()
+    def list_workflow_recipes() -> list[dict]:
+        """
+        List workflow recipes shipped with the MCP server.
+
+        Each recipe walks through an end-to-end task by chaining several
+        ProtoPoke MCP tools together (reverse-engineering an unknown
+        protocol, replaying with mutation, intercepting and rewriting).
+        Read a recipe with ``get_workflow_recipe(slug)``, or fetch the
+        same content as the MCP resource ``protopoke://recipes/<slug>``.
+        """
+        return [
+            {"slug": slug, "title": title, "description": desc,
+             "uri": f"protopoke://recipes/{slug}"}
+            for slug, (_, title, desc) in RECIPES.items()
+        ]
+
+    @mcp.tool()
+    def get_workflow_recipe(slug: str) -> dict:
+        """
+        Return the markdown body of one of the workflow recipes.
+
+        Valid slugs come from ``list_workflow_recipes()`` (e.g.
+        ``"reverse-engineer-unknown-protocol"``, ``"replay-with-mutation"``,
+        ``"intercept-and-rewrite"``). Use this when you are about to drive
+        an end-to-end task and want a tool-by-tool walkthrough.
+        """
+        if slug not in RECIPES:
+            return {"error": f"Unknown recipe {slug!r}",
+                    "available": list(RECIPES.keys())}
+        return {"slug": slug, "content": load_recipe(slug)}
+
+    # ------------------------------------------------------------------ #
+    # Tool index (cheat-sheet)                                              #
+    # ------------------------------------------------------------------ #
+    # A single curated markdown document listing every MCP tool grouped
+    # by concern, with cross-references to guides and recipes. Resource
+    # only — clients without resource support can still discover tools
+    # via the various ``list_*`` tools.
+
+    @mcp.resource(
+        "protopoke://tools",
+        name="protopoke_tool_index",
+        description="Curated cheat-sheet of every ProtoPoke MCP tool grouped by concern.",
+        mime_type="text/markdown",
+    )
+    def _tool_index() -> str:
+        return _pkg_resources.files("protopoke.mcp").joinpath(
+            "cheatsheet.md"
+        ).read_text(encoding="utf-8")
 
     # In-memory playbook store (MCP-side, mirrors UI Forge tab)
     _playbooks: dict[str, Playbook] = {}
