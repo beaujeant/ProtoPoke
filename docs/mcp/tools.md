@@ -4,6 +4,21 @@ title: "MCP Tool Reference"
 
 ProtoPoke exposes 90+ tools through MCP. All tools return JSON-serialisable dicts; bytes fields are hex-encoded strings.
 
+## Authoring Guides
+
+Short reference documents shipped with the MCP server. Each guide explains
+how to write one of ProtoPoke's extension points (custom framer, protocol
+definition YAML, custom replace script) and is suitable to read before
+generating one. The same content is also exposed as MCP resources at
+`protopoke://guides` and `protopoke://guides/<slug>` for clients that
+surface resources in a picker.
+
+| Tool | Description |
+|------|-------------|
+| `list_authoring_guides` | List available guides (`framers`, `protocol-definitions`, `replace-scripts`) with their resource URIs |
+| `get_authoring_guide` | Return the markdown body of one guide by slug |
+| `get_script_load_instructions` | Return the operator-facing click-path for loading a generated script as a replace rule (script rules cannot be persisted over MCP — the user must accept the code) |
+
 ## Proxy Lifecycle
 
 | Tool | Description |

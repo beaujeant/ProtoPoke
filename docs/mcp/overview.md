@@ -20,6 +20,22 @@ ProtoPoke exposes all proxy operations as [Model Context Protocol](https://model
 | **Forwarders** | "Start the game-server forwarder", "Switch the active framer to length-prefix with a 4-byte header", "Load the auth.yaml protocol on the login forwarder without restarting" |
 | **TLS** | "Give me the CA certificate" |
 | **Config** | "What port is the proxy listening on?", "Enable TLS on the upstream side" |
+| **Authoring** | "Show me the framer authoring guide", "Write a script replace rule that XORs bytes 4–8 with a session variable and tell me how to load it" |
+
+## Authoring Guides & Script Hand-off
+
+The MCP server ships short markdown guides for each of ProtoPoke's
+extension points so an assistant can produce a correct artefact in one
+shot. They are available both as MCP resources (`protopoke://guides`,
+`protopoke://guides/framers`, `protopoke://guides/protocol-definitions`,
+`protopoke://guides/replace-scripts`) and as tools (`list_authoring_guides`
+/ `get_authoring_guide`).
+
+Script replace rules execute arbitrary Python in the proxy process, so
+ProtoPoke deliberately does **not** expose any MCP tool that persists a
+script file or registers a script-type rule — the operator must accept
+the code. After generating a script, call `get_script_load_instructions`
+to quote the exact click-path back to the user.
 
 ## Installation
 
