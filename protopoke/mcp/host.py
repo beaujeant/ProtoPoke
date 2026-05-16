@@ -21,8 +21,11 @@ Key features:
   changes.
 
 * **Transport**: uses MCP ``streamable-http``. The endpoint is served at
-  ``http://<host>:<port>/mcp`` and any modern MCP client (Claude Code, Claude
-  Desktop, mcp-inspector) can connect to it.
+  ``http://<host>:<port>/mcp``. Clients that support HTTP MCP directly
+  (Claude Code, Cursor, mcp-inspector) connect to that URL. Stdio-only
+  clients (the standard Claude Desktop, ChatGPT Desktop, several agents)
+  go through the ``protopoke-mcp`` stdio bridge — see
+  :mod:`protopoke.mcp.stdio_bridge`.
 """
 
 from __future__ import annotations
