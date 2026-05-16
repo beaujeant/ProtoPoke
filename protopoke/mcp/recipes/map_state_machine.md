@@ -126,7 +126,8 @@ For a hands-off discovery of every echoed value across the session,
 let ProtoPoke find them automatically:
 
 ```text
-echo_detection(session_id=session_id, widths=[2, 4, 8], max_distance=5)
+echo_detection(session_id=session_id, widths=[4, 8], max_distance=3,
+               min_coverage=0.6)
 ```
 
 Each reported candidate is a `(src_direction, src_offset, dst_offset,
@@ -134,6 +135,22 @@ width)` triple with a coverage score — high coverage means the same
 field offset is echoed across most request/response pairs, which is
 the strongest possible signal for a transaction ID, session token, or
 correlated handle.
+
+**Cost note**: `echo_detection` is the most expensive analysis tool —
+its work grows as `frames × widths × offsets² × max_distance`. The
+parameters above keep it manageable:
+
+- `widths=[4, 8]` — transaction IDs and session tokens are almost
+  always 4 or 8 bytes. Dropping `2` cuts the noise from coincidental
+  short matches by roughly an order of magnitude.
+- `max_distance=3` — request/response pairs are usually adjacent.
+  Raising this rarely surfaces new candidates and multiplies the
+  candidate count.
+- `min_coverage=0.6` — an echo that holds across 60%+ of opportunities
+  is a real pairing; below that you're looking at coincidences.
+
+Run it **once per session**, after clustering. Don't re-run per
+cluster — the tool already scopes per direction internally.
 
 ## 5. Identify periodic / keep-alive messages
 

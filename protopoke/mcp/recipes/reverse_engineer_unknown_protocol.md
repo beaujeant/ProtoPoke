@@ -107,10 +107,102 @@ analysis tool can be scoped to one cluster using `byte_patterns`:
 {"byte_patterns": [{"offset": 0, "hex": "6d76"}], "size_bytes": 26}
 ```
 
-## 4. For each cluster: infer field boundaries
+## 4. Budget-aware analysis ladder
 
-For a same-size cluster, run all four structural analyses (each is
-cheap and they catch different things):
+ProtoPoke gives you 10+ analytical tools.  Firing every one on every
+cluster wastes the AI's context window and your own time. Use this
+ladder: cheap broad tools first, expensive narrow tools only when
+something is still mysterious. Two rules carry most of the savings:
+
+- **Always scope** every analysis call with `byte_patterns` (and
+  `size_bytes` for same-size tools).  An unscoped call on a large
+  capture returns the union of every packet type, which is both
+  noisier and many times larger.
+- **Stop when you have the answer.**  If `find_length_fields` returns
+  one `coverage: 1.0` candidate, you don't need `detect_tlv` for that
+  cluster.  If a string popped out of `extract_strings` that explains
+  a region, you don't need `analyze_byte_ranges` on it.  Move on to
+  the next unknown.
+
+Cost / value cheat-sheet (rough output size, expected use frequency):
+
+| Tool | Cost | Scope | Run … |
+|------|------|-------|-------|
+| `find_length_fields` | small | whole session, no size filter | **once per direction**, very early |
+| `extract_strings` | small unless many frames | session OR cluster | once early; re-run scoped if a cluster has strings |
+| `find_constant_byte_sequences` | small (capped at 50 results) | session OR cluster | once early per direction |
+| `analyze_byte_ranges` | small | one same-size cluster | per cluster, once |
+| `entropy_map` | tiny (one float per offset) | one same-size cluster | per cluster, once |
+| `diff_frames_in_bucket` | small (top 64 varying offsets) | one same-size cluster | only if `analyze_byte_ranges` left ambiguity |
+| `detect_checksums_crcs` | small candidate list | one cluster | only when bytes look like noise but might be a guard |
+| `detect_timestamps` | small candidate list | one cluster | only when a 4- or 8-byte field looks counter-like |
+| `detect_tlv` | small candidate list | one cluster of mixed sizes | only when the size distribution suggests record chains |
+| `align_frames` | **moderate** (≤ 20 rows × ≤ 512 hex pairs) | one mixed-size cluster, small sample | only when `analyze_byte_ranges` cannot apply |
+| `detect_compression_encryption` | moderate (per-frame findings) | one cluster, ≤ 20 frames | only when a region's entropy is suspiciously high |
+| `offset_correlations` | small | one cluster | only to confirm a specific pairing hypothesis |
+| `compare_frames` | small | two specific frames | for spot inspections, not bulk analysis |
+
+What to actually run for a *first pass*:
+
+1. **`find_length_fields`** + **`extract_strings`** +
+   **`find_constant_byte_sequences`** on the whole session, per
+   direction.  These three together identify the framing, every
+   readable ASCII region, and every recurring marker before you
+   look at a single cluster.
+2. For the **2–3 largest clusters**: `analyze_byte_ranges` +
+   `entropy_map`. That handles the majority of fixed-size message
+   types.
+3. Escalate **only when needed**:
+   - Cluster has mixed sizes: `align_frames` (capped sample) or
+     `detect_tlv`.
+   - Cluster has a high-entropy tail or a 4-byte field whose
+     `change_rate ≈ 1.0`: `detect_compression_encryption`.
+   - Cluster has a noisy-looking 1/2/4-byte field at the very end or
+     very start: `detect_checksums_crcs`.
+   - Cluster has a monotonic 4- or 8-byte field: `detect_timestamps`.
+4. For specific pairings only: `offset_correlations` and
+   `compare_frames`.
+
+The rest of this section explains each step.
+
+## 4a. Session-level sweep (run once per direction)
+
+Three cheap, broad tools that punch above their weight:
+
+```text
+find_length_fields(session_id=session_id,
+                   direction="client_to_server")
+extract_strings(session_id=session_id,
+                direction="client_to_server",
+                min_length=4, max_per_frame=20)
+find_constant_byte_sequences(session_id=session_id,
+                             direction="client_to_server",
+                             min_length=2, max_length=6,
+                             min_coverage=0.8, max_results=30)
+```
+
+Why these three first:
+
+- `find_length_fields` is the **only** length-detector that exploits
+  size variation, so it must see the unfiltered capture.  Run it
+  before you bucket anything.
+- `extract_strings` immediately surfaces version banners, usernames,
+  error messages, and embedded paths — these often name the protocol
+  outright.
+- `find_constant_byte_sequences` catches free-floating magic markers
+  and trailers that constant-offset stats miss.  Default
+  `min_coverage=0.8` keeps the output to the genuinely recurring ones;
+  `max_length=6` keeps the candidate space small.
+
+Repeat for `server_to_client`.  If the output is short, you've got
+your high-value answers for cheap; if it's long, raise `min_coverage`
+to 0.95 to skim only the strongest hits.
+
+## 4b. Per-cluster inference (same-size frames)
+
+For each of the **2–3 largest** clusters (don't run this on every
+cluster — most of the long tail are echoes of the patterns the big
+clusters reveal), run:
 
 ```text
 analyze_byte_ranges(session_id=session_id,
@@ -118,9 +210,6 @@ analyze_byte_ranges(session_id=session_id,
                     size_bytes=26,
                     byte_patterns=[{"offset": 0, "hex": "6d76"}])
 entropy_map(session_id=session_id, ...same scoping...)
-diff_frames_in_bucket(session_id=session_id, ...same scoping...)
-find_length_fields(session_id=session_id,
-                   byte_patterns=[{"offset": 0, "hex": "6d76"}])
 ```
 
 Read the output looking for these patterns:
@@ -136,82 +225,63 @@ Read the output looking for these patterns:
 | `candidate_types` includes float32 with `plausible: true` | Likely a float (coordinates, time deltas) |
 
 Bytes that **change between frames** carry information; bytes that
-**stay the same** are protocol structure. The single most reliable way
-to draw field boundaries is to find runs of co-varying bytes.
+**stay the same** are protocol structure.
 
-For **mixed-size** clusters (same prefix, different sizes), the
-above tools require same-size frames. Two cheap alternatives:
+Only run `diff_frames_in_bucket` as a **follow-up** when
+`analyze_byte_ranges` says many offsets vary but you can't tell which
+move together — diff gives you the per-frame columns directly. Skip
+it otherwise.
+
+## 4c. Per-cluster inference (mixed-size frames)
+
+For clusters where the same prefix appears at multiple sizes, the
+same-size tools above don't apply. Pick **one** of:
 
 ```text
-align_frames(session_id=session_id,
-             byte_patterns=[{"offset": 0, "hex": "6d76"}])
+# Cheaper: report TLV shapes that match the cluster:
 detect_tlv(session_id=session_id,
            byte_patterns=[{"offset": 0, "hex": "6d76"}],
-           start_offsets=[2])           # skip the magic
+           start_offsets=[2])                # skip the magic
+
+# More expensive but more informative when TLV doesn't apply:
+align_frames(session_id=session_id,
+             byte_patterns=[{"offset": 0, "hex": "6d76"}],
+             max_frames=10, max_frame_size=128)
 ```
 
-`align_frames` runs a Needleman-Wunsch alignment against the first
-frame — gap columns mark where one frame inserted/removed bytes,
-``??`` columns mark variable bytes, ``xx`` columns mark constant
-ones. `detect_tlv` tries every Type-Length-Value shape (T width
-1/2, L width 1/2/4, BE/LE, length-includes-header) and reports the
-ones that consume the whole frame as a record chain — the fastest
-way to recognise TLV-shaped protocols (ASN.1, BACnet, Modbus, many
-proprietary game protocols).
+Try `detect_tlv` first — output is a small candidate list and a
+matching shape essentially solves the cluster. Only fall back to
+`align_frames` when no TLV shape covers the cluster, and **cap the
+sample**: 10 frames at 128 bytes each is usually enough to see the
+structure and keeps the response under ~3 KB.
 
-## 4b. Specialised field hunts
+## 4d. Specialised hunts (run only when relevant)
 
-Generic stats catch most fields but miss the ones with well-defined
-semantics. Run these three in parallel on the cluster:
+These three are cheap per-call but have specific triggers — don't fire
+them on every cluster:
+
+- **`detect_checksums_crcs`** — run when there's a 1/2/4-byte field at
+  the very start or end of the cluster that looks like noise
+  (entropy > 7, change_rate ≈ 1.0) and you suspect integrity protection.
+  A `coverage: 1.0` candidate is essentially proof; confirm with a
+  `tamper` byte-flip per the `validate-with-tamper` recipe.
+- **`detect_timestamps`** — run when a 4- or 8-byte field is monotonic
+  (`looks_like_counter: true` in `analyze_byte_ranges`). The reported
+  `pearson_r_with_capture_time` disambiguates LE vs BE.
+- **`detect_compression_encryption`** — run when a high-entropy region
+  (`entropy_bits > 7`) appears inside an otherwise structured frame.
+  This is the only tool whose output can grow with frame count —
+  scope tightly and keep `max_per_frame ≤ 5` to bound size.
 
 ```text
-detect_checksums_crcs(session_id=session_id, ...same scoping...)
-detect_timestamps(session_id=session_id, ...same scoping...)
-detect_compression_encryption(session_id=session_id, ...same scoping...)
+detect_checksums_crcs(session_id=session_id, ...scoping...)
+detect_timestamps(session_id=session_id, ...scoping...)
+detect_compression_encryption(session_id=session_id, ...scoping...,
+                              max_per_frame=4)
 ```
 
-- **Checksums**: tries `sum8`, `xor8`, `sum16`, `fletcher16`,
-  `crc16_ccitt`, `crc16_xmodem`, `crc32_ieee`, `adler32` against every
-  candidate offset, in both endiannesses. A `coverage: 1.0` candidate
-  is essentially proof that the field is a checksum of the rest of the
-  frame — annotate it and `tamper` a byte-flip to confirm the server
-  enforces it.
-- **Timestamps**: finds uint32/uint64 fields whose value lies in a
-  plausible unix-time / NTP / Windows-FILETIME range AND correlates with
-  the frame's capture timestamp. The correlation breaks LE/BE ties.
-- **Compression / encryption**: signature scan (gzip, zlib, lz4, zstd,
-  PNG, ZIP, ELF, ASN.1, TLS records, …) plus high-entropy sliding
-  windows. High-entropy regions inside an otherwise structured frame
-  are usually nested ciphertext or compressed blobs — recurse into them
-  with a separate framer / decoder.
-
-Also scan for embedded human-readable content:
-
-```text
-extract_strings(session_id=session_id, min_length=4,
-                byte_patterns=[{"offset": 0, "hex": "6d76"}])
-```
-
-Often the server name, app version, error message, or a username sits
-in plain ASCII inside a frame and immediately tells you what the
-message is for.
-
-## 4c. Find recurring patterns regardless of offset
-
-Many protocols sprinkle a 2-8 byte marker (frame trailer, record
-separator, embedded magic) somewhere inside a variable-length payload.
-Standard per-offset analysis can't see them; this one can:
-
-```text
-find_constant_byte_sequences(session_id=session_id,
-                             direction="client_to_server",
-                             min_length=2, max_length=8,
-                             min_coverage=0.8)
-```
-
-Each reported n-gram comes with sample frame offsets — use those to
-decide whether it's a fixed-position marker (just an unrecognised
-opcode) or a true free-floating sentinel.
+If a cluster has no candidate field matching any of these triggers,
+skip the call entirely.
 
 ## 5. Spot relationships between fields
 
