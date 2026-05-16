@@ -37,6 +37,36 @@ script file or registers a script-type rule — the operator must accept
 the code. After generating a script, call `get_script_load_instructions`
 to quote the exact click-path back to the user.
 
+## Workflow Recipes
+
+Where authoring guides describe **one** extension point, workflow
+recipes describe **end-to-end tasks** that chain several MCP tools
+together. They are useful for an assistant that is about to drive a
+multi-step job and wants a tool-by-tool walkthrough.
+
+Available recipes:
+
+- `protopoke://recipes/reverse-engineer-unknown-protocol` — capture,
+  cluster, and analyse traffic from an unknown binary protocol, then
+  iteratively build a protocol definition that decodes it.
+- `protopoke://recipes/replay-with-mutation` — turn a captured session
+  into a reusable playbook, parameterise it with variables, and run a
+  fuzz campaign with mutators.
+- `protopoke://recipes/intercept-and-rewrite` — choose between global
+  replace rules, intercept rules, and script rules, and wire each one
+  up end to end.
+
+An index of every recipe is served at `protopoke://recipes`. Clients
+without resource support can use the `list_workflow_recipes` /
+`get_workflow_recipe` tool fallbacks.
+
+## Tool Index (cheat-sheet)
+
+A single curated markdown document listing every MCP tool grouped by
+concern, with cross-references to the guides and recipes above. Useful
+for client-side tool discovery and as a first read for a new assistant
+session. Served as the `protopoke://tools` MCP resource.
+
 ## Installation
 
 ```bash

@@ -4,6 +4,21 @@ title: "MCP Tool Reference"
 
 ProtoPoke exposes 90+ tools through MCP. All tools return JSON-serialisable dicts; bytes fields are hex-encoded strings.
 
+## Discovery Resources
+
+In addition to the tools listed below, the MCP server exposes a handful
+of markdown documents as resources for client-side discovery. Clients
+without a resource browser can read the same content through the tool
+fallbacks shown in each section.
+
+| Resource URI | Purpose |
+|--------------|---------|
+| `protopoke://tools` | Curated cheat-sheet of every MCP tool grouped by concern (no tool fallback — use the `list_*` tools below for programmatic discovery) |
+| `protopoke://guides` | Index of authoring guides (one per extension point) |
+| `protopoke://guides/<slug>` | One authoring guide (`framers`, `protocol-definitions`, `replace-scripts`) |
+| `protopoke://recipes` | Index of end-to-end workflow recipes |
+| `protopoke://recipes/<slug>` | One recipe (`reverse-engineer-unknown-protocol`, `replay-with-mutation`, `intercept-and-rewrite`) |
+
 ## Authoring Guides
 
 Short reference documents shipped with the MCP server. Each guide explains
@@ -18,6 +33,18 @@ surface resources in a picker.
 | `list_authoring_guides` | List available guides (`framers`, `protocol-definitions`, `replace-scripts`) with their resource URIs |
 | `get_authoring_guide` | Return the markdown body of one guide by slug |
 | `get_script_load_instructions` | Return the operator-facing click-path for loading a generated script as a replace rule (script rules cannot be persisted over MCP — the user must accept the code) |
+
+## Workflow Recipes
+
+End-to-end task walkthroughs that chain several MCP tools together.
+Where authoring guides describe a single extension point, recipes
+describe a complete job. Also exposed as MCP resources at
+`protopoke://recipes` and `protopoke://recipes/<slug>`.
+
+| Tool | Description |
+|------|-------------|
+| `list_workflow_recipes` | List available recipes (`reverse-engineer-unknown-protocol`, `replay-with-mutation`, `intercept-and-rewrite`) with their resource URIs |
+| `get_workflow_recipe` | Return the markdown body of one recipe by slug |
 
 ## Proxy Lifecycle
 
