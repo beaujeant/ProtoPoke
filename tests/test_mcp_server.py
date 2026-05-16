@@ -515,6 +515,8 @@ class TestWorkflowRecipes:
         "reverse-engineer-unknown-protocol",
         "replay-with-mutation",
         "intercept-and-rewrite",
+        "validate-with-tamper",
+        "map-state-machine",
     }
 
     def test_list_includes_all_recipes(self, mcp_server):

@@ -436,3 +436,337 @@ class TestOffsetCorrelations:
     def test_non_numeric_type_rejected(self):
         with pytest.raises(ValueError):
             analysis.offset_correlations([make_frame(b"\x00\x00")], 0, 1, type_a="ascii")
+
+
+# ---------------------------------------------------------------------------
+# find_constant_byte_sequences
+# ---------------------------------------------------------------------------
+
+class TestFindConstantByteSequences:
+    def test_recurring_magic_found(self):
+        frames = [make_frame(b"PROTO" + bytes([i]) + b"hi", i) for i in range(5)]
+        out = analysis.find_constant_byte_sequences(frames, min_length=2, max_length=5)
+        hexes = {s["hex"] for s in out["sequences"]}
+        # "PROTO" should be the longest recurring substring at 100% coverage
+        assert "50524f54" in hexes or "50524f544f" in hexes
+        for s in out["sequences"]:
+            assert s["coverage"] == 1.0
+
+    def test_below_coverage_dropped(self):
+        # "AB" appears in only 2 of 5 frames (40%)
+        frames = [
+            make_frame(b"AB\x00", 0),
+            make_frame(b"AB\x01", 1),
+            make_frame(b"XY\x02", 2),
+            make_frame(b"XY\x03", 3),
+            make_frame(b"XY\x04", 4),
+        ]
+        out = analysis.find_constant_byte_sequences(
+            frames, min_length=2, max_length=2, min_coverage=0.6,
+        )
+        hexes = {s["hex"] for s in out["sequences"]}
+        assert "4142" not in hexes
+        assert "5859" in hexes
+
+    def test_strict_substring_suppressed(self):
+        frames = [make_frame(b"HEADER" + bytes([i]), i) for i in range(5)]
+        out = analysis.find_constant_byte_sequences(frames, min_length=2, max_length=6)
+        # "HEADER" at 100% should suppress shorter substrings at 100%
+        hexes = {s["hex"] for s in out["sequences"]}
+        assert "484541444552" in hexes
+        # "HEAD" is a strict substring of "HEADER" with same coverage
+        assert "48454144" not in hexes
+
+    def test_sample_offsets_reported(self):
+        frames = [make_frame(b"--XX--XX--", i) for i in range(3)]
+        out = analysis.find_constant_byte_sequences(frames, min_length=2, max_length=2)
+        # "XX" should appear at offsets 2 and 6 in every frame
+        xx = [s for s in out["sequences"] if s["hex"] == "5858"][0]
+        assert xx["coverage"] == 1.0
+        assert any(2 in so["offsets"] and 6 in so["offsets"]
+                   for so in xx["sample_offsets"])
+
+
+# ---------------------------------------------------------------------------
+# align_frames
+# ---------------------------------------------------------------------------
+
+class TestAlignFrames:
+    def test_constant_prefix_and_suffix_with_variable_middle(self):
+        frames = [
+            make_frame(b"HEAD" + bytes([i]) + b"TAIL", i) for i in range(3)
+        ]
+        out = analysis.align_frames(frames)
+        # All frames same size → no gaps, just one variable byte at offset 4
+        assert out["alignment_length"] == 9
+        assert any(r["kind"] == "differ" for r in out["variable_regions"])
+        # First 4 bytes constant
+        cons = out["consensus"].split(" ")
+        assert cons[:4] == ["48", "45", "41", "44"]
+        # Position 4 differs across the three rows
+        assert cons[4] == "??"
+
+    def test_gap_inserted_for_extra_byte(self):
+        frames = [
+            make_frame(b"AB" + b"CD", 0),
+            make_frame(b"AB" + b"X" + b"CD", 1),
+            make_frame(b"AB" + b"CD", 2),
+        ]
+        out = analysis.align_frames(frames)
+        # The middle frame should leave a gap-marked region
+        kinds = {r["kind"] for r in out["variable_regions"]}
+        assert "gap" in kinds
+
+    def test_max_frames_cap(self):
+        frames = [make_frame(b"AA", i) for i in range(100)]
+        out = analysis.align_frames(frames, max_frames=5)
+        assert out["frame_count"] == 5
+
+    def test_empty(self):
+        out = analysis.align_frames([])
+        assert out["frame_count"] == 0
+        assert out["alignment_length"] == 0
+
+
+# ---------------------------------------------------------------------------
+# extract_strings
+# ---------------------------------------------------------------------------
+
+class TestExtractStrings:
+    def test_finds_ascii_runs(self):
+        frames = [make_frame(b"\x00\x01hello world\x00abcd\x00", 0)]
+        out = analysis.extract_strings(frames, min_length=4)
+        values = {(s["value"], s["offset"]) for s in out["strings"]}
+        assert ("hello world", 2) in values
+        assert ("abcd", 14) in values
+
+    def test_min_length_filters(self):
+        frames = [make_frame(b"\x00hi\x00there\x00", 0)]
+        out = analysis.extract_strings(frames, min_length=5)
+        values = {s["value"] for s in out["strings"]}
+        assert "there" in values
+        assert "hi" not in values
+
+    def test_utf16_le_optional(self):
+        # "abc" as UTF-16 LE: 61 00 62 00 63 00
+        raw = b"\xff\xff" + b"a\x00b\x00c\x00d\x00" + b"\xff\xff"
+        frames = [make_frame(raw, 0)]
+        out = analysis.extract_strings(frames, min_length=3, include_utf16_le=True)
+        encs = {(s["encoding"], s["value"]) for s in out["strings"]}
+        assert ("utf-16-le", "abcd") in encs
+
+    def test_invalid_min_length(self):
+        with pytest.raises(ValueError):
+            analysis.extract_strings([make_frame(b"abc", 0)], min_length=0)
+
+
+# ---------------------------------------------------------------------------
+# detect_tlv
+# ---------------------------------------------------------------------------
+
+class TestDetectTLV:
+    def test_simple_t1_l1_chain(self):
+        # Two records: type=1 length=2 value="ab", type=2 length=3 value="xyz"
+        chain = b"\x01\x02ab\x02\x03xyz"
+        frames = [make_frame(chain, i) for i in range(5)]
+        out = analysis.detect_tlv(frames, start_offsets=(0,))
+        top = out["candidates"][0]
+        assert top["type_width"] == 1
+        assert top["length_width"] == 1
+        assert top["length_byteorder"] == "big"
+        assert top["length_includes_header"] is False
+        assert top["coverage"] == 1.0
+        assert top["avg_records"] == 2.0
+
+    def test_length_includes_header_variant(self):
+        # type=1 length=4 (= header_len 2 + value 2), value="ab"
+        # type=2 length=5 (= header_len 2 + value 3), value="xyz"
+        chain = b"\x01\x04ab\x02\x05xyz"
+        frames = [make_frame(chain, i) for i in range(5)]
+        out = analysis.detect_tlv(frames, start_offsets=(0,))
+        # The (1, 1, big, includes_header=True) interpretation should match
+        assert any(
+            c["length_includes_header"] is True and c["coverage"] == 1.0
+            for c in out["candidates"]
+        )
+
+    def test_no_candidates_for_random_data(self):
+        frames = [make_frame(bytes(range(i, i + 16)), i) for i in range(5)]
+        out = analysis.detect_tlv(frames, min_coverage=0.9, min_records=3)
+        # Random data is very unlikely to walk cleanly with 3+ records
+        # across 90% of frames.
+        assert out["candidates"] == [] or all(
+            c["avg_records"] < 3 or c["coverage"] < 0.9 for c in out["candidates"]
+        )
+
+    def test_start_offset_skips_header(self):
+        # 4-byte header, then TLV chain.
+        chain = b"HEAD" + b"\x01\x02ab\x02\x03xyz"
+        frames = [make_frame(chain, i) for i in range(5)]
+        out = analysis.detect_tlv(frames, start_offsets=(4,))
+        assert out["candidates"]
+        assert out["candidates"][0]["start_offset"] == 4
+
+
+# ---------------------------------------------------------------------------
+# detect_checksums_crcs
+# ---------------------------------------------------------------------------
+
+class TestDetectChecksumsCrcs:
+    def test_sum8_at_end(self):
+        def with_sum8(payload):
+            return payload + bytes([sum(payload) & 0xFF])
+        frames = [
+            make_frame(with_sum8(bytes([i, i + 1, i + 2, i + 3])), i)
+            for i in range(10)
+        ]
+        out = analysis.detect_checksums_crcs(frames)
+        assert any(
+            c["algorithm"] == "sum8" and c["offset"] == 4 and c["coverage"] == 1.0
+            for c in out["candidates"]
+        )
+
+    def test_crc32_le_at_end(self):
+        import struct
+        import zlib
+        frames = []
+        for i in range(10):
+            payload = bytes([i] * 8)
+            frames.append(make_frame(
+                payload + struct.pack("<I", zlib.crc32(payload) & 0xFFFFFFFF),
+                i,
+            ))
+        out = analysis.detect_checksums_crcs(frames)
+        assert any(
+            c["algorithm"] == "crc32_ieee"
+            and c["byteorder"] == "little"
+            and c["coverage"] == 1.0
+            for c in out["candidates"]
+        )
+
+    def test_no_match_for_random(self):
+        frames = [make_frame(bytes(range(i, i + 16)), i) for i in range(10)]
+        out = analysis.detect_checksums_crcs(frames, min_coverage=0.9)
+        # Random bytes should not produce any high-coverage checksum match
+        assert out["candidates"] == []
+
+
+# ---------------------------------------------------------------------------
+# detect_timestamps
+# ---------------------------------------------------------------------------
+
+class TestDetectTimestamps:
+    def test_unix_seconds_le(self):
+        import struct
+        base = 1_700_000_000
+        frames = []
+        for i in range(10):
+            ts_bytes = struct.pack("<I", base + i)
+            frames.append(make_frame(ts_bytes + b"payload", i))
+            # Move the frame's capture timestamp forward too
+            frames[-1].timestamp = float(base + i)
+        out = analysis.detect_timestamps(frames)
+        # The top candidate should be (offset=0, LE, unix_seconds, r=1.0)
+        top = out["candidates"][0]
+        assert top["offset"] == 0
+        assert top["width"] == 4
+        assert top["byteorder"] == "little"
+        assert top["epoch"] == "unix_seconds"
+        assert top["pearson_r_with_capture_time"] == pytest.approx(1.0, abs=1e-3)
+
+    def test_nothing_for_small_values(self):
+        # All bytes are small values; no 4- or 8-byte uint interpretation
+        # can fall inside any plausible epoch range (year 2000+).
+        frames = [
+            make_frame(bytes([i, 0, 0, 0, 0, 0, 0, 0]), i)
+            for i in range(10)
+        ]
+        out = analysis.detect_timestamps(frames)
+        assert out["candidates"] == []
+
+
+# ---------------------------------------------------------------------------
+# detect_compression_encryption
+# ---------------------------------------------------------------------------
+
+class TestDetectCompressionEncryption:
+    def test_gzip_signature_found(self):
+        raw = b"header\x1f\x8bcompressed_body" + bytes(range(50))
+        frames = [make_frame(raw, 0)]
+        out = analysis.detect_compression_encryption(frames)
+        assert out["total_signatures"] >= 1
+        sigs = out["findings"][0]["signatures"]
+        assert any(s["name"] == "gzip" and s["offset"] == 6 for s in sigs)
+
+    def test_high_entropy_window_detected(self):
+        import os
+        # Need window_size >= 128 to reach >6.5 bits of entropy
+        # (max entropy is log2(window_size))
+        raw = b"\x00" * 64 + os.urandom(256) + b"\x00" * 64
+        frames = [make_frame(raw, 0)]
+        out = analysis.detect_compression_encryption(
+            frames, high_entropy_min=6.5, window_size=128, window_step=32,
+        )
+        assert out["total_high_entropy_windows"] >= 1
+
+    def test_known_protocol_magics(self):
+        # PNG, ZIP, ELF
+        frames = [
+            make_frame(b"\x89PNG\r\n\x1a\n" + b"x" * 20, 0),
+            make_frame(b"PK\x03\x04" + b"x" * 20, 1),
+            make_frame(b"\x7fELF" + b"x" * 20, 2),
+        ]
+        out = analysis.detect_compression_encryption(frames)
+        names = {s["name"] for f in out["findings"] for s in f["signatures"]}
+        assert {"png", "zip", "elf"}.issubset(names)
+
+
+# ---------------------------------------------------------------------------
+# echo_detection
+# ---------------------------------------------------------------------------
+
+class TestEchoDetection:
+    def test_transaction_id_echo(self):
+        import struct
+        fs = []
+        seq = 0
+        for i in range(8):
+            txn = struct.pack("<I", 0xDEADBEEF + i)
+            fs.append(make_frame(b"\x01" + txn + b"req", seq,
+                                 direction=Direction.CLIENT_TO_SERVER))
+            seq += 1
+            fs.append(make_frame(b"\x81" + txn + b"reply", seq,
+                                 direction=Direction.SERVER_TO_CLIENT))
+            seq += 1
+        out = analysis.echo_detection(fs)
+        # Expect at least one candidate at width 4, src_offset=1, dst_offset=1
+        good = [
+            c for c in out["candidates"]
+            if c["width"] == 4 and c["src_offset"] == 1 and c["dst_offset"] == 1
+            and c["src_direction"] == "client_to_server"
+        ]
+        assert good and good[0]["coverage"] == 1.0
+
+    def test_no_echo_for_random(self):
+        import os
+        fs = []
+        seq = 0
+        for i in range(5):
+            fs.append(make_frame(os.urandom(16), seq,
+                                 direction=Direction.CLIENT_TO_SERVER))
+            seq += 1
+            fs.append(make_frame(os.urandom(16), seq,
+                                 direction=Direction.SERVER_TO_CLIENT))
+            seq += 1
+        out = analysis.echo_detection(fs, min_coverage=0.5)
+        # Highly unlikely any 4-byte value matches across random data
+        assert all(c["width"] < 4 or c["coverage"] < 1.0 for c in out["candidates"])
+
+    def test_ignores_trivial_all_zero_value(self):
+        # All-zero 4-byte value should NOT trigger a candidate
+        fs = [
+            make_frame(b"\x00" * 8, 0, direction=Direction.CLIENT_TO_SERVER),
+            make_frame(b"\x00" * 8, 1, direction=Direction.SERVER_TO_CLIENT),
+        ]
+        out = analysis.echo_detection(fs, widths=(4,))
+        assert out["candidates"] == []
