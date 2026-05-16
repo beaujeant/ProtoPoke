@@ -55,28 +55,31 @@ message to/from the HTTP endpoint, and exits when the client closes.
 Always start the TUI first with `protopoke --mcp` so the bridge has
 somewhere to connect to.
 
-## Running without installing on the host (`uv`)
+## Running from a local checkout without `pip install` (`uv`)
 
-If you'd rather not install ProtoPoke globally, [`uv`](https://docs.astral.sh/uv/)
-can run both the TUI and the stdio bridge from an ephemeral environment.
-Replace the git ref below with a tag or commit if you want to pin a
-specific version.
+If you have ProtoPoke cloned locally and don't want to `pip install` it
+into a system or user Python, [`uv`](https://docs.astral.sh/uv/) can run
+both the TUI and the stdio bridge straight out of the checkout. `uv run`
+materialises a `.venv` inside the project on first invocation, then reuses
+it.
 
-Run the TUI once in a terminal:
+Run the TUI in a terminal (replace `/path/to/ProtoPoke` with your clone):
 
 ```bash
-uvx --from "git+https://github.com/beaujeant/ProtoPoke[mcp]" protopoke --mcp
+uv run --project /path/to/ProtoPoke --extra mcp protopoke --mcp
 ```
 
-Point the AI client at `uvx` instead of `protopoke-mcp`:
+Point the AI client at `uv run` instead of `protopoke-mcp`:
 
 ```json
 {
   "mcpServers": {
     "protopoke": {
-      "command": "uvx",
+      "command": "uv",
       "args": [
-        "--from", "git+https://github.com/beaujeant/ProtoPoke[mcp]",
+        "run",
+        "--project", "/path/to/ProtoPoke",
+        "--extra", "mcp",
         "protopoke-mcp"
       ]
     }
@@ -84,17 +87,9 @@ Point the AI client at `uvx` instead of `protopoke-mcp`:
 }
 ```
 
-`uvx` caches the environment after the first run, so subsequent bridge
-launches are fast. If your client can't find `uvx` in its `PATH`, replace
-`"uvx"` with the absolute path (`which uvx` on macOS/Linux).
-
-For a one-time, persistent install (still isolated from system Python):
-
-```bash
-uv tool install --from "git+https://github.com/beaujeant/ProtoPoke[mcp]" protopoke
-# then use the plain "protopoke-mcp" / "protopoke" commands in all the
-# configs below.
-```
+Use an absolute path for `--project` — AI clients launch the bridge from
+their own working directory. If the client can't find `uv` on its `PATH`,
+replace `"uv"` with the absolute path (`which uv` on macOS/Linux).
 
 ## Claude Desktop
 
