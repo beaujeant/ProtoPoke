@@ -404,6 +404,37 @@ tests/
 
 ---
 
+## Keeping the documentation in sync
+
+The Mintlify docs under `docs/` are part of the deliverable — treat them
+like code. Whenever a code change alters something a user, operator, or
+AI client can observe, update the relevant doc page in the **same**
+change. In particular:
+
+- **New / renamed / removed MCP tools or resources** (`protopoke/mcp/`)
+  → update `docs/mcp/tools.md` and, if the change introduces a new
+  surface, also `docs/mcp/overview.md`. Recipes and authoring guides
+  also need to be listed there.
+- **New CLI flag or `--mcp*` option** → update `docs/mcp/configuration.md`
+  and any launch examples in `docs/mcp/overview.md`.
+- **New framer / mutator / field type / match strategy** → update the
+  matching page under `docs/reference/` and, if behaviour is exposed to
+  the AI, the relevant MCP doc section.
+- **New `ForwarderConfig` field, project-file key, or `ProtoPokeAPI`
+  method** → update `docs/core/` and (if relevant) this file's
+  "Frequently needed file locations" table.
+- **New TUI tab, modal, or significant widget** → update the matching
+  page under `docs/ui/`.
+- **New navigation page** → add it to `docs/docs.json`, otherwise it
+  will not appear in the rendered site.
+
+If a code change requires a doc change but you do not make it, call it
+out explicitly in the PR / commit message rather than letting the docs
+drift silently. The same applies to this `CLAUDE.md` file — when the
+project layout, data flow, or extension points change, update the
+relevant section here so future AI sessions start from accurate
+context.
+
 ## Things that are intentionally simple / not there
 
 - **No ORM, no database** — models are dataclasses; project save/load is plain JSON in a ZIP archive.
