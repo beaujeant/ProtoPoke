@@ -45,6 +45,20 @@ RECIPES: Dict[str, tuple[str, str, str]] = {
         "Choose between global replace rules, intercept rules, and "
         "script rules, and wire each one up end to end.",
     ),
+    "validate-with-tamper": (
+        "validate_with_tamper.md",
+        "Validate a Hypothesis with Active Probing",
+        "Confirm a guess about a field's semantics by changing it in "
+        "flight via the tamper queue and observing the server's "
+        "reaction — the active-probing counterpart to passive analysis.",
+    ),
+    "map-state-machine": (
+        "map_state_machine.md",
+        "Map the Protocol's State Machine",
+        "Combine clustering with direction-aware sequence inspection "
+        "to discover which message types follow which, and turn the "
+        "result into a conversation graph you can replay and fuzz.",
+    ),
 }
 
 

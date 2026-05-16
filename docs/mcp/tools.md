@@ -17,7 +17,7 @@ fallbacks shown in each section.
 | `protopoke://guides` | Index of authoring guides (one per extension point) |
 | `protopoke://guides/<slug>` | One authoring guide (`framers`, `protocol-definitions`, `replace-scripts`) |
 | `protopoke://recipes` | Index of end-to-end workflow recipes |
-| `protopoke://recipes/<slug>` | One recipe (`reverse-engineer-unknown-protocol`, `replay-with-mutation`, `intercept-and-rewrite`) |
+| `protopoke://recipes/<slug>` | One recipe (`reverse-engineer-unknown-protocol`, `replay-with-mutation`, `intercept-and-rewrite`, `validate-with-tamper`, `map-state-machine`) |
 
 ## Authoring Guides
 
@@ -43,7 +43,7 @@ describe a complete job. Also exposed as MCP resources at
 
 | Tool | Description |
 |------|-------------|
-| `list_workflow_recipes` | List available recipes (`reverse-engineer-unknown-protocol`, `replay-with-mutation`, `intercept-and-rewrite`) with their resource URIs |
+| `list_workflow_recipes` | List available recipes (`reverse-engineer-unknown-protocol`, `replay-with-mutation`, `intercept-and-rewrite`, `validate-with-tamper`, `map-state-machine`) with their resource URIs |
 | `get_workflow_recipe` | Return the markdown body of one recipe by slug |
 
 ## Proxy Lifecycle
