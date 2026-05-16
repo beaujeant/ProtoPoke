@@ -31,6 +31,66 @@ protopoke --mcp --mcp-port 7878          # explicit port
 Once enabled, `http://127.0.0.1:7878/mcp` is the URL to register with an
 MCP client.
 
+## Why a stdio bridge?
+
+The embedded MCP server only speaks `streamable-http` because it lives in
+the long-running TUI process and shares one `ProtoPokeAPI` with the
+operator. The standard Claude Desktop client (and many other AI agents)
+only support launching **stdio** MCP servers from their config file —
+they silently ignore `"url"` entries. To bridge the two, ProtoPoke ships
+a tiny Python forwarder, `protopoke-mcp`, installed as a console script
+alongside `protopoke`. It runs as a stdio MCP server, forwards every
+message to/from the HTTP endpoint, and exits when the client closes.
+
+```
+┌──────────────────┐  stdio   ┌──────────────────┐  HTTP   ┌─────────────┐
+│  AI client       │ ───────► │  protopoke-mcp   │ ──────► │  TUI proc   │
+│  (Claude Desktop │ ◄─────── │  (stdio bridge)  │ ◄────── │  + MCP srv  │
+│  / Cursor / ...) │          └──────────────────┘         └─────────────┘
+└──────────────────┘
+```
+
+`protopoke-mcp` takes an optional `--url` (default
+`http://127.0.0.1:7878/mcp`, also honoured via `$PROTOPOKE_MCP_URL`).
+Always start the TUI first with `protopoke --mcp` so the bridge has
+somewhere to connect to.
+
+## Running from a local checkout without `pip install` (`uv`)
+
+If you have ProtoPoke cloned locally and don't want to `pip install` it
+into a system or user Python, [`uv`](https://docs.astral.sh/uv/) can run
+both the TUI and the stdio bridge straight out of the checkout. `uv run`
+materialises a `.venv` inside the project on first invocation, then reuses
+it.
+
+Run the TUI in a terminal (replace `/path/to/ProtoPoke` with your clone):
+
+```bash
+uv run --project /path/to/ProtoPoke --extra mcp protopoke --mcp
+```
+
+Point the AI client at `uv run` instead of `protopoke-mcp`:
+
+```json
+{
+  "mcpServers": {
+    "protopoke": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--project", "/path/to/ProtoPoke",
+        "--extra", "mcp",
+        "protopoke-mcp"
+      ]
+    }
+  }
+}
+```
+
+Use an absolute path for `--project` — AI clients launch the bridge from
+their own working directory. If the client can't find `uv` on its `PATH`,
+replace `"uv"` with the absolute path (`which uv` on macOS/Linux).
+
 ## Claude Desktop
 
 Add a `protopoke` entry to your Claude Desktop MCP configuration:
@@ -42,7 +102,20 @@ Add a `protopoke` entry to your Claude Desktop MCP configuration:
 {
   "mcpServers": {
     "protopoke": {
-      "url": "http://127.0.0.1:7878/mcp"
+      "command": "protopoke-mcp"
+    }
+  }
+}
+```
+
+If you moved the MCP port, pass it through:
+
+```json
+{
+  "mcpServers": {
+    "protopoke": {
+      "command": "protopoke-mcp",
+      "args": ["--url", "http://127.0.0.1:9000/mcp"]
     }
   }
 }
@@ -52,6 +125,8 @@ Start the TUI first (`protopoke --mcp`), then restart Claude Desktop. A
 hammer icon will appear in the chat input bar when the server is connected.
 
 ## Claude Code
+
+Claude Code supports streamable-http directly, so the bridge is not needed:
 
 ```bash
 claude mcp add --transport http protopoke http://127.0.0.1:7878/mcp
@@ -68,6 +143,36 @@ Or add it directly to `.mcp.json` / `~/.claude/mcp.json`:
     }
   }
 }
+```
+
+## Other AI agents (Cursor, Windsurf, Cline, ChatGPT Desktop, …)
+
+Any client that supports the standard stdio config format works with the
+same snippet as Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "protopoke": {
+      "command": "protopoke-mcp"
+    }
+  }
+}
+```
+
+If the client supports streamable-http natively (e.g. Cursor), you can
+skip the bridge and point it at `http://127.0.0.1:7878/mcp` directly.
+
+## mcp-inspector
+
+Both transports work:
+
+```bash
+# Via the bridge (stdio):
+npx @modelcontextprotocol/inspector protopoke-mcp
+
+# Direct HTTP:
+npx @modelcontextprotocol/inspector --transport http http://127.0.0.1:7878/mcp
 ```
 
 ## Programmatic Usage

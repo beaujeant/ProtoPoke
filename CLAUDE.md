@@ -166,9 +166,12 @@ protopoke/
 │
 ├── mcp/
 │   ├── server.py       build_mcp_server() — ~74 MCP tools wrapping ProtoPokeAPI
-│   └── host.py         MCPHost — embedded MCP server lifecycle (start/stop/
-│                       rebind), used by the Textual app to serve tools over
-│                       streamable-http in the same process as the UI
+│   ├── host.py         MCPHost — embedded MCP server lifecycle (start/stop/
+│   │                   rebind), used by the Textual app to serve tools over
+│   │                   streamable-http in the same process as the UI
+│   └── stdio_bridge.py protopoke-mcp console script — stdio↔HTTP forwarder
+│                       so stdio-only clients (Claude Desktop, ChatGPT
+│                       Desktop, …) can talk to the embedded HTTP server
 │
 └── ui/
     ├── app.py          ProtoPoke(App) — Textual root; event bridge between

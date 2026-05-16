@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 protopoke = "protopoke.ui.app:main"
+protopoke-mcp = "protopoke.mcp.stdio_bridge:main"
 
 [project.optional-dependencies]
 dev = [
