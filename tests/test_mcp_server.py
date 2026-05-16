@@ -504,3 +504,92 @@ class TestAuthoringGuides:
         assert "Tamper" in result["ui_path"]
         assert any("Script" in s for s in result["steps"])
         assert isinstance(result["notes"], list) and result["notes"]
+
+
+# ---------------------------------------------------------------------------
+# Workflow recipes (resources + fallback tools)
+# ---------------------------------------------------------------------------
+
+class TestWorkflowRecipes:
+    RECIPE_SLUGS = {
+        "reverse-engineer-unknown-protocol",
+        "replay-with-mutation",
+        "intercept-and-rewrite",
+    }
+
+    def test_list_includes_all_recipes(self, mcp_server):
+        fn = get_tool(mcp_server, "list_workflow_recipes")
+        slugs = {entry["slug"] for entry in fn()}
+        assert self.RECIPE_SLUGS <= slugs
+
+    def test_list_entries_carry_uri(self, mcp_server):
+        fn = get_tool(mcp_server, "list_workflow_recipes")
+        for entry in fn():
+            assert entry["uri"] == f"protopoke://recipes/{entry['slug']}"
+            assert entry["title"]
+            assert entry["description"]
+
+    def test_get_known_recipe_returns_markdown(self, mcp_server):
+        fn = get_tool(mcp_server, "get_workflow_recipe")
+        result = fn("reverse-engineer-unknown-protocol")
+        assert result["slug"] == "reverse-engineer-unknown-protocol"
+        assert "Reverse-engineer" in result["content"]
+        assert "cluster_frames" in result["content"]
+
+    def test_get_unknown_recipe_returns_error(self, mcp_server):
+        fn = get_tool(mcp_server, "get_workflow_recipe")
+        result = fn("does-not-exist")
+        assert "error" in result
+        assert "reverse-engineer-unknown-protocol" in result["available"]
+
+    def test_replay_recipe_loads(self, mcp_server):
+        fn = get_tool(mcp_server, "get_workflow_recipe")
+        body = fn("replay-with-mutation")["content"]
+        assert "Playbook" in body or "playbook" in body
+        assert "fuzz_start" in body
+
+    def test_intercept_recipe_loads(self, mcp_server):
+        fn = get_tool(mcp_server, "get_workflow_recipe")
+        body = fn("intercept-and-rewrite")["content"]
+        assert "tamper_toggle" in body
+        assert "replace rule" in body.lower()
+
+    def test_resources_registered(self, mcp_server):
+        resources = {str(r.uri) for r in mcp_server._resource_manager.list_resources()}
+        assert "protopoke://recipes" in resources
+        for slug in self.RECIPE_SLUGS:
+            assert f"protopoke://recipes/{slug}" in resources
+
+    def test_index_resource_lists_every_recipe(self, mcp_server):
+        resources = {str(r.uri): r for r in mcp_server._resource_manager.list_resources()}
+        body = resources["protopoke://recipes"].fn()
+        for slug in self.RECIPE_SLUGS:
+            assert f"protopoke://recipes/{slug}" in body
+
+
+# ---------------------------------------------------------------------------
+# Tool index (resource-only cheat-sheet)
+# ---------------------------------------------------------------------------
+
+class TestToolIndex:
+    def test_resource_registered(self, mcp_server):
+        resources = {str(r.uri) for r in mcp_server._resource_manager.list_resources()}
+        assert "protopoke://tools" in resources
+
+    def test_resource_body_groups_tools(self, mcp_server):
+        resources = {str(r.uri): r for r in mcp_server._resource_manager.list_resources()}
+        body = resources["protopoke://tools"].fn()
+        # Spot-check that a representative tool from each major group is named.
+        for tool_name in (
+            "proxy_status", "list_forwarders", "list_sessions",
+            "tamper_toggle", "add_replace_rule", "add_intercept_rule",
+            "send_frame", "run_playbook", "fuzz_start",
+            "cluster_frames", "find_length_fields",
+        ):
+            assert tool_name in body, f"{tool_name} missing from tool index"
+
+    def test_resource_body_cross_references_guides_and_recipes(self, mcp_server):
+        resources = {str(r.uri): r for r in mcp_server._resource_manager.list_resources()}
+        body = resources["protopoke://tools"].fn()
+        assert "protopoke://guides" in body
+        assert "protopoke://recipes" in body
