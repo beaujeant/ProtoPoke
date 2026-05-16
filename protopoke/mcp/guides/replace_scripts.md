@@ -6,6 +6,31 @@ frame in scope. It is the most powerful of the three replace-rule types
 *parse* a message — so it can edit nested length-prefixed fields, maintain
 state across frames, and stash values for later use in Forge.
 
+## For MCP Clients (read this first)
+
+ProtoPoke deliberately does **not** expose any MCP tool to write a script
+file to disk or to register a script replace rule. Script rules execute
+arbitrary Python inside the proxy process, so the operator — not the AI —
+must be the gate that lets code run.
+
+The intended flow when a user asks you to author a script rule:
+
+1. Fetch what you need to reason about the frame:
+   `get_protocol_definition()` for field offsets/types, plus any relevant
+   captured frames via the analysis tools.
+2. Generate the full `apply(data, variables)` script and display it back
+   to the user in a fenced ```python code block. Do not truncate.
+3. Hand off to the operator with explicit load instructions — call
+   `get_script_load_instructions()` and quote the steps it returns so the
+   user knows exactly where to click in the UI.
+4. Stop. Do not try to persist the file, do not call `add_replace_rule`
+   to fake a script rule, and do not poll for the rule to appear.
+
+The MCP `add_replace_rule` tool only handles `binary` rules (pattern +
+hex replacement) by design. If the transformation can be expressed as a
+binary or regex find-and-replace, prefer that — it does not execute code
+and can be registered directly.
+
 ## The `apply()` Function
 
 Your script file must define exactly this function:
