@@ -128,7 +128,7 @@ Built-in mutators fall into two groups:
 
 Field-aware mutators find bugs faster but only work if you've already
 run the `reverse-engineer-unknown-protocol` recipe and loaded a
-definition with `set_protocol_file`.
+definition (loaded by the operator via the TUI or a ForwarderConfig.protocol_definition_path).
 
 A productive default chain for an unknown protocol with a loaded
 definition is `length_mangle` + `field_overflow` + `bit_flip`: those

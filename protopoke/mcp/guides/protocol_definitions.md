@@ -55,11 +55,18 @@ api.set_protocol_dict({
 })
 ```
 
-Via MCP:
+Via MCP (loading is operator-only — there is no MCP write path for
+protocol definitions):
 
 ```
-set_protocol_file(path="/path/to/myproto.yaml")
+get_protocol_definition          # inspect what is currently loaded
+get_protocol_definition_schema   # this guide as a tool response
 ```
+
+When you want to propose a new or updated definition, emit the YAML in
+chat and ask the operator to save it and load it (either with
+`api.set_protocol_file(...)` from a script, by pointing a forwarder's
+`protocol_definition_path` at it, or from the ProtoPoke TUI).
 
 ## Match Strategies
 
@@ -301,13 +308,17 @@ protocol:
 - **Order matters**: the parser uses the *first* matching message
   definition. Put the most specific matches first and a `type: always`
   catch-all last.
-- **Validate as you go**: load with `api.set_protocol_file(...)` and watch
-  the Traffic tab to confirm each frame decodes as expected.
+- **Validate as you go**: load with `api.set_protocol_file(...)` (from a
+  Python script or the TUI) and watch the Traffic tab to confirm each
+  frame decodes as expected.
 - **Use the analysis MCP tools** (`get_frame_stats`, `cluster_frames`,
   `entropy_map`, `analyze_byte_ranges`, `find_length_fields`) to discover
   structural patterns before writing definitions by hand.
-- **Edit live via MCP**: `add_message_definition`,
-  `add_field_to_message`, etc. let you build a definition incrementally
-  and save it with `save_protocol_to_file`.
+- **Iterate via chat, not MCP writes**: the MCP server does not expose
+  any tool to mutate a loaded definition.  Compose the YAML in your
+  reply, ask the operator to save and reload it, then re-fetch with
+  `get_protocol_definition` to verify the parser accepted it.  Record
+  every confirmed hypothesis as a `Finding` so the next session has
+  context.
 - **Examples shipped with the repo**: `examples/protocols/chat.proto.yaml`
   (all field types), `examples/protocols/dns.proto.yaml` (real protocol).

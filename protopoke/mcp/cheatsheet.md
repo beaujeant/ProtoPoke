@@ -38,24 +38,33 @@ Related resources:
 - `delete_session` — drop a session from the registry.
 - `export_session` — dump a session as JSON.
 
-## Protocol management
+## Protocol management (read-only)
 
-- `set_protocol_file` — load a YAML/JSON protocol definition from disk.
-- `set_protocol_dict` — load a definition from an in-memory dict.
-- `get_protocol_info` — name + message list of the active protocol.
+- `get_protocol_info` — name + flags for the currently loaded protocol.
+- `get_protocol_definition` — full active definition as a YAML-compatible
+  dict (or `{"error": ...}` if no definition is loaded).
+- `get_protocol_definition_schema` — the YAML schema spec for ProtocolDefinition
+  files.  Use this when the operator asks you to draft a definition from
+  what you've learned — emit YAML in chat for them to paste/load
+  manually.  ProtoPoke does not expose any MCP write path for protocol
+  definitions.
 
-## Protocol definition editing
+## Knowledge base (cross-session AI memory)
 
-In-memory editing of the loaded definition. Call `save_protocol_to_file`
-to persist.
+Findings and notes persisted in the `.pp` project file.  Use this to
+record reasoning that should survive across sessions instead of
+re-deriving it every time.
 
-- `get_protocol_definition` — full definition as a dict.
-- `create_protocol_definition` — start a fresh definition from scratch.
-- `add_message_definition` / `update_message_definition` /
-  `remove_message_definition` / `reorder_message_definition`
-- `add_field_to_message` / `update_field_in_message` /
-  `remove_field_from_message`
-- `save_protocol_to_file` — write the current definition to YAML/JSON.
+- `list_findings` / `get_finding` / `add_finding` / `update_finding` /
+  `remove_finding` — structured claims (hypothesis / confirmed /
+  ruled_out / needs_review) with scope (protocol / message / field /
+  byte range / forwarder), evidence frame IDs, and tags.
+- `list_notes` / `get_note` / `add_note` / `update_note` / `remove_note`
+  — free-form markdown entries for context that doesn't fit a Finding.
+
+The AI may only update/remove entries it authored AND that the user has
+not locked from the TUI.  Refused mutations return an explanatory
+error — add a counter-entry instead.
 
 ## Tamper control (intercept queue)
 

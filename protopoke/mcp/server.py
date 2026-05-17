@@ -11,14 +11,18 @@ Tools are grouped by concern:
                               get_frame, get_session_summary, decode_frames,
                               decode_frame_by_id, search_frames,
                               terminate_session, delete_session, export_session
-    Protocol management     : set_protocol_file, set_protocol_dict,
-                              get_protocol_info
-    Protocol definition edit: get_protocol_definition,
-                              create_protocol_definition,
-                              add_message_definition, update_message_definition,
-                              remove_message_definition, reorder_message_definition,
-                              add_field_to_message, update_field_in_message,
-                              remove_field_from_message, save_protocol_to_file
+    Protocol management     : get_protocol_info (read-only)
+    Protocol definition     : get_protocol_definition,
+                              get_protocol_definition_schema (read-only —
+                              the AI emits YAML in chat for the user to
+                              load manually; no MCP write path).
+    Knowledge base          : list_findings, get_finding, add_finding,
+                              update_finding, remove_finding,
+                              list_notes, get_note, add_note,
+                              update_note, remove_note
+                              (AI may only update/remove entries it
+                              authored AND that the user has not locked
+                              from the TUI.)
     Tamper control          : tamper_status, tamper_toggle,
                               list_intercepted, tamper_decode_pending,
                               tamper_forward, tamper_drop,
@@ -658,7 +662,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         """
         Decode all frames for a session using the attached protocol decoder.
 
-        Requires a protocol definition to be loaded via set_protocol_file().
+        Requires a protocol definition to be loaded (configured on a forwarder or set by the operator from the TUI).
         Returns passthrough (hex-only) results if no decoder is configured.
 
         Args:
@@ -818,67 +822,18 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         return api.session_to_dict(session)
 
     # ------------------------------------------------------------------ #
-    # Protocol management                                                   #
+    # Protocol management (read-only)                                       #
     # ------------------------------------------------------------------ #
-
-    @mcp.tool()
-    def set_protocol_file(path: str) -> dict:
-        """
-        Load a protocol definition from a YAML or JSON file.
-
-        Protocol definitions describe message types, fields, byte offsets,
-        and data types so that frames can be decoded into structured fields
-        (visible via decode_frames / decode_frame_by_id).
-
-        Args:
-            path: Path to a .yaml, .yml, or .json protocol definition file.
-
-        Returns:
-            {"ok": True, "protocol_name": "..."} on success.
-        """
-        try:
-            api.set_protocol_file(path)
-            return {"ok": True, "protocol_name": api._decoder.protocol_name}
-        except FileNotFoundError as exc:
-            return {"ok": False, "error": f"File not found: {exc}"}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
-
-    @mcp.tool()
-    def set_protocol_dict(definition: dict) -> dict:
-        """
-        Load a protocol definition from a dict (same schema as the YAML format).
-
-        Useful for defining simple inline protocols without a file.
-
-        Example definition::
-
-            {
-              "name": "MyProto",
-              "messages": [
-                {
-                  "name": "Login",
-                  "match": {"magic": "01 00"},
-                  "fields": [
-                    {"name": "msg_type", "type": "uint8"},
-                    {"name": "username_len", "type": "uint8"},
-                    {"name": "username", "type": "string", "length": "{username_len}"}
-                  ]
-                }
-              ]
-            }
-
-        Args:
-            definition: Protocol definition dict.
-
-        Returns:
-            {"ok": True, "protocol_name": "..."} on success.
-        """
-        try:
-            api.set_protocol_dict(definition)
-            return {"ok": True, "protocol_name": api._decoder.protocol_name}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+    # The AI is intentionally NOT allowed to load, create, edit, or save
+    # protocol definitions through the MCP server.  The user is the only
+    # one who can change which definition is active (via the TUI or by
+    # pointing a ForwarderConfig at a YAML file).  The AI's job is to
+    # gather evidence (analysis tools), record what it learns (findings
+    # / notes), and — when the user asks — emit a YAML definition in
+    # chat for the user to paste/load manually.
+    #
+    # Use ``get_protocol_definition_schema`` to retrieve the exact YAML
+    # schema for that hand-off.
 
     @mcp.tool()
     def get_protocol_info() -> dict:
@@ -950,7 +905,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
         Like list_intercepted() but each entry also includes a ``parsed``
         field with the structured ParsedMessage for that frame. Requires a
-        protocol definition to be loaded via set_protocol_file() for useful output.
+        protocol definition to be loaded (configured on a forwarder or set by the operator from the TUI) for useful output.
 
         Returns:
             List of dicts, each with "unit" (TamperedUnit) and "parsed"
@@ -1014,7 +969,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         """
         Re-encode a tampered frame with protocol field edits, then forward it.
 
-        Requires a protocol definition to be loaded via set_protocol_file().
+        Requires a protocol definition to be loaded (configured on a forwarder or set by the operator from the TUI).
         The frame is decoded, the specified fields are replaced, the message
         is re-encoded (with length fields automatically recomputed), and the
         result is forwarded.
@@ -1041,7 +996,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
                 return {
                     "ok": False,
                     "unit_id": unit_id,
-                    "error": "No protocol encoder loaded. Call set_protocol_file() first.",
+                    "error": "No protocol encoder loaded — ask the operator to load a protocol definition.",
                 }
         return {"ok": ok, "unit_id": unit_id}
 
@@ -1835,7 +1790,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         """
         Replay a captured session with protocol field-level edits applied.
 
-        Requires a protocol definition to be loaded via set_protocol_file().
+        Requires a protocol definition to be loaded (configured on a forwarder or set by the operator from the TUI).
         Each message type can have specific fields overridden. The encoder
         automatically recomputes length fields after edits.
 
@@ -1864,7 +1819,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
                 "ok": False,
                 "error": (
                     "No protocol encoder loaded. "
-                    "Call set_protocol_file() first to enable field-level replay."
+                    "Ask the operator to load a protocol definition to enable field-level replay."
                 ),
             }
 
@@ -2411,7 +2366,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
         Each entry has ``name`` (the spec key), ``parameters`` (optional
         kwargs and their defaults), and ``requires_protocol`` (True for
-        protocol-aware mutators that need ``set_protocol_file`` to be called
+        protocol-aware mutators that need a protocol definition to be loaded
         first).
         """
         return [
@@ -3098,282 +3053,397 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         )
 
     # ------------------------------------------------------------------ #
-    # Protocol definition editing (in-place mutation of the active def)    #
+    # Protocol definition — READ-ONLY                                       #
     # ------------------------------------------------------------------ #
-
-    def _active_definition():
-        """Return the active ProtocolDefinition or raise RuntimeError."""
-        from protopoke.protocol.parser import DefinitionBasedDecoder
-        if not isinstance(api._decoder, DefinitionBasedDecoder):
-            raise RuntimeError(
-                "No protocol definition is loaded.  Call "
-                "create_protocol_definition() or set_protocol_file() first."
-            )
-        return api._decoder._def
-
-    def _reapply_definition(defn) -> None:
-        """Re-attach the protocol after mutating its dataclasses."""
-        from protopoke.protocol.parser import (
-            DefinitionBasedDecoder, DefinitionBasedEncoder
-        )
-        api.set_protocol(
-            DefinitionBasedDecoder(defn),
-            DefinitionBasedEncoder(defn),
-        )
+    # The AI can inspect the active definition (whatever the user loaded
+    # into the running ProtoPoke instance) and ask for the YAML schema
+    # so it can emit a hand-off definition in chat.  Writing or saving
+    # definitions is not exposed — that remains a user action.
 
     @mcp.tool()
     def get_protocol_definition() -> dict:
         """
         Return the active ProtocolDefinition as a YAML-compatible dict.
 
-        Round-trips with ``set_protocol_dict``: the returned dict is exactly
-        what the loader accepts.  Returns ``{"error": ...}`` if no
-        definition-based protocol is loaded.
+        Returns the same dict shape the YAML loader accepts.  Useful for
+        the AI to inspect what the operator has currently loaded so it
+        can reason about it or extend it (in chat) without re-deriving
+        the structure from scratch.
+
+        Returns ``{"error": ...}`` if no definition-based protocol is
+        loaded (the active decoder is the passthrough).
         """
         from protopoke.protocol.definition import protocol_to_dict
-        try:
-            defn = _active_definition()
-        except RuntimeError as exc:
-            return {"error": str(exc)}
-        return protocol_to_dict(defn)
+        from protopoke.protocol.parser import DefinitionBasedDecoder
+        if not isinstance(api._decoder, DefinitionBasedDecoder):
+            return {"error": "No protocol definition is loaded."}
+        return protocol_to_dict(api._decoder._def)
 
     @mcp.tool()
-    def create_protocol_definition(
-        name:       str,
-        endianness: str = "big",
-        version:    str = "1.0",
-    ) -> dict:
+    def get_protocol_definition_schema() -> dict:
         """
-        Start a new, empty ProtocolDefinition and attach it as the active
-        decoder/encoder.
+        Return the authoritative YAML schema for ProtocolDefinition files.
 
-        Replaces any currently loaded protocol.  Add packet types with
-        ``add_message_definition`` and fields with ``add_field_to_message``,
-        then save to disk with ``save_protocol_to_file``.
+        Use this when the operator asks you to "create a protocol
+        definition based on what you've learned".  The MCP layer does
+        NOT save definitions to disk — emit the YAML in chat instead so
+        the operator can review and load it themselves via the TUI.
+
+        Returns a dict with:
+            content:   the full markdown spec (field types, match rules,
+                       expressions, examples).
+            uri:       the MCP resource URI for the same content
+                       (``protopoke://guides/protocol-definitions``).
+            workflow:  one-line summary of the recommended hand-off flow.
         """
-        if endianness not in ("big", "little"):
-            return {"error": "endianness must be 'big' or 'little'"}
-        from protopoke.protocol.definition import ProtocolDefinition
-        defn = ProtocolDefinition(name=name, version=version, endianness=endianness)
-        _reapply_definition(defn)
-        return {"ok": True, "protocol_name": name}
+        return {
+            "content":  load_guide("protocol-definitions"),
+            "uri":      "protopoke://guides/protocol-definitions",
+            "workflow": (
+                "Compose the YAML in chat, show it to the user, and let "
+                "them save and load it manually from the ProtoPoke UI."
+            ),
+        }
 
-    @mcp.tool()
-    def add_message_definition(message: dict) -> dict:
+    # ------------------------------------------------------------------ #
+    # Knowledge base — findings + notes (AI memory across sessions)         #
+    # ------------------------------------------------------------------ #
+    # AI clients can freely add findings and notes here; updates and
+    # deletes are restricted to entries the AI authored AND that the user
+    # has not locked from the UI.  See protopoke/knowledge/.
+
+    from protopoke.knowledge import Finding, Note
+
+    def _serialise_finding(finding: "Finding") -> dict:
+        """Add the resolved forwarder display name to the finding dict."""
+        d = finding.to_dict()
+        d["forwarder_name"] = api.resolve_forwarder_name(finding.forwarder_id)
+        return d
+
+    def _ai_can_mutate(entry, kind: str) -> Optional[dict]:
+        """Return an error dict if the AI may not mutate ``entry``.
+
+        AI clients can only update or remove entries they authored AND
+        that the user has not locked through the UI.  Returns None if
+        the mutation is allowed.
         """
-        Append a MessageDefinition to the active protocol.
-
-        ``message`` uses the same schema as the loader — the same dict you'd
-        write inside ``messages: [...]`` in YAML.  Example::
-
-            {
-              "name": "mv_position",
-              "match": {"type": "magic", "offset": 0, "value": [0x6d, 0x76]},
-              "direction": "client_to_server",
-              "fields": [
-                {"name": "type", "type": "bytes", "length": 2},
-                {"name": "x",    "type": "float32"},
-                {"name": "y",    "type": "float32"},
-                {"name": "z",    "type": "float32"}
-              ]
+        if entry.author != "ai":
+            return {
+                "ok": False,
+                "error": (
+                    f"This {kind} was authored by {entry.author!r}; "
+                    f"the AI may only edit/remove its own entries.  "
+                    f"Add a counter-{kind} instead."
+                ),
             }
+        if entry.locked:
+            return {
+                "ok": False,
+                "error": (
+                    f"This {kind} was locked by the user via the UI; "
+                    f"the AI may not modify it.  Add a counter-{kind} "
+                    f"instead, or ask the user to unlock it."
+                ),
+            }
+        return None
 
-        Returns ``{"ok": True, "message_count": N}`` on success.  Errors if
-        a message with the same name already exists.
-        """
-        from protopoke.protocol.definition.loader import _parse_message
-        try:
-            defn = _active_definition()
-        except RuntimeError as exc:
-            return {"error": str(exc)}
-        name = message.get("name")
-        if not isinstance(name, str) or not name:
-            return {"error": "message.name is required"}
-        if any(m.name == name for m in defn.messages):
-            return {"error": f"Message {name!r} already exists; use update_message_definition()"}
-        try:
-            msg_def = _parse_message(message, len(defn.messages), "<mcp>")
-        except ValueError as exc:
-            return {"error": str(exc)}
-        defn.messages.append(msg_def)
-        _reapply_definition(defn)
-        return {"ok": True, "message_count": len(defn.messages)}
+    # ---------- Findings ----------
 
     @mcp.tool()
-    def update_message_definition(name: str, message: dict) -> dict:
+    def list_findings(
+        query:         Optional[str]       = None,
+        status:        Optional[str]       = None,
+        author:        Optional[str]       = None,
+        protocol_name: Optional[str]       = None,
+        message_name:  Optional[str]       = None,
+        field_name:    Optional[str]       = None,
+        forwarder_id:  Optional[str]       = None,
+        tags:          Optional[list[str]] = None,
+    ) -> list[dict]:
         """
-        Replace the MessageDefinition called ``name`` with the given dict.
+        Return findings in the project's knowledge base, optionally filtered.
 
-        The new dict's ``name`` field can differ — the message will be renamed.
-        Use this when you want to overwrite an existing packet type wholesale
-        rather than editing individual fields.
+        Findings are structured claims the AI (or user) has recorded about
+        the protocol under investigation — hypotheses, confirmed facts,
+        ruled-out theories.  Use this on session start to recover what
+        previous sessions discovered before re-running analysis.
+
+        Args:
+            query:         Case-insensitive substring match against title,
+                           description, and tags.
+            status:        ``hypothesis`` | ``confirmed`` | ``ruled_out`` |
+                           ``needs_review``.
+            author:        Filter by author (``"ai"`` or ``"user"``).
+            protocol_name: Scope to one protocol name.
+            message_name:  Scope to one message type.
+            field_name:    Scope to one field within a message.
+            forwarder_id:  Scope to one forwarder by its stable UUID
+                           (use ``list_forwarders`` to look up IDs).
+            tags:          AND match — all named tags must be present.
+
+        Returns:
+            List of finding dicts.  Each includes ``forwarder_name``
+            resolved against the current forwarder list, so renames are
+            transparent.
         """
-        from protopoke.protocol.definition.loader import _parse_message
-        try:
-            defn = _active_definition()
-        except RuntimeError as exc:
-            return {"error": str(exc)}
-        idx = next((i for i, m in enumerate(defn.messages) if m.name == name), None)
-        if idx is None:
-            return {"error": f"Message {name!r} not found"}
-        try:
-            new_msg = _parse_message(message, idx, "<mcp>")
-        except ValueError as exc:
-            return {"error": str(exc)}
-        defn.messages[idx] = new_msg
-        _reapply_definition(defn)
-        return {"ok": True}
+        results = api.knowledge.list_findings(
+            query=query, status=status, author=author,
+            protocol_name=protocol_name, message_name=message_name,
+            field_name=field_name, forwarder_id=forwarder_id, tags=tags,
+        )
+        return [_serialise_finding(f) for f in results]
 
     @mcp.tool()
-    def remove_message_definition(name: str) -> dict:
-        """Remove a MessageDefinition from the active protocol by name."""
-        try:
-            defn = _active_definition()
-        except RuntimeError as exc:
-            return {"error": str(exc)}
-        before = len(defn.messages)
-        defn.messages = [m for m in defn.messages if m.name != name]
-        if len(defn.messages) == before:
-            return {"error": f"Message {name!r} not found"}
-        _reapply_definition(defn)
-        return {"ok": True, "message_count": len(defn.messages)}
+    def get_finding(finding_id: str) -> dict:
+        """Return one finding by ID, or ``{"error": ...}`` if not found."""
+        finding = api.knowledge.get_finding(finding_id)
+        if finding is None:
+            return {"error": f"No finding with id {finding_id!r}"}
+        return _serialise_finding(finding)
 
     @mcp.tool()
-    def reorder_message_definition(name: str, new_index: int) -> dict:
-        """
-        Move a MessageDefinition to ``new_index`` (0-based) in the active
-        protocol's ``messages`` list.
-
-        Order matters: the decoder tries match rules in list order and uses
-        the first hit — put specific magic-byte messages before catch-alls
-        (``match.type: always``).
-        """
-        try:
-            defn = _active_definition()
-        except RuntimeError as exc:
-            return {"error": str(exc)}
-        idx = next((i for i, m in enumerate(defn.messages) if m.name == name), None)
-        if idx is None:
-            return {"error": f"Message {name!r} not found"}
-        if new_index < 0 or new_index >= len(defn.messages):
-            return {"error": f"new_index {new_index} out of range [0, {len(defn.messages)-1}]"}
-        msg = defn.messages.pop(idx)
-        defn.messages.insert(new_index, msg)
-        _reapply_definition(defn)
-        return {"ok": True}
-
-    @mcp.tool()
-    def add_field_to_message(
-        message_name: str,
-        field:        dict,
-        index:        Optional[int] = None,
+    def add_finding(
+        title:        str,
+        description:  str                 = "",
+        status:       str                 = "hypothesis",
+        confidence:   str                 = "medium",
+        protocol_name: Optional[str]      = None,
+        message_name:  Optional[str]      = None,
+        field_name:    Optional[str]      = None,
+        byte_offset:   Optional[int]      = None,
+        byte_length:   Optional[int]      = None,
+        direction:     Optional[str]      = None,
+        forwarder_id:  Optional[str]      = None,
+        evidence_frame_ids:         Optional[list[str]] = None,
+        counter_evidence_frame_ids: Optional[list[str]] = None,
+        tags:                       Optional[list[str]] = None,
     ) -> dict:
         """
-        Append (or insert) a FieldDefinition into a MessageDefinition.
+        Record a new finding in the knowledge base.
 
-        ``field`` uses the same schema as the loader.  ``index=None`` (default)
-        appends to the end; otherwise the field is inserted at ``index``.
+        The finding is always attributed to the AI (``author="ai"``) and
+        starts unlocked.  Scope fields are optional — pin the finding at
+        whatever level makes sense (protocol-wide, message-level,
+        field-level, or a raw byte range when no field name exists yet).
+
+        Args:
+            title:        One-line summary (required).
+            description:  Markdown body — reasoning, references, examples.
+            status:       ``hypothesis`` (default) | ``confirmed`` |
+                          ``ruled_out`` | ``needs_review``.
+            confidence:   ``low`` | ``medium`` (default) | ``high``.
+            protocol_name, message_name, field_name: Optional scope hints.
+            byte_offset, byte_length: Pin to a raw byte range when no
+                          field exists yet (e.g. "bytes 4-5 look like
+                          a CRC16").
+            direction:    ``client_to_server`` | ``server_to_client``.
+            forwarder_id: Stable UUID of a forwarder (from
+                          ``list_forwarders``).  Survives renames.
+            evidence_frame_ids:         Supporting frame IDs.
+            counter_evidence_frame_ids: Frames that would refute it.
+            tags:         Free-form filtering tags.
+
+        Returns the created finding dict.
         """
-        from protopoke.protocol.definition.loader import _parse_field
         try:
-            defn = _active_definition()
-        except RuntimeError as exc:
-            return {"error": str(exc)}
-        msg = next((m for m in defn.messages if m.name == message_name), None)
-        if msg is None:
-            return {"error": f"Message {message_name!r} not found"}
-        fname = field.get("name")
-        if not isinstance(fname, str) or not fname:
-            return {"error": "field.name is required"}
-        if any(f.name == fname for f in msg.fields):
-            return {"error": f"Field {fname!r} already exists in {message_name!r}"}
-        try:
-            new_field = _parse_field(field, len(msg.fields), f"<mcp:{message_name}>")
+            finding = Finding.create(
+                title=title, description=description,
+                status=status, confidence=confidence,
+                author="ai", locked=False,
+                protocol_name=protocol_name, message_name=message_name,
+                field_name=field_name, byte_offset=byte_offset,
+                byte_length=byte_length, direction=direction,
+                forwarder_id=forwarder_id,
+                evidence_frame_ids=evidence_frame_ids,
+                counter_evidence_frame_ids=counter_evidence_frame_ids,
+                tags=tags,
+            )
         except ValueError as exc:
-            return {"error": str(exc)}
-        if index is None:
-            msg.fields.append(new_field)
-        else:
-            if index < 0 or index > len(msg.fields):
-                return {"error": f"index {index} out of range [0, {len(msg.fields)}]"}
-            msg.fields.insert(index, new_field)
-        _reapply_definition(defn)
-        return {"ok": True, "field_count": len(msg.fields)}
+            return {"ok": False, "error": str(exc)}
+        api.knowledge.add_finding(finding)
+        return {"ok": True, "finding": _serialise_finding(finding)}
 
     @mcp.tool()
-    def update_field_in_message(
-        message_name: str,
-        field_name:   str,
-        field:        dict,
+    def update_finding(
+        finding_id:    str,
+        title:         Optional[str]       = None,
+        description:   Optional[str]       = None,
+        status:        Optional[str]       = None,
+        confidence:    Optional[str]       = None,
+        protocol_name: Optional[str]       = None,
+        message_name:  Optional[str]       = None,
+        field_name:    Optional[str]       = None,
+        byte_offset:   Optional[int]       = None,
+        byte_length:   Optional[int]       = None,
+        direction:     Optional[str]       = None,
+        forwarder_id:  Optional[str]       = None,
+        evidence_frame_ids:         Optional[list[str]] = None,
+        counter_evidence_frame_ids: Optional[list[str]] = None,
+        tags:                       Optional[list[str]] = None,
     ) -> dict:
         """
-        Replace a FieldDefinition with a new one.  ``field`` may rename it.
+        Update one or more fields of an existing finding.
+
+        AI clients may only update findings they authored AND that the
+        user has not locked from the TUI.  When refused, the error
+        message explains why; add a counter-finding instead.
+
+        Only the kwargs that are not ``None`` are applied.  Validation
+        of ``status`` / ``confidence`` mirrors :meth:`add_finding`.
         """
-        from protopoke.protocol.definition.loader import _parse_field
+        finding = api.knowledge.get_finding(finding_id)
+        if finding is None:
+            return {"ok": False, "error": f"No finding with id {finding_id!r}"}
+        refusal = _ai_can_mutate(finding, "finding")
+        if refusal is not None:
+            return refusal
+
+        changes: dict = {}
+        for key, value in {
+            "title": title, "description": description,
+            "status": status, "confidence": confidence,
+            "protocol_name": protocol_name, "message_name": message_name,
+            "field_name": field_name, "byte_offset": byte_offset,
+            "byte_length": byte_length, "direction": direction,
+            "forwarder_id": forwarder_id,
+            "evidence_frame_ids": evidence_frame_ids,
+            "counter_evidence_frame_ids": counter_evidence_frame_ids,
+            "tags": tags,
+        }.items():
+            if value is not None:
+                changes[key] = value
+
+        # Validate status/confidence (the store does not).
+        if "status" in changes:
+            from protopoke.knowledge.models import FINDING_STATUSES
+            if changes["status"] not in FINDING_STATUSES:
+                return {"ok": False,
+                        "error": f"Invalid status {changes['status']!r}; "
+                                 f"expected one of {FINDING_STATUSES}"}
+        if "confidence" in changes:
+            from protopoke.knowledge.models import FINDING_CONFIDENCE
+            if changes["confidence"] not in FINDING_CONFIDENCE:
+                return {"ok": False,
+                        "error": f"Invalid confidence {changes['confidence']!r}; "
+                                 f"expected one of {FINDING_CONFIDENCE}"}
+
         try:
-            defn = _active_definition()
-        except RuntimeError as exc:
-            return {"error": str(exc)}
-        msg = next((m for m in defn.messages if m.name == message_name), None)
-        if msg is None:
-            return {"error": f"Message {message_name!r} not found"}
-        idx = next((i for i, f in enumerate(msg.fields) if f.name == field_name), None)
-        if idx is None:
-            return {"error": f"Field {field_name!r} not found in {message_name!r}"}
-        try:
-            new_field = _parse_field(field, idx, f"<mcp:{message_name}>")
+            updated = api.knowledge.update_finding(finding_id, **changes)
         except ValueError as exc:
-            return {"error": str(exc)}
-        msg.fields[idx] = new_field
-        _reapply_definition(defn)
-        return {"ok": True}
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "finding": _serialise_finding(updated)}
 
     @mcp.tool()
-    def remove_field_from_message(message_name: str, field_name: str) -> dict:
-        """Remove a FieldDefinition from a MessageDefinition by name."""
-        try:
-            defn = _active_definition()
-        except RuntimeError as exc:
-            return {"error": str(exc)}
-        msg = next((m for m in defn.messages if m.name == message_name), None)
-        if msg is None:
-            return {"error": f"Message {message_name!r} not found"}
-        before = len(msg.fields)
-        msg.fields = [f for f in msg.fields if f.name != field_name]
-        if len(msg.fields) == before:
-            return {"error": f"Field {field_name!r} not found in {message_name!r}"}
-        _reapply_definition(defn)
-        return {"ok": True, "field_count": len(msg.fields)}
+    def remove_finding(finding_id: str) -> dict:
+        """
+        Remove a finding by ID.
+
+        Same author / locked restrictions as :meth:`update_finding`.
+        """
+        finding = api.knowledge.get_finding(finding_id)
+        if finding is None:
+            return {"ok": False, "error": f"No finding with id {finding_id!r}"}
+        refusal = _ai_can_mutate(finding, "finding")
+        if refusal is not None:
+            return refusal
+        api.knowledge.remove_finding(finding_id)
+        return {"ok": True, "finding_id": finding_id}
+
+    # ---------- Notes ----------
 
     @mcp.tool()
-    def save_protocol_to_file(path: str) -> dict:
+    def list_notes(
+        query:  Optional[str]       = None,
+        author: Optional[str]       = None,
+        tags:   Optional[list[str]] = None,
+    ) -> list[dict]:
         """
-        Serialise the active ProtocolDefinition to a ``.yaml`` / ``.yml`` /
-        ``.json`` file at ``path``.
+        Return free-form notes in the project's knowledge base.
 
-        Choose the format via the file extension.  YAML requires PyYAML.
+        Use notes for context that does not fit the structured Finding
+        shape — open questions, design hypotheses about the whole
+        protocol, test-setup reminders.
+
+        Args:
+            query:  Case-insensitive substring match against title,
+                    body, and tags.
+            author: Filter by author.
+            tags:   AND match — all named tags must be present.
         """
-        import json
-        from pathlib import Path
-        from protopoke.protocol.definition import protocol_to_dict
-        try:
-            defn = _active_definition()
-        except RuntimeError as exc:
-            return {"error": str(exc)}
-        p = Path(path)
-        suffix = p.suffix.lower()
-        data = protocol_to_dict(defn)
-        if suffix in (".yaml", ".yml"):
-            try:
-                import yaml  # type: ignore[import]
-            except ImportError:
-                return {"error": "PyYAML not installed; use .json or `pip install pyyaml`"}
-            p.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-        elif suffix == ".json":
-            p.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        else:
-            return {"error": f"Unsupported extension {suffix!r}; use .yaml/.yml/.json"}
-        return {"ok": True, "path": str(p.resolve())}
+        return [n.to_dict() for n in api.knowledge.list_notes(
+            query=query, author=author, tags=tags,
+        )]
+
+    @mcp.tool()
+    def get_note(note_id: str) -> dict:
+        """Return one note by ID, or ``{"error": ...}`` if not found."""
+        note = api.knowledge.get_note(note_id)
+        if note is None:
+            return {"error": f"No note with id {note_id!r}"}
+        return note.to_dict()
+
+    @mcp.tool()
+    def add_note(
+        title:   str,
+        body_md: str                 = "",
+        tags:    Optional[list[str]] = None,
+    ) -> dict:
+        """
+        Record a new note in the knowledge base.
+
+        Always attributed to the AI (``author="ai"``) and starts unlocked.
+
+        Args:
+            title:   One-line label (required).
+            body_md: Markdown body.
+            tags:    Free-form filtering tags.
+        """
+        note = Note.create(title=title, body_md=body_md,
+                           author="ai", locked=False, tags=tags)
+        api.knowledge.add_note(note)
+        return {"ok": True, "note": note.to_dict()}
+
+    @mcp.tool()
+    def update_note(
+        note_id: str,
+        title:   Optional[str]       = None,
+        body_md: Optional[str]       = None,
+        tags:    Optional[list[str]] = None,
+    ) -> dict:
+        """
+        Update a note's title, body, or tags.
+
+        Same author / locked restrictions as :meth:`update_finding`.
+        Only non-``None`` kwargs are applied.
+        """
+        note = api.knowledge.get_note(note_id)
+        if note is None:
+            return {"ok": False, "error": f"No note with id {note_id!r}"}
+        refusal = _ai_can_mutate(note, "note")
+        if refusal is not None:
+            return refusal
+        changes: dict = {}
+        for key, value in {"title": title, "body_md": body_md, "tags": tags}.items():
+            if value is not None:
+                changes[key] = value
+        updated = api.knowledge.update_note(note_id, **changes)
+        return {"ok": True, "note": updated.to_dict()}
+
+    @mcp.tool()
+    def remove_note(note_id: str) -> dict:
+        """
+        Remove a note by ID.
+
+        Same author / locked restrictions as :meth:`update_note`.
+        """
+        note = api.knowledge.get_note(note_id)
+        if note is None:
+            return {"ok": False, "error": f"No note with id {note_id!r}"}
+        refusal = _ai_can_mutate(note, "note")
+        if refusal is not None:
+            return refusal
+        api.knowledge.remove_note(note_id)
+        return {"ok": True, "note_id": note_id}
 
     # Expose the rebind hook so MCPHost can swap the bound API without
     # tearing down the server task.
