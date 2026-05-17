@@ -5,7 +5,7 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Switch, Static, Checkbox
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 
 from ...rules.rule import (
     ReplaceRule,
@@ -59,6 +59,10 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
         padding: 1 2;
         background: $surface;
     }
+    AddReplaceRuleModal #form-scroll {
+        height: auto;
+        max-height: 70vh;
+    }
     AddReplaceRuleModal Label {
         margin-top: 1;
     }
@@ -73,6 +77,19 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
         height: 3;
         margin-top: 1;
         align: left middle;
+    }
+    AddReplaceRuleModal .path-row {
+        height: 3;
+        margin-top: 0;
+        align: left middle;
+    }
+    AddReplaceRuleModal .path-row Input {
+        width: 1fr;
+    }
+    AddReplaceRuleModal .btn-browse {
+        width: 10;
+        min-width: 10;
+        margin-left: 1;
     }
     AddReplaceRuleModal .scope-row {
         height: 3;
@@ -113,101 +130,102 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
         with Vertical():
             yield Label("Replace Rule", classes="modal-title")
 
-            # ---- Label ----
-            yield Label("Label:")
-            yield Input(value=ex.label if ex else "", placeholder="My replace rule", id="r-label")
+            with VerticalScroll(id="form-scroll"):
+                # ---- Label ----
+                yield Label("Label:")
+                yield Input(value=ex.label if ex else "", placeholder="My replace rule", id="r-label")
 
-            # ---- Rule type ----
-            yield Label("Mechanism:")
-            yield Select(
-                [(lbl, val) for lbl, val in _RULE_TYPE_OPTIONS],
-                value=rule_type,
-                id="r-type",
-            )
-
-            # ---- Binary fields ----
-            with Vertical(id="binary-fields"):
-                yield Label("Pattern (hex binary syntax):")
-                yield Input(
-                    value=ex.pattern_str if ex else "",
-                    placeholder='e.g.  01 00 ??  or  FF [03-09]  or  (01|02) 00',
-                    id="r-pattern",
-                )
-                yield Static(
-                    "AB=literal  ??=any byte  [AB-CD]=range  .{N}=N bytes  (AB|CD)=alt  "
-                    "^=start  $=end  XX+=one+  XX*=zero+",
-                    classes="hint",
-                )
-                yield Label("Replacement (hex bytes, e.g. DEADBEEF):")
-                yield Input(
-                    value=ex.replacement.hex() if ex else "",
-                    placeholder="00 or deadbeef or 0d0a",
-                    id="r-replacement",
+                # ---- Rule type ----
+                yield Label("Mechanism:")
+                yield Select(
+                    [(lbl, val) for lbl, val in _RULE_TYPE_OPTIONS],
+                    value=rule_type,
+                    id="r-type",
                 )
 
-            # ---- Regex fields ----
-            with Vertical(id="regex-fields"):
-                yield Label("Regex pattern (Python bytes regex, e.g. \\x01\\x00.{2}):")
-                yield Input(
-                    value=ex.regex_pattern if ex else "",
-                    placeholder=r"e.g.  \x01\x00.{2}  or  (\xff[\x00-\x09])",
-                    id="r-regex-pattern",
-                )
-                yield Static(
-                    "Uses Python bytes regex syntax with \\xNN escapes (re.DOTALL enabled)",
-                    classes="hint",
-                )
-                yield Label("Replacement (\\xNN bytes and \\g<N> backreferences):")
-                yield Input(
-                    value=ex.regex_replacement if ex else "",
-                    placeholder=r"e.g.  \g<1>\x00\xff  or  \x00",
-                    id="r-regex-replacement",
-                )
-
-            # ---- Script fields ----
-            with Vertical(id="script-fields"):
-                yield Label("Script path (must export apply(data: bytes) -> bytes):")
-                with Horizontal(classes="switch-row"):
+                # ---- Binary fields ----
+                with Vertical(id="binary-fields"):
+                    yield Label("Pattern (hex binary syntax):")
                     yield Input(
-                        value=ex.script_path if ex else "",
-                        placeholder="/path/to/replace_script.py",
-                        id="r-script-path",
+                        value=ex.pattern_str if ex else "",
+                        placeholder='e.g.  01 00 ??  or  FF [03-09]  or  (01|02) 00',
+                        id="r-pattern",
                     )
-                    yield Button("Browse", id="btn-browse-script", compact=True)
+                    yield Static(
+                        "AB=literal  ??=any byte  [AB-CD]=range  .{N}=N bytes  (AB|CD)=alt  "
+                        "^=start  $=end  XX+=one+  XX*=zero+",
+                        classes="hint",
+                    )
+                    yield Label("Replacement (hex bytes, e.g. DEADBEEF):")
+                    yield Input(
+                        value=ex.replacement.hex() if ex else "",
+                        placeholder="00 or deadbeef or 0d0a",
+                        id="r-replacement",
+                    )
 
-            # ---- Direction (common) ----
-            yield Static("─" * 60, classes="section-divider")
-            yield Label("Direction:")
-            direction_val = ex.direction.value if (ex and ex.direction) else ""
-            yield Select(
-                [(lbl, val) for lbl, val in _DIRECTION_OPTIONS],
-                value=direction_val,
-                id="r-direction",
-            )
+                # ---- Regex fields ----
+                with Vertical(id="regex-fields"):
+                    yield Label("Regex pattern (Python bytes regex, e.g. \\x01\\x00.{2}):")
+                    yield Input(
+                        value=ex.regex_pattern if ex else "",
+                        placeholder=r"e.g.  \x01\x00.{2}  or  (\xff[\x00-\x09])",
+                        id="r-regex-pattern",
+                    )
+                    yield Static(
+                        "Uses Python bytes regex syntax with \\xNN escapes (re.DOTALL enabled)",
+                        classes="hint",
+                    )
+                    yield Label("Replacement (\\xNN bytes and \\g<N> backreferences):")
+                    yield Input(
+                        value=ex.regex_replacement if ex else "",
+                        placeholder=r"e.g.  \g<1>\x00\xff  or  \x00",
+                        id="r-regex-replacement",
+                    )
 
-            # ---- Enabled toggle ----
-            with Horizontal(classes="switch-row"):
-                yield Label("Enabled: ")
-                yield Switch(value=ex.enabled if ex else True, id="r-enabled")
+                # ---- Script fields ----
+                with Vertical(id="script-fields"):
+                    yield Label("Script path (must export apply(data: bytes) -> bytes):")
+                    with Horizontal(classes="path-row"):
+                        yield Input(
+                            value=ex.script_path if ex else "",
+                            placeholder="/path/to/replace_script.py",
+                            id="r-script-path",
+                        )
+                        yield Button("Browse", id="btn-browse-script", classes="btn-browse")
 
-            # ---- Scope checkboxes ----
-            yield Label("Apply in:")
-            with Horizontal(classes="scope-row"):
-                yield Checkbox(
-                    "Traffic",
-                    value=ex.apply_to_traffic if ex else True,
-                    id="r-scope-traffic",
+                # ---- Direction (common) ----
+                yield Static("─" * 60, classes="section-divider")
+                yield Label("Direction:")
+                direction_val = ex.direction.value if (ex and ex.direction) else ""
+                yield Select(
+                    [(lbl, val) for lbl, val in _DIRECTION_OPTIONS],
+                    value=direction_val,
+                    id="r-direction",
                 )
-                yield Checkbox(
-                    "Tamper",
-                    value=ex.apply_to_tamper if ex else True,
-                    id="r-scope-tamper",
-                )
-                yield Checkbox(
-                    "Forge",
-                    value=ex.apply_to_forge if ex else True,
-                    id="r-scope-forge",
-                )
+
+                # ---- Enabled toggle ----
+                with Horizontal(classes="switch-row"):
+                    yield Label("Enabled: ")
+                    yield Switch(value=ex.enabled if ex else True, id="r-enabled")
+
+                # ---- Scope checkboxes ----
+                yield Label("Apply in:")
+                with Horizontal(classes="scope-row"):
+                    yield Checkbox(
+                        "Traffic",
+                        value=ex.apply_to_traffic if ex else True,
+                        id="r-scope-traffic",
+                    )
+                    yield Checkbox(
+                        "Tamper",
+                        value=ex.apply_to_tamper if ex else True,
+                        id="r-scope-tamper",
+                    )
+                    yield Checkbox(
+                        "Forge",
+                        value=ex.apply_to_forge if ex else True,
+                        id="r-scope-forge",
+                    )
 
             yield Static("", id="validation-msg")
 
