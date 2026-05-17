@@ -24,6 +24,7 @@ from .tabs.tamper import TamperTab
 from .tabs.traffic import TrafficTab
 from .tabs.forge import ForgeTab
 from .tabs.fuzzer import FuzzerTab
+from .tabs.notes import NotesTab
 from .tabs.logs import LogsTab
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,8 @@ class ProtoPoke(App):
         F3 → Tamper tab
         F4 → Forge tab
         F5 → Fuzzer tab
-        F6 → Logs tab
+        F6 → Notes tab
+        F7 → Logs tab
         ctrl+n → New project
         ctrl+o → Open project
         ctrl+s → Save project
@@ -107,7 +109,8 @@ class ProtoPoke(App):
         Binding("f3",           "switch_tab('tamper')",    "Tamper",    show=True),
         Binding("f4",           "switch_tab('forge')",     "Forge",     show=True),
         Binding("f5",           "switch_tab('fuzzer')",    "Fuzzer",    show=True),
-        Binding("f6",           "switch_tab('logs')",      "Logs",      show=True),
+        Binding("f6",           "switch_tab('notes')",     "Notes",     show=True),
+        Binding("f7",           "switch_tab('logs')",      "Logs",      show=True),
         Binding("ctrl+f",       "send_to_forge",           "→Forge",    show=False, priority=True),
         Binding("ctrl+n",       "new_project",             "New",       show=False, priority=True),
         Binding("ctrl+o",       "open_project",            "Open",      show=False, priority=True),
@@ -175,7 +178,9 @@ class ProtoPoke(App):
                 yield ForgeTab(id="forge-tab")
             with TabPane("Fuzzer [F5]", id="fuzzer"):
                 yield FuzzerTab(id="fuzzer-tab")
-            with TabPane("Logs [F6]", id="logs"):
+            with TabPane("Notes [F6]", id="notes"):
+                yield NotesTab(self.api, id="notes-tab")
+            with TabPane("Logs [F7]", id="logs"):
                 yield LogsTab(id="logs-tab")
         yield Footer()
 
@@ -560,6 +565,7 @@ class ProtoPoke(App):
         traffic_tab.load_filters([])
         self.query_one("#forge-tab", ForgeTab).load_playbooks([])
         self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions([])
+        self.query_one("#notes-tab", NotesTab).rebind_api(self.api)
         self._update_title()
         logger.info("New project: %s", name)
 
@@ -598,6 +604,7 @@ class ProtoPoke(App):
                 for session in restored:
                     traffic_tab.add_session(session)
                 self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
+            self.query_one("#notes-tab", NotesTab).rebind_api(self.api)
             self._update_title()
             logger.info("Opened project: %s", state.name)
             if enabled_names:
