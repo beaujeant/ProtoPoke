@@ -10,6 +10,8 @@ A *project* is a single ``.pp`` ZIP file that bundles:
     logs.json         — captured sessions and frames (the traffic tab content)
     filters.json      — frame display filters
     mcp.json          — embedded MCP server settings
+    findings.json     — knowledge-base findings (reverse-engineering memory)
+    notes.json        — knowledge-base free-form notes
 
 The file is a standard ZIP archive (no extra dependencies needed — Python's
 built-in ``zipfile`` module is used).
@@ -42,6 +44,7 @@ from typing import Optional
 
 from ..config import ForwarderConfig
 from ..filters.frame_filter import FrameDisplayFilter
+from ..knowledge import KnowledgeBase
 from ..mcp.host import MCPSettings
 from ..rules.engine import RulesEngine, InterceptFilter
 from ..forge.models import Playbook
@@ -76,6 +79,7 @@ class ProjectState:
     name:              str                      = "Untitled"
     frame_filters:     list[FrameDisplayFilter] = field(default_factory=list)
     mcp_settings:      MCPSettings              = field(default_factory=MCPSettings)
+    knowledge:         KnowledgeBase            = field(default_factory=KnowledgeBase)
 
 
 class ProjectManager:
@@ -105,6 +109,7 @@ class ProjectManager:
         self.captured_sessions: list[dict]               = []
         self.frame_filters:     list[FrameDisplayFilter] = []
         self.mcp_settings:      MCPSettings              = MCPSettings()
+        self.knowledge:         KnowledgeBase            = KnowledgeBase()
         self.name:              str                      = "Untitled"
         self.path:              Optional[Path]           = None
         self.is_dirty:          bool                     = False
@@ -125,6 +130,7 @@ class ProjectManager:
         self.captured_sessions = []
         self.frame_filters     = []
         self.mcp_settings      = MCPSettings()
+        self.knowledge         = KnowledgeBase()
         self.name              = name
         self.path              = None
         self.is_dirty          = False
@@ -194,6 +200,9 @@ class ProjectManager:
 
         mcp_data = self.mcp_settings.to_dict()
 
+        findings_data = {"findings": [f.to_dict() for f in self.knowledge.findings]}
+        notes_data    = {"notes":    [n.to_dict() for n in self.knowledge.notes]}
+
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("project.json",    json.dumps(meta,             indent=2))
             zf.writestr("forwarders.json", json.dumps(forwarders_data,  indent=2))
@@ -202,6 +211,8 @@ class ProjectManager:
             zf.writestr("logs.json",       json.dumps(logs_data,        indent=2))
             zf.writestr("filters.json",    json.dumps(filters_data,     indent=2))
             zf.writestr("mcp.json",        json.dumps(mcp_data,         indent=2))
+            zf.writestr("findings.json",   json.dumps(findings_data,    indent=2))
+            zf.writestr("notes.json",      json.dumps(notes_data,       indent=2))
 
         self._saved_at = now
         self.is_dirty  = False
@@ -295,6 +306,13 @@ class ProjectManager:
                 if mcp_raw else MCPSettings()
             )
 
+            findings_raw = _read("findings.json")
+            notes_raw    = _read("notes.json")
+            self.knowledge = KnowledgeBase.from_dict({
+                "findings": json.loads(findings_raw).get("findings", []) if findings_raw else [],
+                "notes":    json.loads(notes_raw).get("notes",    []) if notes_raw    else [],
+            })
+
         self.name      = meta.get("name", zip_path.stem)
         self.path      = zip_path
         self.is_dirty  = False
@@ -309,6 +327,7 @@ class ProjectManager:
             name=self.name,
             frame_filters=self.frame_filters,
             mcp_settings=self.mcp_settings,
+            knowledge=self.knowledge,
         )
 
     # ------------------------------------------------------------------

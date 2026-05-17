@@ -7,8 +7,9 @@ it consumes a dict and produces typed dataclasses.  Round-tripping through
 parser actually uses.
 
 Used by:
-    * MCP tools that let an AI introspect / save the current protocol.
-    * ``save_protocol_to_file`` (writes YAML or JSON).
+    * The MCP ``get_protocol_definition`` tool — exposes the currently
+      loaded definition (read-only) to the AI client.
+    * Any caller that wants to serialise a definition back to YAML/JSON.
 """
 
 from __future__ import annotations

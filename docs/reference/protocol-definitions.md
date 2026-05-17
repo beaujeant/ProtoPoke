@@ -70,8 +70,14 @@ protocol:
   </Tab>
   <Tab title="MCP">
     ```
-    set_protocol_file(path="/path/to/myproto.yaml")
+    # Read-only — loading is an operator action
+    get_protocol_definition          # inspect what is loaded
+    get_protocol_definition_schema   # YAML spec + example
     ```
+
+    The MCP server exposes only read-only protocol-definition tools.
+    When an AI client wants to propose or update a definition, it
+    emits the YAML in chat for the operator to save and load.
   </Tab>
 </Tabs>
 

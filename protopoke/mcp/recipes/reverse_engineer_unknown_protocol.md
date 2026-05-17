@@ -327,38 +327,35 @@ transaction ID.
 Read the protocol-definition authoring guide for the YAML schema:
 
 ```text
+get_protocol_definition_schema     # spec + worked example
+# or:
 list_authoring_guides
-get_authoring_guide("protocol-definitions")   # or protopoke://guides/protocol-definitions
+get_authoring_guide("protocol-definitions")  # protopoke://guides/protocol-definitions
 ```
 
-Build it incrementally in memory (every editing tool's effect is
-visible to `decode_frames` on the next call — no reload step):
+The MCP server does NOT expose any tool to create, edit, or save
+protocol definitions — that authority stays with the operator.  Instead:
+
+1. Compose the YAML in chat, including every message, field, and
+   match rule you've inferred.  Use `list_field_types` if you forget
+   which field types are available.  For catch-all/passthrough messages
+   set `match.type` to `"always"` and put that message **last** (matching
+   is first-hit).
+2. Hand the YAML to the operator and ask them to save it (e.g.
+   `my_proto.yaml`) and load it into ProtoPoke (via the TUI, or by
+   pointing a `ForwarderConfig.protocol_definition_path` at it).
+3. Once loaded, re-fetch it with `get_protocol_definition` to confirm
+   the parser accepts your draft.
+
+While you iterate, capture your hypotheses in the knowledge base so
+they survive across sessions:
 
 ```text
-create_protocol_definition(name="MyProto", endianness="big")
-
-add_message_definition(message={
-  "name": "LoginRequest",
-  "match": {"type": "magic", "offset": 0, "value": [1]},
-  "direction": "client_to_server",
-  "fields": [
-    {"name": "msg_type",     "type": "uint8"},
-    {"name": "username_len", "type": "uint16"},
-    {"name": "username",     "type": "bytes", "length": "username_len"}
-  ]
-})
-
-# Tweak individual fields without rewriting the whole message:
-add_field_to_message(message_name="LoginRequest",
-                     field={"name": "flags", "type": "uint8"})
-update_field_in_message(message_name="LoginRequest",
-                        field_name="username_len",
-                        field={"name": "username_len", "type": "uint16"})
+add_finding(title="byte 7 looks like a CRC16-CCITT",
+            status="hypothesis", confidence="medium",
+            message_name="LoginRequest", byte_offset=7, byte_length=2,
+            evidence_frame_ids=["...", "..."])
 ```
-
-Use `list_field_types` if you forget which field types are available.
-For catch-all/passthrough messages set `match.type` to `"always"` and
-put that message **last** in the list (matching is first-hit).
 
 ## 8. Validate against real frames
 
@@ -374,14 +371,12 @@ For every frame check:
   printable, enums fall in range).
 - The parser consumed the whole frame (no trailing bytes reported).
 
-If something is wrong, edit the definition (`update_field_in_message`,
-`update_message_definition`, `reorder_message_definition`,
-`remove_message_definition`) and re-run `decode_frames`. Iterate until
-the whole capture decodes cleanly. Watch out for two failure modes:
+If something is wrong, revise the YAML in chat and ask the operator
+to reload it.  Watch out for two failure modes:
 
 - **Over-matching**: a catch-all `match.type: always` placed above a
   specific magic-byte message will eat everything that comes after it.
-  Use `reorder_message_definition` to fix.
+  Reorder the messages.
 - **Under-matching**: a magic value that's correct for some frames but
   doesn't hold for others — usually means you've conflated two message
   types. Split the definition.
@@ -412,19 +407,27 @@ Three useful "confirmation" probes:
 - XOR a putative checksum byte and verify the server rejects the
   frame — this proves the field guards integrity.
 
+Promote the finding once confirmed:
+
+```text
+update_finding(finding_id="...", status="confirmed", confidence="high")
+```
+
 This step is what separates a working protocol definition from a
 guessed one.
 
 ## 10. Persist
 
-```text
-save_protocol_to_file(path="my_proto.yaml")
-```
-
-From now on `set_protocol_file("my_proto.yaml")` brings the decoder
-back, and every captured frame on every forwarder using this protocol
-will decode with named fields visible in `get_frames`,
+The operator is the only one who can save a definition to disk.  When
+the YAML is stable, hand them the final version and tell them to save
+it (e.g. `my_proto.yaml`) and load it into the relevant forwarder.
+After that, every captured frame on every forwarder using this
+protocol will decode with named fields visible in `get_frames`,
 `tamper_decode_pending`, `replay_with_field_edits`, and the Traffic tab.
+
+Your reasoning history is preserved automatically — `add_finding` /
+`add_note` entries live in the `.pp` project file and surface in the
+next session via `list_findings` / `list_notes`.
 
 ## Cross-references
 

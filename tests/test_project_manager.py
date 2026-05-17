@@ -8,6 +8,7 @@ import zipfile
 import pytest
 
 from protopoke.config import ForwarderConfig, ForwarderType
+from protopoke.knowledge import Finding, Note
 from protopoke.rules.rule import ReplaceRule, InterceptRule, RuleAction
 from protopoke.forge.models import Playbook, PlaybookFrame, TrafficEntry
 from protopoke.project.manager import ProjectManager, ProjectState
@@ -211,6 +212,51 @@ class TestProjectManager:
         socks = next(f for f in state.forwarders if f.name == "socks1")
         assert socks.socks_auth_user == "user"
         assert socks.socks_auth_pass == "pass"
+
+    def test_findings_and_notes_round_trip(self, tmp_path):
+        pm = ProjectManager()
+        pm.knowledge.add_finding(Finding.create(
+            title="CRC at bytes 4-5",
+            description="probably CRC16-CCITT",
+            confidence="high",
+            status="confirmed",
+            author="ai",
+            forwarder_id="fwd-uuid-123",
+            evidence_frame_ids=["f1", "f2"],
+            tags=["checksum"],
+        ))
+        pm.knowledge.add_note(Note.create(
+            title="open question",
+            body_md="* why does the server echo the seq?",
+            author="user",
+            locked=True,
+        ))
+        out = pm.save_as(tmp_path / "kb.pp")
+
+        pm2 = ProjectManager()
+        state = pm2.open(out)
+        assert len(state.knowledge.findings) == 1
+        assert len(state.knowledge.notes) == 1
+        f = state.knowledge.findings[0]
+        assert f.title == "CRC at bytes 4-5"
+        assert f.confidence == "high"
+        assert f.status == "confirmed"
+        assert f.forwarder_id == "fwd-uuid-123"
+        assert f.evidence_frame_ids == ["f1", "f2"]
+        n = state.knowledge.notes[0]
+        assert n.title == "open question"
+        assert n.locked is True
+
+    def test_forwarder_id_survives_save_load(self, tmp_path):
+        pm = ProjectManager()
+        original = ForwarderConfig(name="Game", listen_port=5555)
+        original_id = original.id
+        pm.forwarders = [original]
+        pm.save_as(tmp_path / "p.pp")
+
+        pm2 = ProjectManager()
+        state = pm2.open(tmp_path / "p.pp")
+        assert state.forwarders[0].id == original_id
 
     def test_zip_too_many_members_rejected(self, tmp_path):
         """ZIP with more than _ZIP_MAX_MEMBERS entries raises ValueError."""

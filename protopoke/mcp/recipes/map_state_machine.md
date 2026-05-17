@@ -102,10 +102,11 @@ a transaction / sequence ID echoed back. Confirming this gives you a
 free annotation:
 
 ```text
-update_field_in_message(message_name="C02_AUTH",
+# (rename the fields in your YAML draft — the MCP has no write path.)
+# Example you would put in the YAML for C02_AUTH:
                         field_name="unknown_2",
                         field={"name": "txn_id", "type": "uint32"})
-update_field_in_message(message_name="S82_CHAL",
+# Example you would put in the YAML for S82_CHAL:
                         field_name="unknown_2",
                         field={"name": "txn_id", "type": "uint32"})
 ```

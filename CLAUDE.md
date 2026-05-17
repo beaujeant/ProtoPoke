@@ -93,8 +93,8 @@ protopoke/
 │   │   ├── schema.py   ProtocolDefinition, MessageDefinition, FieldDefinition
 │   │   ├── loader.py   load_protocol_file() / load_protocol() (YAML/JSON)
 │   │   └── serializer.py protocol_to_dict()/message_to_dict()/field_to_dict()
-│   │                     — round-trips with the loader (powers MCP protocol
-│   │                     definition editing tools and save_protocol_to_file)
+│   │                     — round-trips with the loader (powers the
+│   │                     read-only get_protocol_definition MCP tool)
 │   ├── parser/
 │   │   ├── engine.py   DefinitionBasedDecoder, DefinitionBasedEncoder
 │   │   ├── fields.py   parse_field() / encode_field() per FieldType
@@ -143,6 +143,18 @@ protopoke/
 │                       detect_timestamps, detect_compression_encryption,
 │                       echo_detection).
 │
+├── knowledge/
+│   ├── models.py       Finding, Note — dataclasses with to_dict/from_dict
+│   │                   for cross-session AI memory.  Findings are
+│   │                   structured (status, confidence, scope, evidence
+│   │                   frame IDs); Notes are free-form markdown.  Both
+│   │                   carry author (creator) and locked (True once a
+│   │                   user has mutated via the TUI — the MCP layer
+│   │                   refuses subsequent AI mutations).
+│   └── store.py        KnowledgeBase — in-memory CRUD + filter/search.
+│                       Persisted by ProjectManager as findings.json +
+│                       notes.json members of the .pp archive.
+│
 ├── tls/
 │   ├── ca.py           CertificateAuthority — generate/sign per-session certs
 │   └── handler.py      TLSHandler — build ssl.SSLContext for listen + upstream
@@ -159,13 +171,20 @@ protopoke/
 ├── project/
 │   └── manager.py      ProjectManager — save/load .pp ZIP files (project.json,
 │                       forwarders.json, rules.json, forge.json, logs.json,
-│                       filters.json, mcp.json)
+│                       filters.json, mcp.json, findings.json, notes.json)
 │
 ├── utils/
 │   └── script_loader.py  Loads user Python scripts (custom framers, script rules)
 │
 ├── mcp/
-│   ├── server.py       build_mcp_server() — ~74 MCP tools wrapping ProtoPokeAPI
+│   ├── server.py       build_mcp_server() — MCP tools wrapping ProtoPokeAPI.
+│   │                   Protocol-definition surface is READ-ONLY
+│   │                   (get_protocol_definition, get_protocol_definition_schema,
+│   │                   get_protocol_info) — the operator is the only party
+│   │                   who can load or save a definition.  Findings/notes
+│   │                   CRUD tools enforce author/locked checks: the AI may
+│   │                   only update or remove entries it authored AND that
+│   │                   the user has not locked from the TUI.
 │   ├── host.py         MCPHost — embedded MCP server lifecycle (start/stop/
 │   │                   rebind), used by the Textual app to serve tools over
 │   │                   streamable-http in the same process as the UI
@@ -177,9 +196,10 @@ protopoke/
     ├── app.py          ProtoPoke(App) — Textual root; event bridge between
     │                   asyncio EventBus and Textual message system
     ├── tabs/           config.py, traffic.py, tamper.py, forge.py,
-    │                   fuzzer.py, logs.py
+    │                   fuzzer.py, notes.py, logs.py
     ├── modals/         project.py, add_rule.py, frame_edit.py,
-    │                   forwarder_edit.py, framer_edit.py, …
+    │                   forwarder_edit.py, framer_edit.py,
+    │                   finding_edit.py, note_edit.py, …
     ├── widgets/        rule_table.py, parsed_view.py, segmented_control.py,
     │                   help_button.py
     └── utils/
@@ -341,6 +361,8 @@ forge.json        — list of Playbook dicts
 logs.json         — captured sessions + frames (the Traffic tab content)
 filters.json      — frame display filters
 mcp.json          — embedded MCP server settings (enabled, host, port)
+findings.json     — knowledge-base findings (reverse-engineering memory)
+notes.json        — knowledge-base free-form notes
 ```
 
 ZIP loading is bounded (max 32 members, 100 MB per member).
@@ -381,7 +403,9 @@ tests/
 ├── test_inject_to_client.py        api.inject_to_client() into live session
 ├── test_mcp_server.py              MCP tool coverage
 ├── test_mcp_host.py                MCPHost lifecycle
-├── test_mcp_analysis_tools.py      MCP analysis + protocol-definition editing tools
+├── test_mcp_analysis_tools.py      MCP analysis + read-only protocol-definition tools
+├── test_mcp_knowledge_tools.py     MCP findings/notes CRUD + author/locked enforcement
+├── test_knowledge.py               Finding/Note dataclasses + KnowledgeBase
 ├── test_analysis.py                protopoke/analysis.py helpers (pure unit tests)
 ├── test_segmented_control.py       SegmentedControl widget
 └── test_to_dict_serialisation.py   .to_dict() / .from_dict() round-trips
@@ -404,7 +428,9 @@ tests/
 | Add a match strategy | `protopoke/protocol/parser/matcher.py` |
 | Add a mutator | `protopoke/fuzzing/mutators/` |
 | Add an analytical helper (stats / diff / heuristic) | `protopoke/analysis.py` |
+| Add a Finding or Note field, or change KB filters | `protopoke/knowledge/` |
 | Add an MCP tool | `protopoke/mcp/server.py` |
+| Change MCP author/locked enforcement for findings/notes | `protopoke/mcp/server.py` (`_ai_can_mutate`) |
 | Change how a ProtocolDefinition serialises back to dict/YAML | `protopoke/protocol/definition/serializer.py` |
 | Change the TUI layout | `protopoke/ui/app.py`, `protopoke/ui/tabs/` |
 | Change project save/load format | `protopoke/project/manager.py` |

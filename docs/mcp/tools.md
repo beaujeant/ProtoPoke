@@ -82,35 +82,46 @@ describe a complete job. Also exposed as MCP resources at
 | `delete_session` | Remove a session from the registry |
 | `export_session` | Export a session's data |
 
-## Protocol Management
+## Protocol Management (read-only)
+
+The MCP surface for protocol definitions is intentionally read-only: the
+operator is the only party who can load, edit, or save a definition.
+When the AI wants to propose a new or updated definition it should emit
+the YAML in chat and ask the operator to save and load it (via the TUI
+or by pointing a `ForwarderConfig.protocol_definition_path` at the
+file).
 
 | Tool | Description |
 |------|-------------|
-| `set_protocol_file` | Load a YAML/JSON protocol definition file |
-| `set_protocol_dict` | Load a protocol definition from an inline dict |
 | `get_protocol_info` | Currently loaded decoder/encoder names and status |
+| `get_protocol_definition` | The active definition as a YAML-compatible dict (or `{"error": ...}` if none is loaded) |
+| `get_protocol_definition_schema` | The authoritative YAML schema spec for `ProtocolDefinition` files, with a worked example. Use this when composing a definition in chat |
 
-## Protocol Definition Editing
+## Knowledge Base (cross-session AI memory)
 
-Incrementally build or modify the active `ProtocolDefinition` over MCP. Edits
-take effect immediately — `decode_frames`, `tamper_modify_field_and_forward`,
-and the Wireshark-style parsed view in the TUI all use the updated definition
-on the next call. Save the result with `save_protocol_to_file` to commit it
-as a regular `.yaml` / `.json` protocol file. See the
-[Protocol Reversing guide](/mcp/analysis) for a worked example.
+Persistent findings and notes stored in the `.pp` project file.  Use
+this to record reasoning that should survive across AI sessions
+instead of re-deriving everything every time.  Findings are
+structured (status, confidence, scope, evidence frame IDs); notes are
+free-form markdown.  See the [Knowledge Base guide](/mcp/knowledge)
+for the schema and a worked example.
+
+The AI may only update or remove entries it authored AND that the
+user has not locked from the TUI.  Refused mutations return an
+explanatory error — add a counter-entry instead.
 
 | Tool | Description |
 |------|-------------|
-| `get_protocol_definition` | The active definition as a YAML-compatible dict |
-| `create_protocol_definition` | Start a new empty definition (replaces the active one) |
-| `add_message_definition` | Append a `MessageDefinition` (packet type) |
-| `update_message_definition` | Replace an existing `MessageDefinition` by name |
-| `remove_message_definition` | Remove a `MessageDefinition` by name |
-| `reorder_message_definition` | Move a `MessageDefinition` in the match-priority list |
-| `add_field_to_message` | Append or insert a `FieldDefinition` |
-| `update_field_in_message` | Replace a `FieldDefinition` (may rename it) |
-| `remove_field_from_message` | Remove a `FieldDefinition` by name |
-| `save_protocol_to_file` | Serialise the active definition to `.yaml` / `.yml` / `.json` |
+| `list_findings` | Findings filtered by query / status / author / scope / tags |
+| `get_finding` | One finding by ID (with the current `forwarder_name` resolved from `forwarder_id`) |
+| `add_finding` | Record a new finding (always `author="ai"`, `locked=false`) |
+| `update_finding` | Update one or more fields of an AI-authored unlocked finding |
+| `remove_finding` | Remove an AI-authored unlocked finding |
+| `list_notes` | Notes filtered by query / author / tags |
+| `get_note` | One note by ID |
+| `add_note` | Record a new free-form markdown note |
+| `update_note` | Update an AI-authored unlocked note |
+| `remove_note` | Remove an AI-authored unlocked note |
 
 ## Tamper Control
 

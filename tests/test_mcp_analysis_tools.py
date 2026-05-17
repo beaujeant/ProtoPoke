@@ -335,175 +335,55 @@ class TestOffsetCorrelations:
 # Protocol-definition editing tools
 # ---------------------------------------------------------------------------
 
-class TestProtocolDefinitionEditing:
+class TestProtocolDefinitionReadOnly:
+    """The MCP server intentionally exposes only read-only access to the
+    active protocol definition; mutation tools were removed so the AI
+    cannot silently change how frames are decoded."""
+
     def test_get_without_definition_returns_error(self, mcp_server):
         fn = get_tool(mcp_server, "get_protocol_definition")
         out = fn()
         assert "error" in out
 
-    def test_create_then_get(self, mcp_server):
-        create = get_tool(mcp_server, "create_protocol_definition")
-        out = create(name="MyProto", endianness="little")
-        assert out["ok"] is True
-
-        getter = get_tool(mcp_server, "get_protocol_definition")
-        d = getter()
+    def test_get_with_definition_round_trips(self, mcp_server, api):
+        # Load a definition from a dict via the Python API (NOT the MCP)
+        api.set_protocol_dict({
+            "name": "MyProto",
+            "endianness": "little",
+            "messages": [
+                {"name": "M",
+                 "match": {"type": "always"},
+                 "fields": [{"name": "a", "type": "uint8"}]},
+            ],
+        })
+        d = get_tool(mcp_server, "get_protocol_definition")()
         assert d["name"] == "MyProto"
         assert d["endianness"] == "little"
-        assert d["messages"] == []
+        assert d["messages"][0]["name"] == "M"
 
-    def test_create_with_bad_endianness(self, mcp_server):
-        fn = get_tool(mcp_server, "create_protocol_definition")
-        out = fn(name="X", endianness="middle")
-        assert "error" in out
+    def test_get_schema_returns_guide_content(self, mcp_server):
+        fn = get_tool(mcp_server, "get_protocol_definition_schema")
+        out = fn()
+        assert "content" in out
+        assert "uri" in out
+        assert out["uri"] == "protopoke://guides/protocol-definitions"
+        assert "Protocol Definition" in out["content"]
 
-    def test_add_message_and_fields(self, mcp_server, api):
-        get_tool(mcp_server, "create_protocol_definition")(name="P")
-
-        add_msg = get_tool(mcp_server, "add_message_definition")
-        out = add_msg({
-            "name": "mv",
-            "match": {"type": "magic", "offset": 0, "value": [0x6d, 0x76]},
-            "fields": [
-                {"name": "type", "type": "bytes", "length": 2},
-            ],
-        })
-        assert out["ok"] is True
-        assert out["message_count"] == 1
-
-        add_field = get_tool(mcp_server, "add_field_to_message")
-        out2 = add_field("mv", {"name": "x", "type": "float32"})
-        assert out2["ok"] is True
-        assert out2["field_count"] == 2
-
-        getter = get_tool(mcp_server, "get_protocol_definition")
-        d = getter()
-        assert d["messages"][0]["fields"][1]["name"] == "x"
-        assert d["messages"][0]["fields"][1]["type"] == "float32"
-
-    def test_add_duplicate_message_rejected(self, mcp_server):
-        get_tool(mcp_server, "create_protocol_definition")(name="P")
-        add_msg = get_tool(mcp_server, "add_message_definition")
-        add_msg({"name": "X", "match": {"type": "always"}, "fields": []})
-        out = add_msg({"name": "X", "match": {"type": "always"}, "fields": []})
-        assert "error" in out
-
-    def test_add_duplicate_field_rejected(self, mcp_server):
-        get_tool(mcp_server, "create_protocol_definition")(name="P")
-        get_tool(mcp_server, "add_message_definition")({
-            "name": "M", "match": {"type": "always"}, "fields": [{"name": "a", "type": "uint8"}],
-        })
-        add_field = get_tool(mcp_server, "add_field_to_message")
-        out = add_field("M", {"name": "a", "type": "uint8"})
-        assert "error" in out
-
-    def test_update_field(self, mcp_server):
-        get_tool(mcp_server, "create_protocol_definition")(name="P")
-        get_tool(mcp_server, "add_message_definition")({
-            "name": "M", "match": {"type": "always"},
-            "fields": [{"name": "a", "type": "uint8"}],
-        })
-        upd = get_tool(mcp_server, "update_field_in_message")
-        out = upd("M", "a", {"name": "a_renamed", "type": "uint16"})
-        assert out["ok"] is True
-        d = get_tool(mcp_server, "get_protocol_definition")()
-        assert d["messages"][0]["fields"][0]["name"] == "a_renamed"
-        assert d["messages"][0]["fields"][0]["type"] == "uint16"
-
-    def test_remove_field(self, mcp_server):
-        get_tool(mcp_server, "create_protocol_definition")(name="P")
-        get_tool(mcp_server, "add_message_definition")({
-            "name": "M", "match": {"type": "always"},
-            "fields": [
-                {"name": "a", "type": "uint8"},
-                {"name": "b", "type": "uint8"},
-            ],
-        })
-        rm = get_tool(mcp_server, "remove_field_from_message")
-        out = rm("M", "a")
-        assert out["ok"] is True
-        d = get_tool(mcp_server, "get_protocol_definition")()
-        assert [f["name"] for f in d["messages"][0]["fields"]] == ["b"]
-
-    def test_remove_message(self, mcp_server):
-        get_tool(mcp_server, "create_protocol_definition")(name="P")
-        get_tool(mcp_server, "add_message_definition")({
-            "name": "X", "match": {"type": "always"}, "fields": [],
-        })
-        rm = get_tool(mcp_server, "remove_message_definition")
-        out = rm("X")
-        assert out["ok"] is True
-        assert out["message_count"] == 0
-
-    def test_reorder_message(self, mcp_server):
-        get_tool(mcp_server, "create_protocol_definition")(name="P")
-        add = get_tool(mcp_server, "add_message_definition")
-        for n in ("A", "B", "C"):
-            add({"name": n, "match": {"type": "always"}, "fields": []})
-        reorder = get_tool(mcp_server, "reorder_message_definition")
-        out = reorder("C", 0)
-        assert out["ok"] is True
-        d = get_tool(mcp_server, "get_protocol_definition")()
-        assert [m["name"] for m in d["messages"]] == ["C", "A", "B"]
-
-    def test_save_json_round_trip(self, mcp_server, tmp_path):
-        get_tool(mcp_server, "create_protocol_definition")(name="P", endianness="little")
-        get_tool(mcp_server, "add_message_definition")({
-            "name": "M", "match": {"type": "magic", "offset": 0, "value": [0x01]},
-            "fields": [{"name": "a", "type": "uint8"}],
-        })
-        save = get_tool(mcp_server, "save_protocol_to_file")
-        path = tmp_path / "proto.json"
-        out = save(str(path))
-        assert out["ok"] is True
-        # Re-load via the existing set_protocol_file path → must parse cleanly
-        set_file = get_tool(mcp_server, "set_protocol_file")
-        out2 = set_file(str(path))
-        assert out2["ok"] is True
-        assert out2["protocol_name"] == "P"
-
-    def test_save_yaml_round_trip(self, mcp_server, tmp_path):
-        get_tool(mcp_server, "create_protocol_definition")(name="P")
-        get_tool(mcp_server, "add_message_definition")({
-            "name": "M", "match": {"type": "always"},
-            "fields": [{"name": "a", "type": "uint16"}],
-        })
-        save = get_tool(mcp_server, "save_protocol_to_file")
-        path = tmp_path / "proto.yaml"
-        out = save(str(path))
-        assert out["ok"] is True
-        set_file = get_tool(mcp_server, "set_protocol_file")
-        out2 = set_file(str(path))
-        assert out2["ok"] is True
-
-    def test_save_unsupported_extension(self, mcp_server, tmp_path):
-        get_tool(mcp_server, "create_protocol_definition")(name="P")
-        save = get_tool(mcp_server, "save_protocol_to_file")
-        out = save(str(tmp_path / "proto.txt"))
-        assert "error" in out
-
-    def test_mutations_take_effect_in_decoder(self, mcp_server, api):
-        """After editing the protocol, the decoder used by ``decode_frames``
-        must pick up the new definition (i.e., the decoder is rebuilt)."""
-        # Build a simple protocol that recognises a 0xAB magic
-        get_tool(mcp_server, "create_protocol_definition")(name="P")
-        get_tool(mcp_server, "add_message_definition")({
-            "name": "FirstMsg",
-            "match": {"type": "magic", "offset": 0, "value": [0xAB]},
-            "fields": [{"name": "type", "type": "uint8"}],
-        })
-        # Add a frame and decode it
-        session = api.session_registry.create("127.0.0.1", 1, "10.0.0.1", 2)
-        session.add_frame(Frame.create(session.id, Direction.CLIENT_TO_SERVER, b"\xab", 0))
-
-        decode = get_tool(mcp_server, "decode_frames")
-        msgs = decode(session.id)
-        assert msgs[0]["message_type"] == "FirstMsg"
-
-        # Remove the message — decoder must now report unknown
-        get_tool(mcp_server, "remove_message_definition")("FirstMsg")
-        msgs2 = decode(session.id)
-        assert msgs2[0]["message_type"] != "FirstMsg"
+    def test_mutation_tools_are_not_registered(self, mcp_server):
+        """All write paths for protocol definitions are gone from MCP."""
+        removed = [
+            "set_protocol_file", "set_protocol_dict",
+            "create_protocol_definition",
+            "add_message_definition", "update_message_definition",
+            "remove_message_definition", "reorder_message_definition",
+            "add_field_to_message", "update_field_in_message",
+            "remove_field_from_message",
+            "save_protocol_to_file",
+        ]
+        for name in removed:
+            assert mcp_server._tool_manager.get_tool(name) is None, (
+                f"Expected tool {name!r} to be removed from MCP"
+            )
 
 
 # ---------------------------------------------------------------------------

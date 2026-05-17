@@ -17,10 +17,11 @@ The pattern below is the network equivalent of Burp Suite's Repeater
 
 ## Prerequisites
 
-- A protocol definition loaded (`set_protocol_file` or built via
-  `create_protocol_definition`). Without it, you can probe by raw bytes
-  via `tamper_modify_and_forward`, but `tamper_modify_field_and_forward`
-  is much less error-prone.
+- A protocol definition loaded by the operator (via the TUI or by
+  pointing a `ForwarderConfig.protocol_definition_path` at a YAML
+  file).  The MCP server has no write path for definitions; without
+  one loaded, you can probe by raw bytes via `tamper_modify_and_forward`,
+  but `tamper_modify_field_and_forward` is much less error-prone.
 - A live forwarder with at least one active session, so you can
   intercept the next message of interest.
 
@@ -136,16 +137,28 @@ connection drop also confirms the field matters; a silent accept means
 your probe didn't tickle the field — pick a more aggressive probe and
 repeat.
 
-## 6. Record the confirmation in the definition
+## 6. Record the confirmation
 
-A confirmed hypothesis goes from "looks like" to **documented**. Edit
-the protocol definition to reflect what you learned:
+A confirmed hypothesis goes from "looks like" to **documented**.  Two
+places to record it:
 
-- Rename a guess like `unknown_3` to its real meaning
-  (`payload_len`, `transaction_id`, …) with `update_field_in_message`.
-- If the probe revealed a sub-message type, split the message
-  (`add_message_definition` + `remove_message_definition`).
-- Save with `save_protocol_to_file`.
+- **Knowledge base** (preferred, persistent across sessions):
+  ```text
+  add_finding(title="payload_len at offset 2",
+              status="confirmed", confidence="high",
+              message_name="LoginRequest", field_name="payload_len",
+              evidence_frame_ids=["...", "..."],
+              description="Probed +1: server truncated. Probed -1: parse error.")
+  ```
+  If you had a prior hypothesis, update it instead of creating a new one:
+  ```text
+  update_finding(finding_id="...", status="confirmed", confidence="high")
+  ```
+- **Protocol definition YAML**: rename a guess like `unknown_3` to its
+  real meaning (`payload_len`, `transaction_id`, …) and hand the
+  updated YAML to the operator in chat — they save and reload it.
+  ProtoPoke does not expose any MCP tool to mutate the loaded
+  definition.
 
 ## 7. Clean up
 

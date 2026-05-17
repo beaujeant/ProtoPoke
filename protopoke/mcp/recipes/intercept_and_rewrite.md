@@ -91,7 +91,7 @@ tamper_drop(unit_id=<unit>)
 # Raw byte edit (use when you don't have a protocol definition):
 tamper_modify_and_forward(unit_id=<unit>, new_bytes_hex="deadbeef")
 
-# Protocol-aware field edit (requires set_protocol_file first):
+# Protocol-aware field edit (requires the operator to have loaded a protocol definition):
 tamper_modify_field_and_forward(
     unit_id=<unit>,
     field_edits={"username": "admin", "msg_type": 2},
