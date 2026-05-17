@@ -84,6 +84,7 @@ from .protocol.base import ProtocolDecoder, ProtocolEncoder, PassthroughDecoder
 from .fuzzing.models import FuzzCampaign, FuzzResult
 from .fuzzing.engine import FuzzerEngine
 from .fuzzing.mutators.base import FrameMutator
+from .knowledge import KnowledgeBase
 
 logger = logging.getLogger(__name__)
 
@@ -104,8 +105,14 @@ class ProtoPokeAPI:
         forwarders:       list[ForwarderConfig],
         rules_engine:      Optional[RulesEngine]     = None,
         intercept_filter:  Optional[InterceptFilter] = None,
+        knowledge:         Optional[KnowledgeBase]   = None,
     ) -> None:
         self.forwarders = forwarders
+
+        # Cross-session knowledge base — findings + notes that the AI (over
+        # MCP) and the user (in the TUI) can read and write.  Persisted as
+        # part of the .pp project file.
+        self.knowledge: KnowledgeBase = knowledge or KnowledgeBase()
 
         # Shared infrastructure
         self.event_bus        = EventBus()
@@ -175,6 +182,20 @@ class ProtoPokeAPI:
             if fwd.enabled:
                 return fwd
         return self.forwarders[0] if self.forwarders else ForwarderConfig()
+
+    def resolve_forwarder_name(self, forwarder_id: Optional[str]) -> Optional[str]:
+        """Look up the current display name for a forwarder by its stable ID.
+
+        Returns ``None`` if ``forwarder_id`` is None or no forwarder with
+        that ID exists.  Used by knowledge-base responses so renames remain
+        transparent — the ID survives, the displayed name reflects today.
+        """
+        if not forwarder_id:
+            return None
+        for fwd in self.forwarders:
+            if fwd.id == forwarder_id:
+                return fwd.name
+        return None
 
     def _engine_for_session(self, session_id: str) -> "Optional[ProxyEngine]":
         """Return the engine that owns *session_id*, or None."""

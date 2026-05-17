@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -83,6 +84,11 @@ class ForwarderConfig:
     """
 
     # Identity
+    # ``id`` is a stable UUID assigned at creation that survives renames and
+    # config edits.  It is used by cross-session artefacts (e.g. knowledge-base
+    # findings scoped to a forwarder) so that links keep resolving even when
+    # the user later renames the forwarder in the UI.
+    id:      str  = field(default_factory=lambda: uuid.uuid4().hex)
     name:    str  = "Forwarder"
     enabled: bool = True
 

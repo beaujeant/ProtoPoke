@@ -140,6 +140,7 @@ class ProtoPoke(App):
             forwarders=self._project.forwarders,
             rules_engine=self._project.rules_engine,
             intercept_filter=self._project.intercept_filter,
+            knowledge=self._project.knowledge,
         )
 
         # Track which forwarder names are currently running
@@ -841,6 +842,7 @@ class ProtoPoke(App):
             forwarders=self._project.forwarders,
             rules_engine=self._project.rules_engine,
             intercept_filter=self._project.intercept_filter,
+            knowledge=self._project.knowledge,
         )
         self._register_event_handlers()
         self._running_forwarders.clear()
@@ -853,6 +855,7 @@ class ProtoPoke(App):
             forwarders=state.forwarders,
             rules_engine=state.rules_engine,
             intercept_filter=state.intercept_filter,
+            knowledge=state.knowledge,
         )
         self._register_event_handlers()
         self._running_forwarders.clear()
