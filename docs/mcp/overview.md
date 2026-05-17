@@ -9,13 +9,14 @@ ProtoPoke exposes all proxy operations as [Model Context Protocol](https://model
 | Capability | Example prompts |
 |-----------|----------------|
 | **Session inspection** | "List all sessions", "Show me the frames from session X", "Decode the frames and show field values" |
-| **Protocol reversing** | "Cluster the frames by packet type", "Find the length field", "Decode bytes 2–5 as float32_le and show me when it changes", "Add a `position` message to the active protocol with these fields and save it as `mv.yaml`" |
+| **Protocol reversing** | "Cluster the frames by packet type", "Find the length field", "Decode bytes 2–5 as float32_le and show me when it changes", "Draft a `mv.yaml` protocol definition for these frames and hand me the YAML so I can load it" |
 | **Live tamper** | "Enable tamper mode", "Show pending frames", "Forward the first one but change the username field to admin" |
 | **Rules** | "Add an intercept rule for client→server frames starting with 0x01", "Clear all replace rules" |
 | **Search** | "Find all frames containing the bytes FF FF 00" |
 | **Replay** | "Replay session X", "Replay but change the password field to hunter2 in every LoginRequest" |
 | **Forge** | "Send hex 01 02 03 to 10.0.0.1:9090", "Create a forge session and send a login packet" |
-| **Protocol** | "Load the protocol definition from myproto.yaml", "Decode frame Y and explain each field" |
+| **Protocol** | "Show me the active protocol definition", "Decode frame Y and explain each field" (loading and saving definitions is operator-only — the AI proposes YAML in chat) |
+| **Knowledge** | "What did I learn last session about LoginRequest?", "Record that bytes 4–5 of LoginRequest are a CRC16 — confirmed by tampering tests on frames F1, F2", "Add a note that the server seems to echo the sequence number" |
 | **Fuzzing** | "Start a fuzzing campaign with bit_flip and known_bad mutators", "Show results with anomalies only" |
 | **Forwarders** | "Start the game-server forwarder", "Switch the active framer to length-prefix with a 4-byte header", "Load the auth.yaml protocol on the login forwarder without restarting" |
 | **TLS** | "Give me the CA certificate" |
@@ -48,13 +49,24 @@ Available recipes:
 
 - `protopoke://recipes/reverse-engineer-unknown-protocol` — capture,
   cluster, and analyse traffic from an unknown binary protocol, then
-  iteratively build a protocol definition that decodes it.
+  iteratively build a protocol definition that decodes it.  Includes
+  the operator hand-off flow (the AI emits YAML in chat; the user
+  loads it) and how to capture progress in the knowledge base.
 - `protopoke://recipes/replay-with-mutation` — turn a captured session
   into a reusable playbook, parameterise it with variables, and run a
   fuzz campaign with mutators.
 - `protopoke://recipes/intercept-and-rewrite` — choose between global
   replace rules, intercept rules, and script rules, and wire each one
   up end to end.
+
+## Cross-session memory
+
+Findings and free-form notes persist across AI sessions via the `.pp`
+project file.  Use `add_finding` / `add_note` to record what you
+learn; on session start, `list_findings` / `list_notes` recover the
+previous session's reasoning.  See the
+[Knowledge Base guide](/mcp/knowledge) for the schema and worked
+example.
 
 An index of every recipe is served at `protopoke://recipes`. Clients
 without resource support can use the `list_workflow_recipes` /

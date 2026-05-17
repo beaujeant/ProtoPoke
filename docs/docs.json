@@ -24,7 +24,8 @@
           "ui/config",
           "ui/traffic",
           "ui/intercept",
-          "ui/forge"
+          "ui/forge",
+          "ui/notes"
         ]
       },
       {
@@ -59,7 +60,8 @@
           "mcp/overview",
           "mcp/configuration",
           "mcp/tools",
-          "mcp/analysis"
+          "mcp/analysis",
+          "mcp/knowledge"
         ]
       },
       {

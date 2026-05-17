@@ -20,10 +20,15 @@ analyze_byte_ranges + find_length_fields   →   structure of one bucket
    ↓
 decode_field (with deduplicate)   →   verify each field's interpretation
    ↓
-add_message_definition + add_field_to_message   →   write it back
+add_finding (record what you confirmed)   →   knowledge base
    ↓
-save_protocol_to_file   →   persistent .yaml / .json
+Compose YAML in chat   →   operator saves & loads it
 ```
+
+ProtoPoke deliberately does **not** expose any MCP tool that writes a
+protocol definition.  The AI's job is to gather evidence, record what
+it learns in the knowledge base, and — when the structure is stable
+— hand the operator a YAML definition to load.
 
 ## 1. Discover packet types
 
@@ -199,46 +204,61 @@ Walks the session in capture order. For each source frame and width
 source frames echoed are reported — the classic transaction-ID /
 session-token pattern.
 
-## 6. Annotate the protocol
+## 6. Record findings in the knowledge base
 
-Once you've figured out the structure, persist it by editing the active
-`ProtocolDefinition` directly. The new fields take effect immediately —
-`decode_frames`, the TUI's parsed-tree view, and
-`tamper_modify_field_and_forward` all use the updated definition on the next
-call.
-
-```
-create_protocol_definition(name="MyGame", endianness="little")
-
-add_message_definition({
-  "name": "PositionUpdate",
-  "match": {"type": "magic", "offset": 0, "value": [0x6d, 0x76]},
-  "direction": "client_to_server",
-  "fields": [
-    {"name": "opcode", "type": "bytes", "length": 2},
-    {"name": "x",      "type": "float32"},
-    {"name": "y",      "type": "float32"},
-    {"name": "z",      "type": "float32"}
-  ]
-})
-
-# Add or replace individual fields incrementally:
-add_field_to_message("PositionUpdate", {"name": "yaw", "type": "float32"})
-update_field_in_message("PositionUpdate", "opcode",
-  {"name": "opcode", "type": "uint16"})
-```
-
-Then commit to disk:
+Every confirmed (or ruled-out) hypothesis goes into the knowledge
+base so the next AI session does not have to re-derive it.  Findings
+are scoped (protocol / message / field / byte range / forwarder) and
+carry a status (`hypothesis` / `confirmed` / `ruled_out` /
+`needs_review`) and confidence (`low` / `medium` / `high`).
 
 ```
-save_protocol_to_file("./protocols/mygame.yaml")
+add_finding(
+    title="bytes 0-1 of PositionUpdate are the magic 'mv'",
+    status="confirmed", confidence="high",
+    message_name="PositionUpdate",
+    byte_offset=0, byte_length=2,
+    evidence_frame_ids=[...],
+    tags=["magic", "opcode"],
+)
 ```
 
-The resulting file is a regular YAML/JSON protocol definition — load it next
-session with `set_protocol_file` (or via the Config tab in the TUI).
+See the [Knowledge Base guide](/mcp/knowledge) for the full schema.
+
+## 7. Hand the operator a protocol definition
+
+When the structure is stable, compose the YAML in chat and ask the
+operator to save it (e.g. `./protocols/mygame.yaml`) and load it
+(via the Config tab in the TUI, or by pointing a
+`ForwarderConfig.protocol_definition_path` at it).  The MCP server
+has no write path for protocol definitions — keeping that authority
+with the operator means a single review gate before any change to
+how frames are decoded.
+
+```yaml
+protocol:
+  name: "MyGame"
+  endianness: little
+  messages:
+    - name: PositionUpdate
+      direction: client_to_server
+      match: { type: magic, offset: 0, value: [0x6d, 0x76] }
+      fields:
+        - { name: opcode, type: bytes, length: 2 }
+        - { name: x,      type: float32 }
+        - { name: y,      type: float32 }
+        - { name: z,      type: float32 }
+        - { name: yaw,    type: float32 }
+```
+
+Use `get_protocol_definition_schema` for the full spec (field types,
+match strategies, length expressions, bitfields, TLV sequences).
+After the operator loads the YAML, call `get_protocol_definition` to
+confirm the parser accepted it, then call `decode_frames` to verify
+each frame decodes cleanly.
 
 ## Reference
 
 - All analysis tools: [Tool Reference → Analysis](/mcp/tools#analysis)
-- All editing tools: [Tool Reference → Protocol Definition Editing](/mcp/tools#protocol-definition-editing)
+- Knowledge base: [Knowledge Base](/mcp/knowledge)
 - Definition schema: [Protocol Definitions](/reference/protocol-definitions)
