@@ -731,8 +731,8 @@ class ProtoPoke(App):
         if deleted:
             self.query_one("#traffic-tab", TrafficTab).remove_session(session_id)
             #self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(
-                self.api.list_sessions()
-            )
+            #    self.api.list_sessions()
+            #)
         else:
             logger.warning("Session not found: %s", session_id[:8])
 
