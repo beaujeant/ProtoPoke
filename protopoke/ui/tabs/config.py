@@ -182,7 +182,7 @@ class ConfigTab(Widget):
             with Horizontal(classes="cfg-buttons"):
                 yield Button("+ Add", variant="success", id="btn-cfg-add")
                 yield Button("✎ Edit", variant="primary", id="btn-cfg-edit")
-                yield Button("✕ Delete", variant="error", id="btn-cfg-remove")
+                yield Button("✖ Remove", variant="error", id="btn-cfg-remove")
                 yield Button("⏻ On/Off", id="btn-cfg-toggle")
                 yield Static("", classes="cfg-spacer")
                 yield Label("Log level:")

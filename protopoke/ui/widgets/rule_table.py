@@ -96,7 +96,7 @@ class RuleTable(Widget, Generic[R]):
                 if self._on_edit:
                     yield Button("✎ Edit", variant="primary", id="btn-edit", flat=True)
                 if self._on_toggle:
-                    yield Button("⏻ Toggle", id="btn-toggle", flat=True)
+                    yield Button("⏻ On/Off", id="btn-toggle", flat=True)
                 if self._on_reset:
                     yield Button("↺ Reset Script", id="btn-reset", flat=True)
 

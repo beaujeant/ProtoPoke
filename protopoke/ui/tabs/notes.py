@@ -123,9 +123,9 @@ class NotesTab(Widget):
 
     def compose(self) -> ComposeResult:
         with Horizontal(classes="toolbar"):
-            yield Button("+ New",  id="btn-new",    variant="primary", flat=True)
-            yield Button("Edit",   id="btn-edit",   flat=True)
-            yield Button("Delete", id="btn-delete", variant="error",   flat=True)
+            yield Button("+ New",    id="btn-new",    variant="success", flat=True)
+            yield Button("✎ Edit",   id="btn-edit",   variant="primary", flat=True)
+            yield Button("✖ Delete", id="btn-delete", variant="error",   flat=True)
             yield Input(placeholder="filter…", id="filter-input")
             yield Static("", classes="toolbar-spacer")
             yield SegmentedControl(

@@ -171,7 +171,7 @@ class TrafficTab(Widget):
         with Vertical(id="sessions-pane"):
             with Horizontal(classes="toolbar"):
                 yield Static("  Sessions")
-                yield Button("+ Create",    id="btn-create-session",    variant="success", flat=True)
+                yield Button("+ New",       id="btn-create-session",    variant="success", flat=True)
                 yield Button("✖ Terminate", id="btn-terminate-session", variant="warning", flat=True)
                 yield Button("✖ Remove",    id="btn-delete-session",    variant="error", flat=True)
             yield DataTable(id="sessions-table", cursor_type="row")
