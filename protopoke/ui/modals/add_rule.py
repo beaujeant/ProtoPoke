@@ -57,7 +57,7 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
     AddReplaceRuleModal > Vertical {
         width: 80;
         height: auto;
-        max-height: 90%;
+        max-height: 95%;
         border: thick $primary;
         padding: 1 2;
         background: $surface;
@@ -242,15 +242,42 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
         rule_type = self._existing.rule_type if self._existing else "binary"
         self._show_type_fields(rule_type)
 
+    # Last input of each mechanism's section — the field most at risk of being
+    # pushed below the fold when the section is swapped in.
+    _SECTION_ANCHORS = {
+        "binary": "#r-replacement",
+        "regex":  "#r-regex-replacement",
+        "script": "#r-script-path",
+    }
+
     def _show_type_fields(self, rule_type: str) -> None:
         """Show/hide field sections based on the selected rule type."""
         self.query_one("#binary-fields").display = (rule_type == "binary")
         self.query_one("#regex-fields").display  = (rule_type == "regex")
         self.query_one("#script-fields").display = (rule_type == "script")
 
+    def _scroll_section_into_view(self, rule_type: str) -> None:
+        """Scroll so the swapped-in mechanism's last field stays visible.
+
+        On short terminals the new section can extend past the bottom of the
+        scroll viewport; nudge the viewport down just enough to keep it in view.
+        """
+        anchor_id = self._SECTION_ANCHORS.get(rule_type)
+        if anchor_id is None:
+            return
+        scroll = self.query_one("#form-scroll", VerticalScroll)
+        anchor = self.query_one(anchor_id)
+        overflow = anchor.region.bottom - scroll.region.bottom
+        if overflow > 0:
+            scroll.scroll_to(y=scroll.scroll_y + overflow, animate=False)
+
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "r-type" and event.value is not Select.BLANK:
-            self._show_type_fields(str(event.value))
+            rule_type = str(event.value)
+            self._show_type_fields(rule_type)
+            # Defer until the show/hide reflow has settled so region geometry
+            # is accurate when we measure overflow.
+            self.call_after_refresh(self._scroll_section_into_view, rule_type)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-cancel":
