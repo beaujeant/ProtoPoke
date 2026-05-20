@@ -356,30 +356,30 @@ class Playbook:
 
     @classmethod
     def from_portable_dict(cls, d: dict) -> "Playbook":
-        """Reconstruct a playbook from a standalone export dict.
+        """Reconstruct a playbook from a standalone export dict (see
+        :meth:`to_portable_dict`).
 
         Generates a fresh ``id`` and leaves ``source_session_id`` unset, so an
         imported playbook always opens a new connection to its saved
         host/port rather than binding to a session that no longer exists.
 
-        Accepts the legacy export format that contained only ``label`` and
-        ``frames``; any missing connection fields fall back to the same
-        defaults as a hand-created playbook.
+        Raises:
+            ValueError: if *d* is not a ProtoPoke playbook export.
         """
-        pb = cls.create(
-            label=d.get("label", "Imported Playbook"),
-            host=d.get("host", "") or "",
-            port=int(d.get("port") or 0),
-            tls=bool(d.get("tls", False)),
-            transport=d.get("transport") or "tcp",
-            response_window=float(d.get("response_window") or 1.0),
-        )
-        variables = d.get("variables")
-        if isinstance(variables, dict):
-            pb.variables = {str(k): str(v) for k, v in variables.items()}
-        frames = d.get("frames", [])
+        if d.get("format") != cls.PORTABLE_FORMAT:
+            raise ValueError("not a ProtoPoke playbook export")
+        frames = d["frames"]
         if not isinstance(frames, list):
             raise ValueError("'frames' must be a list")
+        pb = cls.create(
+            label=d["label"],
+            host=d["host"],
+            port=d["port"],
+            tls=d["tls"],
+            transport=d["transport"],
+            response_window=d["response_window"],
+        )
+        pb.variables = {str(k): str(v) for k, v in d["variables"].items()}
         for fd in frames:
             pb.frames.append(PlaybookFrame.create(
                 label=fd.get("label", ""),

@@ -55,9 +55,6 @@ connection config and variables are preserved, but the session binding is
 cleared on load so reopened playbooks reconnect to host/port rather than
 refusing to run against a session that no longer exists.
 
-Files exported by older versions (frames only) still import — the missing
-connection fields fall back to the defaults of a hand-created playbook.
-
 ### Reuse a session or start fresh
 
 When you create or edit a playbook you choose its destination:

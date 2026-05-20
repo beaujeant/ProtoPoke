@@ -182,20 +182,13 @@ class TestPlaybookPortable:
     def test_portable_is_json_serialisable(self):
         json.dumps(self._sample().to_portable_dict())
 
-    def test_import_legacy_label_and_frames_only(self):
-        # Files exported before connection config was included.
-        legacy = {
-            "label": "Old export",
-            "frames": [{"label": "f1", "raw_hex": "aa bb", "direction": "client_to_server"}],
-        }
-        pb = Playbook.from_portable_dict(legacy)
-        assert pb.label == "Old export"
-        assert pb.host == ""
-        assert pb.port == 0
-        assert pb.transport == "tcp"
-        assert pb.source_session_id is None
-        assert [f.raw_hex for f in pb.frames] == ["aa bb"]
+    def test_import_rejects_unmarked_file(self):
+        with pytest.raises(ValueError):
+            Playbook.from_portable_dict({
+                "label": "no marker",
+                "frames": [{"label": "f1", "raw_hex": "aa", "direction": "client_to_server"}],
+            })
 
     def test_import_rejects_non_list_frames(self):
         with pytest.raises(ValueError):
-            Playbook.from_portable_dict({"label": "bad", "frames": "nope"})
+            Playbook.from_portable_dict({"format": Playbook.PORTABLE_FORMAT, "frames": "nope"})
