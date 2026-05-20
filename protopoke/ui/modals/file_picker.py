@@ -19,6 +19,9 @@ class FilePickerModal(ModalScreen[str | None]):
     """
 
     DEFAULT_CSS = """
+    FilePickerModal {
+        align: center middle;
+    }
     FilePickerModal > Vertical {
         width: 80;
         height: 30;

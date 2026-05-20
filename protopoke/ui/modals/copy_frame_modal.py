@@ -16,6 +16,9 @@ class CopyFrameModal(ModalScreen[str | None]):
     """
 
     DEFAULT_CSS = """
+    CopyFrameModal {
+        align: center middle;
+    }
     CopyFrameModal > Vertical {
         width: 70;
         height: auto;

@@ -65,7 +65,6 @@ class NotesTab(Widget):
     NotesTab .toolbar SegmentedControl Button.segment {
         height: 100%;
         content-align: center middle;
-        margin: 0;
     }
     NotesTab .toolbar-spacer {
         width: 1fr;
@@ -74,7 +73,7 @@ class NotesTab(Widget):
         width: 30;
         margin-right: 1;
     }
-    NotesTab .toolbar Button {
+    NotesTab .toolbar > Button {
         margin-right: 1;
         padding: 0 0;
     }

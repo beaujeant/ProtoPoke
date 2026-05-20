@@ -56,14 +56,15 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
     }
     AddReplaceRuleModal > Vertical {
         width: 80;
-        height: 90%;
+        height: auto;
+        max-height: 90%;
         border: thick $primary;
         padding: 1 2;
         background: $surface;
     }
     AddReplaceRuleModal #form-scroll {
         height: 1fr;
-        min-height: 3;
+        min-height: 0;
     }
     AddReplaceRuleModal Label {
         margin-top: 1;
@@ -422,6 +423,9 @@ class AddInterceptRuleModal(ModalScreen[InterceptRule | None]):
     """
 
     DEFAULT_CSS = """
+    AddInterceptRuleModal {
+        align: center middle;
+    }
     AddInterceptRuleModal > Vertical {
         width: 72;
         height: auto;

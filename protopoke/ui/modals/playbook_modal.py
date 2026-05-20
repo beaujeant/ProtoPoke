@@ -39,6 +39,9 @@ class PlaybookModal(ModalScreen[PlaybookResult | None]):
     """
 
     DEFAULT_CSS = """
+    PlaybookModal {
+        align: center middle;
+    }
     PlaybookModal > Vertical {
         width: 72;
         height: auto;
@@ -133,7 +136,7 @@ class PlaybookModal(ModalScreen[PlaybookResult | None]):
                 initial_session = self._session_id
 
         title         = "Edit Playbook" if self._edit else "New Playbook"
-        confirm_label = "Save"          if self._edit else "Create"
+        confirm_label = "Save"
         port_display  = str(self._port) if self._edit and self._port else ""
 
         with Vertical():
