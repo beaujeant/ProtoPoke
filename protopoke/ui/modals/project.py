@@ -1,4 +1,4 @@
-"""Project management modals: New, Open, Save As."""
+"""Project management modals: Open, Save As."""
 
 from __future__ import annotations
 
@@ -23,65 +23,6 @@ def _expand_pp(path: str) -> str:
     if p.suffix.lower() != ".pp":
         p = p.with_suffix(".pp")
     return str(p)
-
-
-class NewProjectModal(ModalScreen[str | None]):
-    """
-    Modal dialog to create a new project.
-
-    Dismisses with the project name string, or None if cancelled.
-    """
-
-    DEFAULT_CSS = """
-    NewProjectModal {
-        align: center middle;
-    }
-    NewProjectModal > Vertical {
-        width: 60;
-        height: auto;
-        border: thick $primary;
-        padding: 1 2;
-        background: $surface;
-    }
-    NewProjectModal Label {
-        margin-bottom: 1;
-    }
-    NewProjectModal Input {
-        margin-bottom: 1;
-    }
-    NewProjectModal .buttons {
-        height: 3;
-        margin-top: 1;
-        align: right middle;
-    }
-    NewProjectModal Button {
-        margin-left: 1;
-        padding: 0 0;
-    }
-    """
-
-    def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Label("New Project", classes="modal-title")
-            yield Label("Project name:")
-            yield Input(placeholder="My Capture", id="project-name")
-            with Horizontal(classes="buttons"):
-                yield Button("Cancel", variant="default", id="btn-cancel")
-                yield Button("Create", variant="primary", id="btn-create")
-
-    def on_mount(self) -> None:
-        self.query_one("#project-name", Input).focus()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-create":
-            name = self.query_one("#project-name", Input).value.strip() or "Untitled"
-            self.dismiss(name)
-        else:
-            self.dismiss(None)
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        name = event.value.strip() or "Untitled"
-        self.dismiss(name)
 
 
 class OpenProjectModal(ModalScreen[str | None]):
@@ -162,11 +103,11 @@ class OpenProjectModal(ModalScreen[str | None]):
         self.dismiss(_expand(raw) if raw else None)
 
 
-class SaveAsModal(ModalScreen[str | None]):
+class SaveAsModal(ModalScreen[tuple[str, str] | None]):
     """
-    Modal dialog to choose where to save the project.
+    Modal dialog to name the project and choose where to save it.
 
-    Dismisses with the path string, or None if cancelled.
+    Dismisses with a ``(name, path)`` tuple, or None if cancelled.
     """
 
     DEFAULT_CSS = """
@@ -181,6 +122,9 @@ class SaveAsModal(ModalScreen[str | None]):
         background: $surface;
     }
     SaveAsModal Label {
+        margin-bottom: 1;
+    }
+    SaveAsModal #save-name {
         margin-bottom: 1;
     }
     SaveAsModal .field-row {
@@ -211,13 +155,20 @@ class SaveAsModal(ModalScreen[str | None]):
     }
     """
 
-    def __init__(self, default_path: str = "") -> None:
+    def __init__(self, default_path: str = "", default_name: str = "") -> None:
         super().__init__()
         self._default_path = default_path
+        self._default_name = default_name
 
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label("Save Project As", classes="modal-title")
+            yield Label("Project name:")
+            yield Input(
+                value=self._default_name,
+                placeholder="My Capture",
+                id="save-name",
+            )
             yield Label("Destination path (.pp file):")
             with Horizontal(classes="field-row"):
                 yield Input(
@@ -233,7 +184,12 @@ class SaveAsModal(ModalScreen[str | None]):
                 yield Button("Save", variant="primary", id="btn-save")
 
     def on_mount(self) -> None:
-        self.query_one("#save-path", Input).focus()
+        self.query_one("#save-name", Input).focus()
+
+    def _result(self) -> tuple[str, str] | None:
+        name = self.query_one("#save-name", Input).value.strip() or "Untitled"
+        raw = self.query_one("#save-path", Input).value.strip()
+        return (name, _expand_pp(raw)) if raw else None
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id
@@ -244,11 +200,9 @@ class SaveAsModal(ModalScreen[str | None]):
                     self.query_one("#save-path", Input).value = path
             self.app.push_screen(FilePickerModal(current), _on_pick)
         elif btn_id == "btn-save":
-            raw = self.query_one("#save-path", Input).value.strip()
-            self.dismiss(_expand_pp(raw) if raw else None)
+            self.dismiss(self._result())
         else:
             self.dismiss(None)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        raw = event.value.strip()
-        self.dismiss(_expand_pp(raw) if raw else None)
+        self.dismiss(self._result())

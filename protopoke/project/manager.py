@@ -23,8 +23,8 @@ restore a previous session.
 Usage::
 
     pm = ProjectManager()
-    pm.new("My Capture")
-    pm.forwarders[0].listen_port = 9000
+    pm.name = "My Capture"
+    pm.forwarders.append(ForwarderConfig(listen_port=9000))
     pm.save_as("/tmp/capture.pp")
 
     pm2 = ProjectManager()
@@ -120,22 +120,6 @@ class ProjectManager:
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
-
-    def new(self, name: str = "Untitled") -> None:
-        """Reset to a blank in-memory project."""
-        self.forwarders        = []
-        self.rules_engine      = RulesEngine()
-        self.intercept_filter  = InterceptFilter()
-        self.playbooks         = []
-        self.captured_sessions = []
-        self.frame_filters     = []
-        self.mcp_settings      = MCPSettings()
-        self.knowledge         = KnowledgeBase()
-        self.name              = name
-        self.path              = None
-        self.is_dirty          = False
-        self._created_at       = time.time()
-        self._saved_at         = 0.0
 
     def open(self, path: str | Path) -> ProjectState:
         """

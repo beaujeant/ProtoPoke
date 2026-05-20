@@ -15,15 +15,6 @@ from protopoke.project.manager import ProjectManager, ProjectState
 
 
 class TestProjectManager:
-    def test_new_resets_state(self):
-        pm = ProjectManager()
-        pm.forwarders = [ForwarderConfig(name="Test", listen_port=9999)]
-        pm.new("Fresh")
-        assert pm.forwarders == []
-        assert pm.name == "Fresh"
-        assert pm.path is None
-        assert pm.is_dirty is False
-
     def test_save_as_creates_zip_file(self, tmp_path):
         pm = ProjectManager()
         pm.name = "Test Project"

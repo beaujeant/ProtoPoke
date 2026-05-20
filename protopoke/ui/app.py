@@ -18,7 +18,7 @@ from ..models import Direction
 from ..events.bus import FrameCapturedEvent, SessionClosedEvent, SessionOpenedEvent, SessionUpdatedEvent, UpstreamConnectionFailedEvent
 from ..project.manager import ProjectManager, ProjectState
 from .modals.confirm import ConfirmModal
-from .modals.project import NewProjectModal, OpenProjectModal, SaveAsModal
+from .modals.project import OpenProjectModal, SaveAsModal
 from .tabs.config import ConfigTab
 from .tabs.tamper import TamperTab
 from .tabs.traffic import TrafficTab
@@ -93,7 +93,6 @@ class ProtoPoke(App):
         F5 → Fuzzer tab
         F6 → Notes tab
         F7 → Logs tab
-        ctrl+n → New project
         ctrl+o → Open project
         ctrl+s → Save project
         ctrl+shift+s → Save As
@@ -112,7 +111,6 @@ class ProtoPoke(App):
         Binding("f5",           "switch_tab('notes')",     "Notes",     show=True),
         Binding("f6",           "switch_tab('logs')",      "Logs",      show=True),
         Binding("ctrl+f",       "send_to_forge",           "→Forge",    show=False, priority=True),
-        Binding("ctrl+n",       "new_project",             "New",       show=False, priority=True),
         Binding("ctrl+o",       "open_project",            "Open",      show=False, priority=True),
         Binding("ctrl+s",       "save_project",            "Save",      show=False, priority=True),
         Binding("ctrl+shift+s", "save_project_as",         "Save As",   show=False, priority=True),
@@ -562,27 +560,6 @@ class ProtoPoke(App):
     # Project management actions
     # ------------------------------------------------------------------
 
-    def action_new_project(self) -> None:
-        self.push_screen(NewProjectModal(), self._on_new_project)
-
-    def _on_new_project(self, name: str | None) -> None:
-        if name is None:
-            return
-        self._project.new(name)
-        # Rebuild API with fresh state
-        self._rebuild_api()
-        config_tab = self.query_one("#config-tab", ConfigTab)
-        config_tab.load_forwarders(self._project.forwarders)
-        config_tab.load_mcp_settings(self._project_mcp_settings())
-        traffic_tab = self.query_one("#traffic-tab", TrafficTab)
-        traffic_tab.clear_all()
-        traffic_tab.load_filters([])
-        self.query_one("#forge-tab", ForgeTab).load_playbooks([])
-        self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions([])
-        self.query_one("#notes-tab", NotesTab).rebind_api(self.api)
-        self._update_title()
-        logger.info("New project: %s", name)
-
     def action_open_project(self) -> None:
         self.push_screen(OpenProjectModal(), self._on_open_project)
 
@@ -690,11 +667,12 @@ class ProtoPoke(App):
 
     def action_save_project_as(self) -> None:
         default = str(self._project.path) if self._project.path else ""
-        self.push_screen(SaveAsModal(default), self._on_save_as)
+        self.push_screen(SaveAsModal(default, self._project.name), self._on_save_as)
 
-    def _on_save_as(self, path: str | None) -> None:
-        if not path:
+    def _on_save_as(self, result: tuple[str, str] | None) -> None:
+        if not result:
             return
+        name, path = result
         from pathlib import Path as _Path
         if _Path(path).exists():
             self.push_screen(
@@ -704,14 +682,15 @@ class ProtoPoke(App):
                     confirm_label="Overwrite",
                     confirm_variant="warning",
                 ),
-                lambda confirmed, _p=path: self._do_save_as(_p) if confirmed else None,
+                lambda confirmed, _n=name, _p=path: self._do_save_as(_n, _p) if confirmed else None,
             )
         else:
-            self._do_save_as(path)
+            self._do_save_as(name, path)
 
-    def _do_save_as(self, path: str) -> None:
+    def _do_save_as(self, name: str, path: str) -> None:
         try:
             self._sync_playbooks()
+            self._project.name = name
             self._project.save_as(path)
             self._update_title()
             logger.info("Saved to %s", path)
