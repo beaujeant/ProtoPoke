@@ -43,6 +43,21 @@ logger = logging.getLogger(__name__)
 APIProvider = Union[ProtoPokeAPI, Callable[[], ProtoPokeAPI]]
 
 
+def mcp_available() -> bool:
+    """Return ``True`` if the optional ``mcp`` package can be imported.
+
+    The embedded MCP server depends on ``mcp.server.fastmcp.FastMCP``, which is
+    only present when ProtoPoke is installed with the ``[mcp]`` extra. Callers
+    use this to keep the server disabled (with a warning) instead of crashing
+    when the dependency is missing.
+    """
+    try:
+        from mcp.server.fastmcp import FastMCP  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 @dataclass
 class MCPSettings:
     """User-facing configuration for the embedded MCP server."""
@@ -126,6 +141,15 @@ class MCPHost:
             return
         if self.is_running:
             logger.debug("MCPHost.start: already running")
+            return
+
+        if not mcp_available():
+            logger.warning(
+                "MCP server is enabled but the optional 'mcp' package is not "
+                "installed; keeping MCP disabled. Install it with: "
+                "pip install protopoke[mcp]"
+            )
+            self._settings = replace(self._settings, enabled=False)
             return
 
         try:

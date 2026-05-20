@@ -118,6 +118,36 @@ async def test_start_is_noop_when_disabled(api):
     assert host.is_running is False
 
 
+async def test_start_keeps_disabled_when_mcp_unavailable(api, monkeypatch, caplog):
+    """If the optional 'mcp' package is missing, start() must not raise: it
+    logs a warning and forces the host disabled instead of crashing."""
+    import protopoke.mcp.host as host_mod
+
+    monkeypatch.setattr(host_mod, "mcp_available", lambda: False)
+    host = MCPHost(api, MCPSettings(enabled=True, port=18999))
+
+    with caplog.at_level("WARNING"):
+        await host.start()
+
+    assert host.is_running is False
+    # Settings flipped to disabled so future apply() diffs see the real state.
+    assert host.settings.enabled is False
+    assert any("mcp" in rec.message.lower() for rec in caplog.records)
+
+
+async def test_apply_keeps_disabled_when_mcp_unavailable(api, monkeypatch):
+    """apply() must not raise when enabling MCP without the 'mcp' package."""
+    import protopoke.mcp.host as host_mod
+
+    monkeypatch.setattr(host_mod, "mcp_available", lambda: False)
+    host = MCPHost(api, MCPSettings(enabled=False))
+
+    await host.apply(MCPSettings(enabled=True, port=18998))
+
+    assert host.is_running is False
+    assert host.settings.enabled is False
+
+
 async def test_start_runs_server_task_when_enabled(api, patched_run_async):
     host = MCPHost(api, MCPSettings(enabled=True, port=18765))
     await host.start()

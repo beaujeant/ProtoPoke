@@ -31,6 +31,15 @@ protopoke --mcp --mcp-port 7878          # explicit port
 Once enabled, `http://127.0.0.1:7878/mcp` is the URL to register with an
 MCP client.
 
+## Missing `mcp` dependency
+
+The embedded server needs the optional `mcp` package (the `[mcp]` extra).
+If it is **not** installed, ProtoPoke will not crash: enabling MCP — whether
+via the Config tab switch, the `--mcp` flag, or opening a `.pp` project that
+has it enabled — logs a warning, shows a notification, and keeps the server
+disabled. Install the dependency with `pip install protopoke[mcp]` (or
+`pip install -e ".[mcp]"` from a checkout) and re-enable it.
+
 ## Why a stdio bridge?
 
 The embedded MCP server only speaks `streamable-http` because it lives in
