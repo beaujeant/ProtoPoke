@@ -243,7 +243,7 @@ class ProtoPoke(App):
         session = self.api.get_session(msg.session_id)
         if session:
             self.query_one("#traffic-tab", TrafficTab).add_session(session)
-            self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
+            #self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
             # Clear any upstream error banner — the forwarder can reach the server again
             if session.info.forwarder_name:
                 self.query_one("#config-tab", ConfigTab).notify_forwarder_error(
@@ -254,7 +254,7 @@ class ProtoPoke(App):
         session = self.api.get_session(msg.session_id)
         if session:
             self.query_one("#traffic-tab", TrafficTab).update_session(session)
-            self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
+            #self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
 
     def on__session_updated(self, msg: _SessionUpdated) -> None:
         session = self.api.get_session(msg.session_id)
@@ -611,7 +611,7 @@ class ProtoPoke(App):
                 restored = self.api.load_sessions_from_dicts(state.captured_sessions)
                 for session in restored:
                     traffic_tab.add_session(session)
-                self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
+                #self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(self.api.list_sessions())
             self.query_one("#notes-tab", NotesTab).rebind_api(self.api)
             self._update_title()
             logger.info("Opened project: %s", state.name)
@@ -730,7 +730,7 @@ class ProtoPoke(App):
         deleted = self.api.delete_session(session_id)
         if deleted:
             self.query_one("#traffic-tab", TrafficTab).remove_session(session_id)
-            self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(
+            #self.query_one("#fuzzer-tab", FuzzerTab).refresh_sessions(
                 self.api.list_sessions()
             )
         else:
