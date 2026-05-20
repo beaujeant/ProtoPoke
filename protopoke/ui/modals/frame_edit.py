@@ -64,7 +64,7 @@ class FrameEditModal(ModalScreen[tuple[str, str] | None]):
         self._direction = direction  # "client_to_server" | "server_to_client"
 
     def _dir_label(self) -> str:
-        return "→C→S" if self._direction == "client_to_server" else "←S→C"
+        return "C → S" if self._direction == "client_to_server" else "C ← S"
 
     def compose(self) -> ComposeResult:
         with Vertical():

@@ -108,9 +108,9 @@ class ProtoPoke(App):
         Binding("f2",           "switch_tab('traffic')",   "Traffic",   show=True),
         Binding("f3",           "switch_tab('tamper')",    "Tamper",    show=True),
         Binding("f4",           "switch_tab('forge')",     "Forge",     show=True),
-        Binding("f5",           "switch_tab('fuzzer')",    "Fuzzer",    show=True),
-        Binding("f6",           "switch_tab('notes')",     "Notes",     show=True),
-        Binding("f7",           "switch_tab('logs')",      "Logs",      show=True),
+        #Binding("f5",           "switch_tab('fuzzer')",    "Fuzzer",    show=True),
+        Binding("f5",           "switch_tab('notes')",     "Notes",     show=True),
+        Binding("f6",           "switch_tab('logs')",      "Logs",      show=True),
         Binding("ctrl+f",       "send_to_forge",           "→Forge",    show=False, priority=True),
         Binding("ctrl+n",       "new_project",             "New",       show=False, priority=True),
         Binding("ctrl+o",       "open_project",            "Open",      show=False, priority=True),
@@ -176,8 +176,8 @@ class ProtoPoke(App):
                 yield TamperTab(id="tamper-tab")
             with TabPane("Forge [F4]", id="forge"):
                 yield ForgeTab(id="forge-tab")
-            with TabPane("Fuzzer [F5]", id="fuzzer"):
-                yield FuzzerTab(id="fuzzer-tab")
+            #with TabPane("Fuzzer [F5]", id="fuzzer"):
+            #    yield FuzzerTab(id="fuzzer-tab")
             with TabPane("Notes [F6]", id="notes"):
                 yield NotesTab(self.api, id="notes-tab")
             with TabPane("Logs [F7]", id="logs"):
