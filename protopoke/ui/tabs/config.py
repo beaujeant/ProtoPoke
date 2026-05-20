@@ -113,6 +113,9 @@ class ConfigTab(Widget):
     ConfigTab .cfg-buttons Select {
         width: 20;
     }
+    ConfigTab #label-log {
+        margin-top: 1;
+    }
     ConfigTab .mcp-row {
         height: 3;
         margin: 0 1;
@@ -185,7 +188,7 @@ class ConfigTab(Widget):
                 yield Button("✖ Remove", variant="error", id="btn-cfg-remove")
                 yield Button("⏻ On/Off", id="btn-cfg-toggle")
                 yield Static("", classes="cfg-spacer")
-                yield Label("Log level:")
+                yield Label("Log level:", id="label-log")
                 yield Select(
                     [(lbl, val) for lbl, val in _LOG_LEVEL_OPTIONS],
                     value="INFO",
