@@ -283,6 +283,14 @@ class ProjectManager:
                 self.playbooks = [
                     Playbook.from_dict(p) for p in forge_data.get("playbooks", [])
                 ]
+                # A persisted source_session_id is stale on load — the session
+                # it named belonged to the process that saved the project and
+                # does not exist here.  Clear it so each playbook reconnects to
+                # its saved host/port instead of refusing to run against a dead
+                # session.  The connection config (host/port/tls/transport/…) is
+                # preserved by to_dict(), so the binding is recreated on demand.
+                for pb in self.playbooks:
+                    pb.source_session_id = None
             else:
                 self.playbooks = []
 

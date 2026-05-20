@@ -31,7 +31,32 @@ The playbook list shows each playbook's name, source session, host, port,
 | **+ New** | Create a playbook |
 | **✎ Edit** | Edit name, session/host/port, and response window |
 | **✖ Remove** | Delete the playbook |
-| **Import / Export** | Load/save a playbook to a file |
+| **Import / Export** | Load/save a single playbook to a standalone `.json` file |
+
+### Import / Export
+
+**Export** writes the selected playbook to a standalone `.json` file. It saves
+everything needed to replay the playbook later or on another machine:
+
+- the connection config — **host**, **port**, **TLS** flag, **transport**, and
+  **response window**;
+- the playbook's **variables**; and
+- all **frames** (bytes, label, and direction).
+
+It deliberately does **not** save the bound session, the playbook's internal
+ID, or the run **history**. A session only exists inside the running process
+that created it, so an exported playbook can never reattach to it. On
+**import** the playbook is given a fresh ID and starts **unbound**, so its
+first run opens a new connection to the saved host/port. Edit the imported
+playbook afterwards if you want to point it at a live session instead.
+
+The same rule applies when you save and reopen a **project** (`.pp`): the
+connection config and variables are preserved, but the session binding is
+cleared on load so reopened playbooks reconnect to host/port rather than
+refusing to run against a session that no longer exists.
+
+Files exported by older versions (frames only) still import — the missing
+connection fields fall back to the defaults of a hand-created playbook.
 
 ### Reuse a session or start fresh
 

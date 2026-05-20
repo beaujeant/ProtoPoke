@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from protopoke.forge.models import PlaybookFrame, TrafficEntry, PlaybookRun, Playbook
@@ -128,3 +130,72 @@ class TestPlaybook:
         assert d["transport"] == "udp"
         restored = Playbook.from_dict(d)
         assert restored.transport == "udp"
+
+
+class TestPlaybookPortable:
+    """Standalone export/import (the Forge Import/Export buttons)."""
+
+    def _sample(self) -> Playbook:
+        p = Playbook.create(
+            "Login flow", host="example.com", port=8443, tls=True,
+            transport="tcp", response_window=2.5,
+        )
+        p.source_session_id = "live-session-that-wont-survive"
+        p.variables["TOKEN"] = "deadbeef"
+        p.frames.append(PlaybookFrame.create(label="hello", raw_hex="01 02"))
+        p.frames.append(
+            PlaybookFrame.create(label="reply", raw_hex="ff", direction="server_to_client")
+        )
+        run = PlaybookRun.create("Login flow")
+        run.traffic.append(TrafficEntry.create_sent(b"\x01\x02", "hello"))
+        p.runs.append(run)
+        return p
+
+    def test_portable_round_trip_preserves_replay_config(self):
+        restored = Playbook.from_portable_dict(self._sample().to_portable_dict())
+        assert restored.label == "Login flow"
+        assert restored.host == "example.com"
+        assert restored.port == 8443
+        assert restored.tls is True
+        assert restored.transport == "tcp"
+        assert restored.response_window == 2.5
+        assert restored.variables == {"TOKEN": "deadbeef"}
+        assert [f.raw_hex for f in restored.frames] == ["01 02", "ff"]
+        assert restored.frames[1].direction == "server_to_client"
+
+    def test_portable_drops_session_binding(self):
+        d = self._sample().to_portable_dict()
+        assert "source_session_id" not in d
+        restored = Playbook.from_portable_dict(d)
+        assert restored.source_session_id is None
+
+    def test_portable_drops_runs_history(self):
+        d = self._sample().to_portable_dict()
+        assert "runs" not in d
+        assert Playbook.from_portable_dict(d).runs == []
+
+    def test_portable_generates_fresh_id(self):
+        original = self._sample()
+        restored = Playbook.from_portable_dict(original.to_portable_dict())
+        assert restored.id != original.id
+
+    def test_portable_is_json_serialisable(self):
+        json.dumps(self._sample().to_portable_dict())
+
+    def test_import_legacy_label_and_frames_only(self):
+        # Files exported before connection config was included.
+        legacy = {
+            "label": "Old export",
+            "frames": [{"label": "f1", "raw_hex": "aa bb", "direction": "client_to_server"}],
+        }
+        pb = Playbook.from_portable_dict(legacy)
+        assert pb.label == "Old export"
+        assert pb.host == ""
+        assert pb.port == 0
+        assert pb.transport == "tcp"
+        assert pb.source_session_id is None
+        assert [f.raw_hex for f in pb.frames] == ["aa bb"]
+
+    def test_import_rejects_non_list_frames(self):
+        with pytest.raises(ValueError):
+            Playbook.from_portable_dict({"label": "bad", "frames": "nope"})

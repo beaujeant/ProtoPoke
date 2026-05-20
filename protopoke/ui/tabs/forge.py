@@ -1033,13 +1033,7 @@ class ForgeTab(Widget):
             return
         self._save_frame_editor()
         pb = self._playbooks[self._current_idx]
-        export_data = {
-            "label": pb.label,
-            "frames": [
-                {"label": f.label, "raw_hex": f.raw_hex, "direction": f.direction}
-                for f in pb.frames
-            ],
-        }
+        export_data = pb.to_portable_dict()
 
         from ..modals.project import SaveAsModal as _SaveModal
 
@@ -1051,7 +1045,7 @@ class ForgeTab(Widget):
                     yield Lbl("Export Playbook", classes="modal-title")
                     yield Lbl("Destination path (.json):")
                     yield Inp(value=self._default_path, placeholder="~/playbook_export.json", id="save-path")
-                    yield Sta("Frames and directions will be saved (connection config excluded).", classes="hint")
+                    yield Sta("Frames, variables and connection config will be saved (the bound session is not — imports reconnect fresh).", classes="hint")
                     with H(classes="buttons"):
                         yield Btn("Cancel", variant="default", id="btn-cancel")
                         yield Btn("Export", variant="primary",  id="btn-save")
@@ -1100,23 +1094,20 @@ class ForgeTab(Widget):
                 logger.error("Import failed (read/parse): %s", exc)
                 return
 
-            label       = data.get("label", "Imported Playbook")
-            frames_data = data.get("frames", [])
-            if not isinstance(frames_data, list):
-                logger.error("Import failed: 'frames' must be a list")
+            if not isinstance(data, dict):
+                logger.error("Import failed: file is not a playbook object")
                 return
 
-            pb = Playbook.create(label=label)
-            for fd in frames_data:
-                pb.frames.append(PlaybookFrame.create(
-                    label=fd.get("label", ""),
-                    raw_hex=fd.get("raw_hex", ""),
-                    direction=fd.get("direction", "client_to_server"),
-                ))
+            try:
+                pb = Playbook.from_portable_dict(data)
+            except Exception as exc:
+                logger.error("Import failed: %s", exc)
+                return
+
             self.add_playbook(pb)
             if hasattr(self.app, "mark_dirty"):
                 self.app.mark_dirty()
-            logger.info("Imported '%s' with %d frame(s)", label, len(pb.frames))
+            logger.info("Imported '%s' with %d frame(s)", pb.label, len(pb.frames))
 
         self.app.push_screen(FilePickerModal(None), _on_pick)
 

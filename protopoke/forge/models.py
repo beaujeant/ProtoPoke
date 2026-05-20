@@ -310,3 +310,80 @@ class Playbook:
             frames=[PlaybookFrame.from_dict(f) for f in d.get("frames", [])],
             runs=[PlaybookRun.from_dict(r) for r in d.get("runs", [])],
         )
+
+    # -- Standalone export / import (Forge "Import / Export" buttons) -------
+    #
+    # to_dict()/from_dict() above is the full in-process / project (.pp)
+    # round-trip and intentionally carries the live source_session_id.  The
+    # portable form below is for sharing a single playbook as a standalone
+    # file: it keeps everything needed to *replay* the playbook (connection
+    # config, variables, frames) but drops runtime-only state — the playbook
+    # id, the bound source_session_id, and the runs history.
+
+    PORTABLE_FORMAT  = "protopoke-playbook"
+    PORTABLE_VERSION = 1
+
+    def to_portable_dict(self) -> dict:
+        """Serialise for standalone export (the Forge Import/Export buttons).
+
+        Includes the connection config (host/port/tls/transport/
+        response_window), the variable store, and all frames — everything an
+        operator needs to replay this playbook against the target later or on
+        another machine.
+
+        Deliberately omits runtime-only state: the playbook ``id`` (a fresh
+        one is generated on import so re-importing never collides with an
+        existing playbook), ``source_session_id`` (the bound session will not
+        exist when the file is imported), and the ``runs`` history (past
+        traffic logs are not needed to replay).  On import the playbook
+        reconnects fresh to ``host``/``port``.
+        """
+        return {
+            "format":          self.PORTABLE_FORMAT,
+            "version":         self.PORTABLE_VERSION,
+            "label":           self.label,
+            "host":            self.host,
+            "port":            self.port,
+            "tls":             self.tls,
+            "transport":       self.transport,
+            "response_window": self.response_window,
+            "variables":       dict(self.variables),
+            "frames": [
+                {"label": f.label, "raw_hex": f.raw_hex, "direction": f.direction}
+                for f in self.frames
+            ],
+        }
+
+    @classmethod
+    def from_portable_dict(cls, d: dict) -> "Playbook":
+        """Reconstruct a playbook from a standalone export dict.
+
+        Generates a fresh ``id`` and leaves ``source_session_id`` unset, so an
+        imported playbook always opens a new connection to its saved
+        host/port rather than binding to a session that no longer exists.
+
+        Accepts the legacy export format that contained only ``label`` and
+        ``frames``; any missing connection fields fall back to the same
+        defaults as a hand-created playbook.
+        """
+        pb = cls.create(
+            label=d.get("label", "Imported Playbook"),
+            host=d.get("host", "") or "",
+            port=int(d.get("port") or 0),
+            tls=bool(d.get("tls", False)),
+            transport=d.get("transport") or "tcp",
+            response_window=float(d.get("response_window") or 1.0),
+        )
+        variables = d.get("variables")
+        if isinstance(variables, dict):
+            pb.variables = {str(k): str(v) for k, v in variables.items()}
+        frames = d.get("frames", [])
+        if not isinstance(frames, list):
+            raise ValueError("'frames' must be a list")
+        for fd in frames:
+            pb.frames.append(PlaybookFrame.create(
+                label=fd.get("label", ""),
+                raw_hex=fd.get("raw_hex", ""),
+                direction=fd.get("direction", "client_to_server"),
+            ))
+        return pb
