@@ -408,7 +408,7 @@ tests/
 ├── test_knowledge.py               Finding/Note dataclasses + KnowledgeBase
 ├── test_analysis.py                protopoke/analysis.py helpers (pure unit tests)
 ├── test_segmented_control.py       SegmentedControl widget
-└── test_to_dict_serialisation.py   .to_dict() / .from_dict() round-trips
+└── test_to_dict_serialization.py   .to_dict() / .from_dict() round-trips
 ```
 
 ---

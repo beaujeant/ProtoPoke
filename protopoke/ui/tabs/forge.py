@@ -15,9 +15,9 @@ from rich.text import Text
 from textual.binding import Binding
 
 from ...forge.models import Playbook, PlaybookFrame, PlaybookRun, TrafficEntry
-from ..modals.playbook_modal import PlaybookModal, PlaybookResult
+from ..modals.playbook import PlaybookModal, PlaybookResult
 from ..modals.frame_edit import FrameEditModal
-from ..modals.copy_frame_modal import CopyFrameModal
+from ..modals.copy_frame import CopyFrameModal
 from ..widgets.segmented_control import SegmentedControl
 from ..widgets.help_button import FrameEditorHelpButton
 from ..utils.frame_codec import (

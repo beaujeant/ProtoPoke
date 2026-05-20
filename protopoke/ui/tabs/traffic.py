@@ -16,7 +16,7 @@ from ...filters.frame_filter import HIDE, SHOW, FrameDisplayFilter
 from ...models import Frame, Direction
 from ...core.session import Session
 from ..modals.create_session import CreateSessionModal, CreateSessionResult
-from ..modals.frame_filter_modal import FrameFilterModal
+from ..modals.frame_filter import FrameFilterModal
 from ..widgets.parsed_view import ParsedView
 
 logger = logging.getLogger(__name__)
