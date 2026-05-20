@@ -118,10 +118,14 @@ archive) so you can save and reopen it later.
 
 | Action | Shortcut |
 |--------|----------|
-| New project | `Ctrl+N` |
 | Open project | `Ctrl+O` |
 | Save project | `Ctrl+S` |
 | Save as… | `Ctrl+Shift+S` |
+
+The app starts with a blank `Untitled` project. The **project name** is set (and
+can be edited) in the Save dialog: the first save — `Ctrl+S` on a fresh project,
+or `Ctrl+Shift+S` — opens a dialog with a *Project name* field alongside the
+destination path. Once saved, `Ctrl+S` writes silently back to the same file.
 
 A `.pp` archive contains:
 
