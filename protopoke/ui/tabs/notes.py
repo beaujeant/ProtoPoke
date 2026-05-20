@@ -4,7 +4,7 @@ NotesTab — view and edit the knowledge base (findings + notes).
 Layout:
 
   ┌──────────────────────────────────────────────────────────────────────┐
-  │ [Findings | Notes]   filter: <input>   [+ New]  [Edit]  [Delete]     │  toolbar
+  │ [+ New]  [Edit]  [Delete]   filter: <input>        [Findings | Notes] │  toolbar
   ├──────────────────────────────────────────────────────────────────────┤
   │ table of findings or notes (selectable row)                          │
   ├──────────────────────────────────────────────────────────────────────┤
@@ -60,14 +60,22 @@ class NotesTab(Widget):
         padding: 0 1;
     }
     NotesTab .toolbar SegmentedControl {
-        margin-right: 2;
+        height: 100%;
+    }
+    NotesTab .toolbar SegmentedControl Button.segment {
+        height: 100%;
+        content-align: center middle;
+        margin: 0;
+    }
+    NotesTab .toolbar-spacer {
+        width: 1fr;
     }
     NotesTab .toolbar Input {
         width: 30;
         margin-right: 1;
     }
     NotesTab .toolbar Button {
-        margin-left: 1;
+        margin-right: 1;
         padding: 0 0;
     }
     NotesTab DataTable {
@@ -115,15 +123,17 @@ class NotesTab(Widget):
 
     def compose(self) -> ComposeResult:
         with Horizontal(classes="toolbar"):
+            yield Button("+ New",  id="btn-new",    variant="primary", flat=True)
+            yield Button("Edit",   id="btn-edit",   flat=True)
+            yield Button("Delete", id="btn-delete", variant="error",   flat=True)
+            yield Input(placeholder="filter…", id="filter-input")
+            yield Static("", classes="toolbar-spacer")
             yield SegmentedControl(
                 [("Findings", _VIEW_FINDINGS), ("Notes", _VIEW_NOTES)],
                 value=_VIEW_FINDINGS,
                 id="view-switch",
+                compact=False,
             )
-            yield Input(placeholder="filter…", id="filter-input")
-            yield Button("+ New",  id="btn-new",    variant="primary", flat=True)
-            yield Button("Edit",   id="btn-edit",   flat=True)
-            yield Button("Delete", id="btn-delete", variant="error",   flat=True)
         yield DataTable(id="kb-table", cursor_type="row")
         with Vertical(id="detail-pane"):
             yield Static("Details", classes="pane-header")
