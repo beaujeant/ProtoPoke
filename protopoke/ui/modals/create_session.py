@@ -93,7 +93,7 @@ class CreateSessionModal(ModalScreen["CreateSessionResult | None"]):
 
             with Horizontal(classes="buttons"):
                 yield Button("Cancel", variant="default", id="cs-btn-cancel")
-                yield Button("Create", variant="primary", id="cs-btn-create")
+                yield Button("Save", variant="primary", id="cs-btn-create")
 
     def on_mount(self) -> None:
         self.query_one("#cs-host", Input).focus()

@@ -69,6 +69,9 @@ class FormatHelpModal(ModalScreen[None]):
     """Read-only modal explaining the frame editor format syntax."""
 
     DEFAULT_CSS = """
+    FormatHelpModal {
+        align: center middle;
+    }
     FormatHelpModal > Vertical {
         width: 72;
         height: auto;

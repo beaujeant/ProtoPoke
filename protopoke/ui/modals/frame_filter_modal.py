@@ -22,6 +22,9 @@ class FrameFilterModal(ModalScreen[list[FrameDisplayFilter]]):
     """
 
     DEFAULT_CSS = """
+    FrameFilterModal {
+        align: center middle;
+    }
     FrameFilterModal > Vertical {
         width: 90;
         height: 60vh;

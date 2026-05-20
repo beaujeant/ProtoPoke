@@ -33,6 +33,9 @@ class NewProjectModal(ModalScreen[str | None]):
     """
 
     DEFAULT_CSS = """
+    NewProjectModal {
+        align: center middle;
+    }
     NewProjectModal > Vertical {
         width: 60;
         height: auto;
@@ -89,6 +92,9 @@ class OpenProjectModal(ModalScreen[str | None]):
     """
 
     DEFAULT_CSS = """
+    OpenProjectModal {
+        align: center middle;
+    }
     OpenProjectModal > Vertical {
         width: 70;
         height: auto;
@@ -164,6 +170,9 @@ class SaveAsModal(ModalScreen[str | None]):
     """
 
     DEFAULT_CSS = """
+    SaveAsModal {
+        align: center middle;
+    }
     SaveAsModal > Vertical {
         width: 70;
         height: auto;

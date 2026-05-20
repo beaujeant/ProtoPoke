@@ -50,6 +50,9 @@ class FramerEditModal(ModalScreen):
     """
 
     DEFAULT_CSS = """
+    FramerEditModal {
+        align: center middle;
+    }
     FramerEditModal > Vertical {
         width: 74;
         height: auto;

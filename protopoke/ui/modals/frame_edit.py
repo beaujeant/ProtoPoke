@@ -17,6 +17,9 @@ class FrameEditModal(ModalScreen[tuple[str, str] | None]):
     """
 
     DEFAULT_CSS = """
+    FrameEditModal {
+        align: center middle;
+    }
     FrameEditModal > Vertical {
         width: 52;
         height: auto;

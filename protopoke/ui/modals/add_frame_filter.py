@@ -31,6 +31,9 @@ class AddFrameFilterModal(ModalScreen[FrameDisplayFilter | None]):
     """
 
     DEFAULT_CSS = """
+    AddFrameFilterModal {
+        align: center middle;
+    }
     AddFrameFilterModal > Vertical {
         width: 72;
         height: auto;
