@@ -59,13 +59,13 @@ async def run_bridge(url: str) -> None:
             async with anyio.create_task_group() as tg:
                 async def pump(reader, writer, label: str) -> None:
                     try:
-                        async for msg in reader:
-                            if isinstance(msg, Exception):
+                        async for message in reader:
+                            if isinstance(message, Exception):
                                 logger.warning(
-                                    "%s: dropping malformed message: %s", label, msg
+                                    "%s: dropping malformed message: %s", label, message
                                 )
                                 continue
-                            await writer.send(msg)
+                            await writer.send(message)
                     finally:
                         tg.cancel_scope.cancel()
 

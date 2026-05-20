@@ -103,16 +103,16 @@ class TestForwarderConfigSerialization:
         cfg = ForwarderConfig(
             name="socks",
             forwarder_type=ForwarderType.SOCKS5,
-            socks_auth_user="alice",
-            socks_auth_pass="secret",
+            socks_auth_username="alice",
+            socks_auth_password="secret",
         )
         d = cfg.to_dict()
         # forwarder_type is serialised as a plain string for JSON compatibility.
         assert d["forwarder_type"] == "socks5"
         restored = ForwarderConfig.from_dict(d)
         assert restored.forwarder_type is ForwarderType.SOCKS5
-        assert restored.socks_auth_user == "alice"
-        assert restored.socks_auth_pass == "secret"
+        assert restored.socks_auth_username == "alice"
+        assert restored.socks_auth_password == "secret"
 
     def test_socks5_with_tls_listen_rejected(self):
         with pytest.raises(ValueError):

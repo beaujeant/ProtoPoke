@@ -120,8 +120,8 @@ async def test_socks5_userpass_auth_success():
             forwarder_type=ForwarderType.SOCKS5,
             listen_host="127.0.0.1",
             listen_port=proxy_port,
-            socks_auth_user="alice",
-            socks_auth_pass="s3cret",
+            socks_auth_username="alice",
+            socks_auth_password="s3cret",
         )
         api = ProtoPokeAPI(forwarders=[config])
         await api.start()
@@ -152,8 +152,8 @@ async def test_socks5_userpass_auth_failure():
             forwarder_type=ForwarderType.SOCKS5,
             listen_host="127.0.0.1",
             listen_port=proxy_port,
-            socks_auth_user="alice",
-            socks_auth_pass="s3cret",
+            socks_auth_username="alice",
+            socks_auth_password="s3cret",
         )
         api = ProtoPokeAPI(forwarders=[config])
         await api.start()

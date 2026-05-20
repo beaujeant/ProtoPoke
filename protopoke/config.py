@@ -104,8 +104,8 @@ class ForwarderConfig:
     read_buffer_size: int   = 4096
 
     # SOCKS5 — credentials. None means no-auth method advertised.
-    socks_auth_user: Optional[str] = None
-    socks_auth_pass: Optional[str] = None
+    socks_auth_username: Optional[str] = None
+    socks_auth_password: Optional[str] = None
 
     # Sessions
     max_sessions: int = 0  # 0 = unlimited

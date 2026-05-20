@@ -31,8 +31,8 @@ fwd = ForwarderConfig(
 | `upstream_port` | int | `9090` | Target port (ignored by SOCKS5) |
 | `connect_timeout` | float | `10.0` | Upstream connection timeout |
 | `read_buffer_size` | int | `4096` | Read buffer size |
-| `socks_auth_user` | str | `None` | SOCKS5 username (`None` = no-auth) |
-| `socks_auth_pass` | str | `None` | SOCKS5 password |
+| `socks_auth_username` | str | `None` | SOCKS5 username (`None` = no-auth) |
+| `socks_auth_password` | str | `None` | SOCKS5 password |
 | `max_sessions` | int | `0` | Max concurrent sessions (`0` = unlimited) |
 | `keep_upstream_on_client_disconnect` | bool | `True` | Keep upstream open after the client disconnects (→ `ONLY_SERVER`). TCP/SOCKS5 only |
 | `keep_client_on_server_disconnect` | bool | `True` | Keep the client writable after the server disconnects (→ `ONLY_CLIENT`). TCP/SOCKS5 only |
@@ -64,7 +64,7 @@ udp = ForwarderConfig(name="dns", forwarder_type="udp", listen_port=5353,
 # request, so upstream_host / upstream_port are ignored.
 socks = ForwarderConfig(name="socks", forwarder_type="socks5",
                         listen_port=1080,
-                        socks_auth_user="user", socks_auth_pass="pass")
+                        socks_auth_username="user", socks_auth_password="pass")
 ```
 
 ### TLS / MITM

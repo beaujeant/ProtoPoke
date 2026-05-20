@@ -215,8 +215,8 @@ class TestProjectManager:
                 name="socks1",
                 forwarder_type=ForwarderType.SOCKS5,
                 listen_port=44444,
-                socks_auth_user="user",
-                socks_auth_pass="pass",
+                socks_auth_username="user",
+                socks_auth_password="pass",
             ),
         ]
         pm.save_as(tmp_path / "mixed.pp")
@@ -232,8 +232,8 @@ class TestProjectManager:
         udp = next(f for f in state.forwarders if f.name == "udp1")
         assert udp.upstream_port == 33333
         socks = next(f for f in state.forwarders if f.name == "socks1")
-        assert socks.socks_auth_user == "user"
-        assert socks.socks_auth_pass == "pass"
+        assert socks.socks_auth_username == "user"
+        assert socks.socks_auth_password == "pass"
 
     def test_findings_and_notes_round_trip(self, tmp_path):
         pm = ProjectManager()

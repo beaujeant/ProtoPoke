@@ -442,7 +442,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         ``fields`` is a partial ForwarderConfig dict: any field present on
         :class:`~protopoke.config.ForwarderConfig` (e.g. ``listen_port``,
         ``upstream_host``, ``tls_listen``, ``tamper_enabled``,
-        ``forwarder_type``, ``socks_auth_user``, ``connect_timeout``, …)
+        ``forwarder_type``, ``socks_auth_username``, ``connect_timeout``, …)
         may be set.
 
         Network-level changes (host/port/transport/tls) only take effect

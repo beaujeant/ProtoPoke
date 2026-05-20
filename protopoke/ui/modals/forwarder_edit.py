@@ -290,7 +290,7 @@ class ForwarderEditModal(ModalScreen):
                     with Horizontal(classes="field-row"):
                         yield Label("Username:", classes="field-label")
                         yield Input(
-                            value=fwd.socks_auth_user or "",
+                            value=fwd.socks_auth_username or "",
                             id="fm-socks-user",
                             placeholder="(blank = no auth)",
                             classes="field-input",
@@ -298,7 +298,7 @@ class ForwarderEditModal(ModalScreen):
                     with Horizontal(classes="field-row"):
                         yield Label("Password:", classes="field-label")
                         yield Input(
-                            value=fwd.socks_auth_pass or "",
+                            value=fwd.socks_auth_password or "",
                             id="fm-socks-pass",
                             password=True,
                             classes="field-input",
@@ -591,10 +591,10 @@ class ForwarderEditModal(ModalScreen):
         fwd.tls_key_path = _str("fm-tls-key") or None
 
         # SOCKS5-specific
-        fwd.socks_auth_user = _str("fm-socks-user") or None
-        fwd.socks_auth_pass = _str("fm-socks-pass") or None
-        if fwd.socks_auth_user is None:
-            fwd.socks_auth_pass = None  # password without username is ignored
+        fwd.socks_auth_username = _str("fm-socks-user") or None
+        fwd.socks_auth_password = _str("fm-socks-pass") or None
+        if fwd.socks_auth_username is None:
+            fwd.socks_auth_password = None  # password without username is ignored
 
         # UDP forwarders force the RawFramer (no stateful framer makes sense
         # for datagrams).
