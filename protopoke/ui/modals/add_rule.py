@@ -51,17 +51,19 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
     """
 
     DEFAULT_CSS = """
+    AddReplaceRuleModal {
+        align: center middle;
+    }
     AddReplaceRuleModal > Vertical {
         width: 80;
-        height: auto;
-        max-height: 90vh;
+        height: 90%;
         border: thick $primary;
         padding: 1 2;
         background: $surface;
     }
     AddReplaceRuleModal #form-scroll {
-        height: auto;
-        max-height: 70vh;
+        height: 1fr;
+        min-height: 3;
     }
     AddReplaceRuleModal Label {
         margin-top: 1;

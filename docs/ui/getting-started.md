@@ -16,6 +16,14 @@ protopoke
 
 The interface opens with six tabs. You start on **Config**.
 
+<Note>
+ProtoPoke is laid out for a terminal of at least **960×1040 pixels**. On a
+smaller window some panes, modal fields, and the Cancel/Save buttons may be
+clipped. Modals scroll internally, so you can still reach every field on a
+small window, but resizing the terminal up to this size shows the full layout
+at once.
+</Note>
+
 | Tab | Shortcut | Purpose |
 |-----|----------|---------|
 | **Config** | `F1` | Configure forwarders, log level, MCP server. Start/stop proxies. |

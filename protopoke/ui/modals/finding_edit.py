@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Optional
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Static, Switch, TextArea
 
@@ -49,12 +49,19 @@ class FindingEditModal(ModalScreen[Optional[Finding]]):
     """
 
     DEFAULT_CSS = """
+    FindingEditModal {
+        align: center middle;
+    }
     FindingEditModal > Vertical {
         width: 90;
-        height: auto;
+        height: 90%;
         border: thick $primary;
         padding: 1 2;
         background: $surface;
+    }
+    FindingEditModal #form-scroll {
+        height: 1fr;
+        min-height: 3;
     }
     FindingEditModal Label {
         margin-top: 1;
@@ -106,83 +113,84 @@ class FindingEditModal(ModalScreen[Optional[Finding]]):
         with Vertical():
             yield Label(title, classes="modal-title")
 
-            yield Label("Title:")
-            yield Input(value=ex.title if ex else "",
-                        placeholder="e.g. bytes 4-5 look like a CRC16",
-                        id="title")
+            with VerticalScroll(id="form-scroll"):
+                yield Label("Title:")
+                yield Input(value=ex.title if ex else "",
+                            placeholder="e.g. bytes 4-5 look like a CRC16",
+                            id="title")
 
-            yield Label("Description (markdown):")
-            yield TextArea(ex.description if ex else "", id="desc")
+                yield Label("Description (markdown):")
+                yield TextArea(ex.description if ex else "", id="desc")
 
-            with Horizontal(classes="row"):
-                yield Label("Status:")
-                yield Select(_STATUS_OPTIONS,
-                             value=ex.status if ex else "hypothesis",
-                             id="status", allow_blank=False)
-                yield Label("Confidence:")
-                yield Select(_CONFIDENCE_OPTIONS,
-                             value=ex.confidence if ex else "medium",
-                             id="confidence", allow_blank=False)
-
-            yield Label("Scope")
-            with Horizontal(classes="row"):
-                yield Label("Protocol:")
-                yield Input(value=(ex.protocol_name or "") if ex else "",
-                            placeholder="(optional)", id="protocol-name")
-                yield Label("Message:")
-                yield Input(value=(ex.message_name or "") if ex else "",
-                            placeholder="(optional)", id="message-name")
-
-            with Horizontal(classes="row"):
-                yield Label("Field:")
-                yield Input(value=(ex.field_name or "") if ex else "",
-                            placeholder="(optional)", id="field-name")
-                yield Label("Byte offset:")
-                yield Input(
-                    value=str(ex.byte_offset) if (ex and ex.byte_offset is not None) else "",
-                    placeholder="(opt)", id="byte-offset",
-                )
-                yield Label("Length:")
-                yield Input(
-                    value=str(ex.byte_length) if (ex and ex.byte_length is not None) else "",
-                    placeholder="(opt)", id="byte-length",
-                )
-
-            with Horizontal(classes="row"):
-                yield Label("Direction:")
-                yield Select(
-                    _DIRECTION_OPTIONS,
-                    value=(ex.direction.value if (ex and ex.direction) else ""),
-                    id="direction", allow_blank=False,
-                )
-                yield Label("Forwarder:")
-                yield Select(fwd_options, value=current_fwd,
-                             id="forwarder", allow_blank=False)
-
-            yield Label("Evidence frame IDs (comma-separated):")
-            yield Input(
-                value=", ".join(ex.evidence_frame_ids) if ex else "",
-                id="evidence-ids",
-            )
-
-            yield Label("Counter-evidence frame IDs (comma-separated):")
-            yield Input(
-                value=", ".join(ex.counter_evidence_frame_ids) if ex else "",
-                id="counter-evidence-ids",
-            )
-
-            yield Label("Tags (comma-separated):")
-            yield Input(value=", ".join(ex.tags) if ex else "", id="tags")
-
-            if ex:
                 with Horizontal(classes="row"):
-                    yield Label("Locked:")
-                    yield Switch(value=ex.locked, id="locked")
-                yield Static(
-                    f"Author: {ex.author}.  Saving will lock this entry — "
-                    f"the AI will no longer be able to modify it via MCP.",
-                    classes="hint",
+                    yield Label("Status:")
+                    yield Select(_STATUS_OPTIONS,
+                                 value=ex.status if ex else "hypothesis",
+                                 id="status", allow_blank=False)
+                    yield Label("Confidence:")
+                    yield Select(_CONFIDENCE_OPTIONS,
+                                 value=ex.confidence if ex else "medium",
+                                 id="confidence", allow_blank=False)
+
+                yield Label("Scope")
+                with Horizontal(classes="row"):
+                    yield Label("Protocol:")
+                    yield Input(value=(ex.protocol_name or "") if ex else "",
+                                placeholder="(optional)", id="protocol-name")
+                    yield Label("Message:")
+                    yield Input(value=(ex.message_name or "") if ex else "",
+                                placeholder="(optional)", id="message-name")
+
+                with Horizontal(classes="row"):
+                    yield Label("Field:")
+                    yield Input(value=(ex.field_name or "") if ex else "",
+                                placeholder="(optional)", id="field-name")
+                    yield Label("Byte offset:")
+                    yield Input(
+                        value=str(ex.byte_offset) if (ex and ex.byte_offset is not None) else "",
+                        placeholder="(opt)", id="byte-offset",
+                    )
+                    yield Label("Length:")
+                    yield Input(
+                        value=str(ex.byte_length) if (ex and ex.byte_length is not None) else "",
+                        placeholder="(opt)", id="byte-length",
+                    )
+
+                with Horizontal(classes="row"):
+                    yield Label("Direction:")
+                    yield Select(
+                        _DIRECTION_OPTIONS,
+                        value=(ex.direction.value if (ex and ex.direction) else ""),
+                        id="direction", allow_blank=False,
+                    )
+                    yield Label("Forwarder:")
+                    yield Select(fwd_options, value=current_fwd,
+                                 id="forwarder", allow_blank=False)
+
+                yield Label("Evidence frame IDs (comma-separated):")
+                yield Input(
+                    value=", ".join(ex.evidence_frame_ids) if ex else "",
+                    id="evidence-ids",
                 )
+
+                yield Label("Counter-evidence frame IDs (comma-separated):")
+                yield Input(
+                    value=", ".join(ex.counter_evidence_frame_ids) if ex else "",
+                    id="counter-evidence-ids",
+                )
+
+                yield Label("Tags (comma-separated):")
+                yield Input(value=", ".join(ex.tags) if ex else "", id="tags")
+
+                if ex:
+                    with Horizontal(classes="row"):
+                        yield Label("Locked:")
+                        yield Switch(value=ex.locked, id="locked")
+                    yield Static(
+                        f"Author: {ex.author}.  Saving will lock this entry — "
+                        f"the AI will no longer be able to modify it via MCP.",
+                        classes="hint",
+                    )
 
             yield Static("", id="validation-msg")
 

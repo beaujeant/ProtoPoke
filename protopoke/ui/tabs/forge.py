@@ -1044,11 +1044,37 @@ class ForgeTab(Widget):
                 with V():
                     yield Lbl("Export Playbook", classes="modal-title")
                     yield Lbl("Destination path (.json):")
-                    yield Inp(value=self._default_path, placeholder="~/playbook_export.json", id="save-path")
+                    with H(classes="field-row"):
+                        yield Inp(
+                            value=self._default_path,
+                            placeholder="~/playbook_export.json",
+                            id="save-path",
+                            classes="field-input",
+                        )
+                        yield Btn("Browse", id="btn-browse", classes="btn-browse")
                     yield Sta("Frames, variables and connection config will be saved (the bound session is not — imports reconnect fresh).", classes="hint")
                     with H(classes="buttons"):
                         yield Btn("Cancel", variant="default", id="btn-cancel")
                         yield Btn("Export", variant="primary",  id="btn-save")
+
+            def on_button_pressed(self, event) -> None:
+                from textual.widgets import Input as Inp
+                from ..modals.file_picker import FilePickerModal
+                bid = event.button.id
+                if bid == "btn-browse":
+                    current = self.query_one("#save-path", Inp).value.strip() or None
+                    def _on_pick(path: str | None) -> None:
+                        if path is not None:
+                            self.query_one("#save-path", Inp).value = path
+                    self.app.push_screen(FilePickerModal(current), _on_pick)
+                elif bid == "btn-save":
+                    raw = self.query_one("#save-path", Inp).value.strip()
+                    self.dismiss(raw or None)
+                else:
+                    self.dismiss(None)
+
+            def on_input_submitted(self, event) -> None:
+                self.dismiss(event.value.strip() or None)
 
         def _write(path: str) -> None:
             try:
@@ -1061,9 +1087,10 @@ class ForgeTab(Widget):
         def _on_path(path: str | None) -> None:
             if not path:
                 return
+            import pathlib
+            path = str(pathlib.Path(path).expanduser())
             if not path.endswith(".json"):
                 path += ".json"
-            import pathlib
             if pathlib.Path(path).exists():
                 from ..modals.confirm import ConfirmModal
                 self.app.push_screen(
