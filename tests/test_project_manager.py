@@ -113,6 +113,37 @@ class TestProjectManager:
         assert len(state.playbooks[0].frames) == 1
         assert state.playbooks[0].frames[0].raw_hex == "01 02"
 
+    def test_playbook_connection_config_survives_save_load(self, tmp_path):
+        pm = ProjectManager()
+        playbook = Playbook.create(
+            label="Cfg", host="10.0.0.1", port=8443, tls=True,
+            transport="tcp", response_window=2.5,
+        )
+        playbook.variables["TOKEN"] = "deadbeef"
+        pm.playbooks.append(playbook)
+        pm.save_as(tmp_path / "p.pp")
+
+        state = ProjectManager().open(tmp_path / "p.pp")
+        pb = state.playbooks[0]
+        assert (pb.host, pb.port, pb.tls) == ("10.0.0.1", 8443, True)
+        assert pb.transport == "tcp"
+        assert pb.response_window == 2.5
+        assert pb.variables == {"TOKEN": "deadbeef"}
+
+    def test_stale_source_session_cleared_on_load(self, tmp_path):
+        # A bound session belongs to the saving process and cannot survive a
+        # reload; the playbook must fall back to host/port instead of staying
+        # bound to a dead session (which the UI refuses to run).
+        pm = ProjectManager()
+        playbook = Playbook.create(label="Bound", host="10.0.0.1", port=443)
+        playbook.source_session_id = "session-from-another-life"
+        pm.playbooks.append(playbook)
+        pm.save_as(tmp_path / "p.pp")
+
+        state = ProjectManager().open(tmp_path / "p.pp")
+        assert state.playbooks[0].source_session_id is None
+        assert state.playbooks[0].host == "10.0.0.1"
+
     def test_open_missing_path_raises(self):
         pm = ProjectManager()
         with pytest.raises(FileNotFoundError):
