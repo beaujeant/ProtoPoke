@@ -66,6 +66,12 @@ class AddReplaceRuleModal(ModalScreen[ReplaceRule | None]):
         height: 1fr;
         min-height: 0;
     }
+    /* Without an explicit auto height the swappable mechanism sections
+       collapse to ~1 row inside the 1fr scroll on short terminals, hiding
+       the pattern/replacement fields. */
+    AddReplaceRuleModal #form-scroll > Vertical {
+        height: auto;
+    }
     AddReplaceRuleModal Label {
         margin-top: 1;
     }
