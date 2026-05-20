@@ -140,8 +140,8 @@ async def negotiate(
 async def _userpass_subnegotiate(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
-    expected_user: str,
-    expected_pass: str,
+    expected_username: str,
+    expected_password: str,
 ) -> None:
     """RFC 1929 username/password sub-negotiation."""
     ver_byte = await reader.readexactly(1)
@@ -150,12 +150,12 @@ async def _userpass_subnegotiate(
             f"Unsupported user/pass auth version 0x{ver_byte[0]:02x}",
             Socks5Reply.CONN_NOT_ALLOWED,
         )
-    ulen = (await reader.readexactly(1))[0]
-    uname = (await reader.readexactly(ulen)).decode("utf-8", errors="replace")
-    plen = (await reader.readexactly(1))[0]
-    passwd = (await reader.readexactly(plen)).decode("utf-8", errors="replace")
+    username_length = (await reader.readexactly(1))[0]
+    username = (await reader.readexactly(username_length)).decode("utf-8", errors="replace")
+    password_length = (await reader.readexactly(1))[0]
+    password = (await reader.readexactly(password_length)).decode("utf-8", errors="replace")
 
-    if uname == expected_user and passwd == expected_pass:
+    if username == expected_username and password == expected_password:
         writer.write(bytes([0x01, 0x00]))
         await writer.drain()
         return
@@ -174,8 +174,8 @@ async def _read_address(reader: asyncio.StreamReader, atyp: int) -> str:
         raw = await reader.readexactly(16)
         return str(ipaddress.IPv6Address(raw))
     if atyp == ATYP_DOMAIN:
-        dlen = (await reader.readexactly(1))[0]
-        return (await reader.readexactly(dlen)).decode("ascii", errors="replace")
+        domain_length = (await reader.readexactly(1))[0]
+        return (await reader.readexactly(domain_length)).decode("ascii", errors="replace")
     raise Socks5Error(
         f"Unknown ATYP 0x{atyp:02x}",
         Socks5Reply.ADDRESS_TYPE_NOT_SUPPORTED,

@@ -215,7 +215,7 @@ class ProxyEngine:
             )
             raise
         addrs = [str(s.getsockname()) for s in self._server.sockets]
-        auth_info = " [auth=user/pass]" if self.config.socks_auth_user else " [auth=none]"
+        auth_info = " [auth=user/pass]" if self.config.socks_auth_username else " [auth=none]"
         logger.info(
             "Forwarder '%s' [socks5] listening on %s%s",
             self.forwarder_name, addrs, auth_info,
@@ -381,8 +381,8 @@ class ProxyEngine:
             target_host, target_port = await socks5.negotiate(
                 client_reader,
                 client_writer,
-                self.config.socks_auth_user,
-                self.config.socks_auth_pass,
+                self.config.socks_auth_username,
+                self.config.socks_auth_password,
             )
         except socks5.Socks5Error as exc:
             logger.warning(

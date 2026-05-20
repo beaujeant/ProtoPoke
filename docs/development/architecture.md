@@ -104,7 +104,7 @@ process; the only persistence is the `.pp` project file written by
 | Type | Listener | Session model |
 |------|----------|---------------|
 | `tcp` (default) | `asyncio.start_server` | One `BidirectionalRelay` per accepted connection |
-| `socks5` | `asyncio.start_server` + RFC 1928/1929 handshake | Same as TCP, but the upstream target is discovered per-connection from the SOCKS `CONNECT` request; `socks_auth_user`/`socks_auth_pass` enable username/password auth |
+| `socks5` | `asyncio.start_server` + RFC 1928/1929 handshake | Same as TCP, but the upstream target is discovered per-connection from the SOCKS `CONNECT` request; `socks_auth_username`/`socks_auth_password` enable username/password auth |
 | `udp` | `loop.create_datagram_endpoint` | One `UdpFlow` per `(client_host, client_port)` tuple; no half-open / FIN — flows live until terminated or the forwarder stops |
 
 UDP and SOCKS5 forwarders cannot enable `tls_listen` (DTLS is not supported,

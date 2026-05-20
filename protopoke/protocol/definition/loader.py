@@ -156,18 +156,18 @@ def _parse_protocol(d: dict, source: str) -> ProtocolDefinition:
 
 
 def _parse_message(d: dict, idx: int, source: str) -> MessageDefinition:
-    ctx = f"{source}:messages[{idx}]"
-    name = _req_str(d, "name", ctx)
+    context = f"{source}:messages[{idx}]"
+    name = _req_str(d, "name", context)
 
     description = _opt_str(d, "description", "")
-    direction   = _parse_direction(d.get("direction", "both"), ctx)
-    match       = _parse_match(d.get("match", {"type": "always"}), ctx)
+    direction   = _parse_direction(d.get("direction", "both"), context)
+    match       = _parse_match(d.get("match", {"type": "always"}), context)
 
     raw_fields = d.get("fields", [])
     if not isinstance(raw_fields, list):
-        raise ValueError(f"[{ctx}] 'fields' must be a list")
+        raise ValueError(f"[{context}] 'fields' must be a list")
 
-    fields = [_parse_field(f, i, ctx) for i, f in enumerate(raw_fields)]
+    fields = [_parse_field(f, i, context) for i, f in enumerate(raw_fields)]
 
     return MessageDefinition(
         name=name,
@@ -178,16 +178,16 @@ def _parse_message(d: dict, idx: int, source: str) -> MessageDefinition:
     )
 
 
-def _parse_match(d: Any, ctx: str) -> MatchRule:
+def _parse_match(d: Any, context: str) -> MatchRule:
     if not isinstance(d, dict):
-        raise ValueError(f"[{ctx}] 'match' must be a dict, got {type(d).__name__}")
+        raise ValueError(f"[{context}] 'match' must be a dict, got {type(d).__name__}")
 
     match_type_raw = d.get("type", "always").lower()
     try:
         match_type = MatchType(match_type_raw)
     except ValueError:
         raise ValueError(
-            f"[{ctx}] match.type must be one of "
+            f"[{context}] match.type must be one of "
             f"{[t.value for t in MatchType]}, got {match_type_raw!r}"
         )
 
@@ -195,12 +195,12 @@ def _parse_match(d: Any, ctx: str) -> MatchRule:
         offset = int(d.get("offset", 0))
         raw_val = d.get("value")
         if raw_val is None:
-            raise ValueError(f"[{ctx}] match.value is required for type=magic")
-        value = _parse_magic_value(raw_val, ctx)
+            raise ValueError(f"[{context}] match.value is required for type=magic")
+        value = _parse_magic_value(raw_val, context)
         return MatchRule(type=match_type, offset=offset, value=value)
 
     elif match_type is MatchType.SEQUENCE:
-        direction = _parse_direction(d.get("direction", "both"), ctx)
+        direction = _parse_direction(d.get("direction", "both"), context)
         index     = int(d.get("index", 0))
         return MatchRule(type=match_type, direction=direction, index=index)
 
@@ -208,20 +208,20 @@ def _parse_match(d: Any, ctx: str) -> MatchRule:
         return MatchRule(type=match_type)
 
 
-def _parse_field(d: Any, idx: int, ctx: str) -> FieldDefinition:
+def _parse_field(d: Any, idx: int, context: str) -> FieldDefinition:
     # Fields can be inline dicts like {name: x, type: uint8}
     if not isinstance(d, dict):
-        raise ValueError(f"[{ctx}:fields[{idx}]] field must be a dict")
+        raise ValueError(f"[{context}:fields[{idx}]] field must be a dict")
 
-    fctx = f"{ctx}:fields[{idx}]"
-    name = _req_str(d, "name", fctx)
+    field_context = f"{context}:fields[{idx}]"
+    name = _req_str(d, "name", field_context)
 
     type_raw = d.get("type", "bytes").lower().replace("-", "_")
     try:
         ftype = FieldType(type_raw)
     except ValueError:
         raise ValueError(
-            f"[{fctx}] field type {type_raw!r} is not recognised. "
+            f"[{field_context}] field type {type_raw!r} is not recognised. "
             f"Valid types: {[t.value for t in FieldType]}"
         )
 
@@ -245,11 +245,11 @@ def _parse_field(d: Any, idx: int, ctx: str) -> FieldDefinition:
     enum_map: dict[int, str] = {}
     if isinstance(raw_enum, dict):
         for k, v in raw_enum.items():
-            enum_map[_parse_int_key(k, fctx)] = str(v)
+            enum_map[_parse_int_key(k, field_context)] = str(v)
 
-    tlv     = _parse_tlv_config(d.get("tlv", None), fctx) if ftype is FieldType.TLV_SEQUENCE else None
-    array   = _parse_array_config(d.get("array", None), fctx) if ftype is FieldType.ARRAY else None
-    bitfield = _parse_bitfield_config(d.get("bits", None), fctx) if ftype is FieldType.BITFIELD else None
+    tlv     = _parse_tlv_config(d.get("tlv", None), field_context) if ftype is FieldType.TLV_SEQUENCE else None
+    array   = _parse_array_config(d.get("array", None), field_context) if ftype is FieldType.ARRAY else None
+    bitfield = _parse_bitfield_config(d.get("bits", None), field_context) if ftype is FieldType.BITFIELD else None
 
     return FieldDefinition(
         name=name,
@@ -265,29 +265,29 @@ def _parse_field(d: Any, idx: int, ctx: str) -> FieldDefinition:
     )
 
 
-def _parse_tlv_config(d: Any, ctx: str) -> TLVConfig:
+def _parse_tlv_config(d: Any, context: str) -> TLVConfig:
     if d is None:
         return TLVConfig()
     if not isinstance(d, dict):
-        raise ValueError(f"[{ctx}] tlv must be a dict")
+        raise ValueError(f"[{context}] tlv must be a dict")
 
     type_size   = int(d.get("type_size",   1))
     length_size = int(d.get("length_size", 2))
     endianness  = _opt_str(d, "endianness", "big").lower()
 
     if type_size not in (1, 2, 4):
-        raise ValueError(f"[{ctx}] tlv.type_size must be 1, 2, or 4; got {type_size}")
+        raise ValueError(f"[{context}] tlv.type_size must be 1, 2, or 4; got {type_size}")
     if length_size not in (1, 2, 4):
-        raise ValueError(f"[{ctx}] tlv.length_size must be 1, 2, or 4; got {length_size}")
+        raise ValueError(f"[{context}] tlv.length_size must be 1, 2, or 4; got {length_size}")
 
     raw_tags = d.get("tags", {})
     tags: dict[int, TLVTagDefinition] = {}
     if isinstance(raw_tags, dict):
         for k, v in raw_tags.items():
-            tag_int = _parse_int_key(k, ctx)
+            tag_int = _parse_int_key(k, context)
             if not isinstance(v, dict):
-                raise ValueError(f"[{ctx}] tlv.tags[{k}] must be a dict")
-            tag_name   = _req_str(v, "name", f"{ctx}:tag[{k}]")
+                raise ValueError(f"[{context}] tlv.tags[{k}] must be a dict")
+            tag_name   = _req_str(v, "name", f"{context}:tag[{k}]")
             vtype_raw  = v.get("value_type", "bytes").lower()
             try:
                 vtype = FieldType(vtype_raw)
@@ -311,30 +311,30 @@ def _parse_tlv_config(d: Any, ctx: str) -> TLVConfig:
     )
 
 
-def _parse_array_config(d: Any, ctx: str) -> ArrayConfig:
+def _parse_array_config(d: Any, context: str) -> ArrayConfig:
     if d is None:
-        raise ValueError(f"[{ctx}] array field type requires an 'array' config dict")
+        raise ValueError(f"[{context}] array field type requires an 'array' config dict")
     if not isinstance(d, dict):
-        raise ValueError(f"[{ctx}] array must be a dict")
+        raise ValueError(f"[{context}] array must be a dict")
 
     raw_count = d.get("count")
     if raw_count is None:
-        raise ValueError(f"[{ctx}] array.count is required")
+        raise ValueError(f"[{context}] array.count is required")
     count = str(raw_count)
 
     raw_item = d.get("item", [])
     if not isinstance(raw_item, list):
-        raise ValueError(f"[{ctx}] array.item must be a list of field defs")
-    item = [_parse_field(f, i, f"{ctx}:array.item") for i, f in enumerate(raw_item)]
+        raise ValueError(f"[{context}] array.item must be a list of field defs")
+    item = [_parse_field(f, i, f"{context}:array.item") for i, f in enumerate(raw_item)]
 
     return ArrayConfig(count=count, item=item)
 
 
-def _parse_bitfield_config(d: Any, ctx: str) -> BitfieldConfig:
+def _parse_bitfield_config(d: Any, context: str) -> BitfieldConfig:
     if d is None:
         return BitfieldConfig()
     if not isinstance(d, dict):
-        raise ValueError(f"[{ctx}] bits must be a dict of bit-index → name")
+        raise ValueError(f"[{context}] bits must be a dict of bit-index → name")
     bits: dict[int, str] = {}
     for k, v in d.items():
         bits[int(k)] = str(v)
@@ -345,10 +345,10 @@ def _parse_bitfield_config(d: Any, ctx: str) -> BitfieldConfig:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _req_str(d: dict, key: str, ctx: str) -> str:
+def _req_str(d: dict, key: str, context: str) -> str:
     val = d.get(key)
     if val is None:
-        raise ValueError(f"[{ctx}] required key {key!r} is missing")
+        raise ValueError(f"[{context}] required key {key!r} is missing")
     return str(val)
 
 
@@ -357,7 +357,7 @@ def _opt_str(d: dict, key: str, default: str) -> str:
     return str(val) if val is not None else default
 
 
-def _parse_direction(raw: Any, ctx: str) -> DirectionFilter:
+def _parse_direction(raw: Any, context: str) -> DirectionFilter:
     if raw is None:
         return DirectionFilter.BOTH
     val = str(raw).lower().replace("-", "_")
@@ -370,42 +370,42 @@ def _parse_direction(raw: Any, ctx: str) -> DirectionFilter:
         if val in ("s2c", "server"):
             return DirectionFilter.SERVER_TO_CLIENT
         raise ValueError(
-            f"[{ctx}] direction must be 'both', 'client_to_server', or "
+            f"[{context}] direction must be 'both', 'client_to_server', or "
             f"'server_to_client'; got {raw!r}"
         )
 
 
-def _parse_magic_value(raw: Any, ctx: str) -> list[int]:
+def _parse_magic_value(raw: Any, context: str) -> list[int]:
     """Convert the many accepted magic-value notations into list[int]."""
     if isinstance(raw, int):
         return [raw]
     if isinstance(raw, list):
-        return [_parse_single_byte(v, ctx) for v in raw]
+        return [_parse_single_byte(v, context) for v in raw]
     if isinstance(raw, str):
         parts = raw.split()
-        return [_parse_single_byte(p, ctx) for p in parts]
-    raise ValueError(f"[{ctx}] match.value must be an int, list, or hex string; got {type(raw).__name__}")
+        return [_parse_single_byte(p, context) for p in parts]
+    raise ValueError(f"[{context}] match.value must be an int, list, or hex string; got {type(raw).__name__}")
 
 
-def _parse_single_byte(v: Any, ctx: str) -> int:
+def _parse_single_byte(v: Any, context: str) -> int:
     if isinstance(v, int):
         b = v
     elif isinstance(v, str):
         try:
             b = int(v, 0)   # handles "0x01", "1", "0b1", etc.
         except ValueError:
-            raise ValueError(f"[{ctx}] cannot parse byte value {v!r}")
+            raise ValueError(f"[{context}] cannot parse byte value {v!r}")
     else:
-        raise ValueError(f"[{ctx}] byte value must be int or str, got {type(v).__name__}")
+        raise ValueError(f"[{context}] byte value must be int or str, got {type(v).__name__}")
     if not 0 <= b <= 255:
-        raise ValueError(f"[{ctx}] byte value {b} is out of range 0-255")
+        raise ValueError(f"[{context}] byte value {b} is out of range 0-255")
     return b
 
 
-def _parse_int_key(k: Any, ctx: str) -> int:
+def _parse_int_key(k: Any, context: str) -> int:
     if isinstance(k, int):
         return k
     try:
         return int(str(k), 0)
     except ValueError:
-        raise ValueError(f"[{ctx}] cannot parse integer key {k!r}")
+        raise ValueError(f"[{context}] cannot parse integer key {k!r}")

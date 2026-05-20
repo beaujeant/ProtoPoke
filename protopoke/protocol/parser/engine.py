@@ -12,9 +12,9 @@ Usage:
     from protopoke.protocol.definition import load_protocol_file
     from protopoke.protocol.parser import DefinitionBasedDecoder, DefinitionBasedEncoder
 
-    defn = load_protocol_file("myproto.yaml")
-    decoder = DefinitionBasedDecoder(defn)
-    encoder = DefinitionBasedEncoder(defn)
+    definition = load_protocol_file("myproto.yaml")
+    decoder = DefinitionBasedDecoder(definition)
+    encoder = DefinitionBasedEncoder(definition)
 
     # Decode a captured frame
     msg = decoder.decode(frame)
