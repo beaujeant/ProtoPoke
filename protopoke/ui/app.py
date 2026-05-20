@@ -13,7 +13,7 @@ from textual.widgets import Footer, Header, Switch, TabbedContent, TabPane
 
 from ..api import ProtoPokeAPI
 from ..config import ForwarderConfig
-from ..mcp.host import MCPHost, MCPSettings
+from ..mcp.host import MCPHost, MCPSettings, mcp_available
 from ..models import Direction
 from ..events.bus import FrameCapturedEvent, SessionClosedEvent, SessionOpenedEvent, SessionUpdatedEvent, UpstreamConnectionFailedEvent
 from ..project.manager import ProjectManager, ProjectState
@@ -390,6 +390,20 @@ class ProtoPoke(App):
         """User edited the embedded MCP server settings — apply them."""
         logger.debug("MCPSettingsChanged received: enabled=%s", event.settings.enabled)
         previous_enabled = self._mcp_host.settings.enabled
+
+        if event.settings.enabled and not mcp_available():
+            logger.warning(
+                "MCP server enable requested but the 'mcp' package is not "
+                "installed; keeping MCP disabled."
+            )
+            self.notify(
+                "MCP server unavailable: install with `pip install protopoke[mcp]`.",
+                severity="warning",
+                timeout=8,
+            )
+            self._revert_mcp_switch(False)
+            return
+
         try:
             await self.apply_mcp_settings(event.settings)
         except ImportError as exc:
@@ -585,8 +599,25 @@ class ProtoPoke(App):
                 fwd.enabled = False
             self._rebuild_api_from_state(state)
             # Apply project-persisted MCP settings to the host if they changed.
+            # If the project wants MCP but the optional 'mcp' package is not
+            # installed, force it disabled (with a warning) so opening the
+            # project does not crash.
+            project_mcp = self._project_mcp_settings()
+            if project_mcp.enabled and not mcp_available():
+                logger.warning(
+                    "Project has MCP enabled but the 'mcp' package is not "
+                    "installed; keeping MCP disabled."
+                )
+                self.notify(
+                    "Project requested MCP but it's unavailable: install with "
+                    "`pip install protopoke[mcp]`.",
+                    severity="warning",
+                    timeout=8,
+                )
+                project_mcp = replace(project_mcp, enabled=False)
+                self._project.mcp_settings = project_mcp
             self.run_worker(
-                self._mcp_host.apply(self._project_mcp_settings()),
+                self._mcp_host.apply(project_mcp),
                 name="mcp-apply-on-open",
                 exclusive=False,
                 thread=False,
