@@ -99,7 +99,7 @@ class LogsTab(Widget):
         width: 1fr;
     }
     LogsTab .toolbar Select {
-        width: 22;
+        width: 26;
         height: 3;
     }
     LogsTab DataTable {

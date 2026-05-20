@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Optional
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Static, Switch, TextArea
 
@@ -26,12 +26,19 @@ class NoteEditModal(ModalScreen[Optional[Note]]):
     """
 
     DEFAULT_CSS = """
+    NoteEditModal {
+        align: center middle;
+    }
     NoteEditModal > Vertical {
         width: 80;
-        height: auto;
+        height: 90%;
         border: thick $primary;
         padding: 1 2;
         background: $surface;
+    }
+    NoteEditModal #form-scroll {
+        height: 1fr;
+        min-height: 3;
     }
     NoteEditModal Label {
         margin-top: 1;
@@ -67,24 +74,25 @@ class NoteEditModal(ModalScreen[Optional[Note]]):
         with Vertical():
             yield Label(title, classes="modal-title")
 
-            yield Label("Title:")
-            yield Input(value=ex.title if ex else "", id="title")
+            with VerticalScroll(id="form-scroll"):
+                yield Label("Title:")
+                yield Input(value=ex.title if ex else "", id="title")
 
-            yield Label("Body (markdown):")
-            yield TextArea(ex.body_md if ex else "", id="body")
+                yield Label("Body (markdown):")
+                yield TextArea(ex.body_md if ex else "", id="body")
 
-            yield Label("Tags (comma-separated):")
-            yield Input(value=", ".join(ex.tags) if ex else "", id="tags")
+                yield Label("Tags (comma-separated):")
+                yield Input(value=", ".join(ex.tags) if ex else "", id="tags")
 
-            if ex:
-                with Horizontal():
-                    yield Label("Locked:")
-                    yield Switch(value=ex.locked, id="locked")
-                yield Static(
-                    f"Author: {ex.author}.  Saving will lock this note — "
-                    f"the AI will no longer modify it via MCP.",
-                    classes="hint",
-                )
+                if ex:
+                    with Horizontal():
+                        yield Label("Locked:")
+                        yield Switch(value=ex.locked, id="locked")
+                    yield Static(
+                        f"Author: {ex.author}.  Saving will lock this note — "
+                        f"the AI will no longer modify it via MCP.",
+                        classes="hint",
+                    )
 
             yield Static("", id="validation-msg")
 
