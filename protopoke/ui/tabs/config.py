@@ -141,13 +141,14 @@ class ConfigTab(Widget):
         background: darkslateblue;
     }
     ConfigTab .mcp-row Input {
-        width: 20;
+        width: 15;
         margin-right: 1;
     }
     ConfigTab .mcp-row Select {
-        width: 20;
+        width: 15;
+        margin-right: 1;
     }
-    ConfigTab #mcp-url-btn {
+    ConfigTab #mcp-help-btn {
         min-width: 3;
         width: 3;
         height: 1;
@@ -156,7 +157,7 @@ class ConfigTab(Widget):
         background: transparent;
         color: $text-muted;
     }
-    ConfigTab #mcp-url-btn:hover {
+    ConfigTab #mcp-help-btn:hover {
         background: $panel;
     }
     """
@@ -216,7 +217,7 @@ class ConfigTab(Widget):
                     id="mcp-profile",
                     compact=True,
                 )
-                yield Button("?", id="mcp-url-btn")
+                yield Button("?", id="mcp-help-btn")
 
     def on_mount(self) -> None:
         dt = self.query_one("#cfg-table", DataTable)
@@ -315,7 +316,7 @@ class ConfigTab(Widget):
             self._toggle_selected()
         elif btn_id == "btn-cfg-remove":
             self._remove_selected()
-        elif btn_id == "mcp-url-btn":
+        elif btn_id == "mcp-help-btn":
             self.app.push_screen(MCPHelpModal(self._mcp_settings.url()))
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -486,7 +487,7 @@ class ConfigTab(Widget):
             ("mcp-host",    Input),
             ("mcp-port",    Input),
             ("mcp-profile", Select),
-            ("mcp-url-btn", Button),
+            ("mcp-help-btn", Button),
         ):
             try:
                 self.query_one(f"#{wid_id}", cls).disabled = True

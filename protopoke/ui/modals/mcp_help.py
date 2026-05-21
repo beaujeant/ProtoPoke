@@ -9,36 +9,40 @@ from textual.containers import Vertical, VerticalScroll, Horizontal
 
 
 _HELP_TEXT = """\
-Enable the embedded MCP server, then register this URL with an MCP client
-(Claude Code, Cursor, mcp-inspector). Stdio-only clients (Claude Desktop,
-ChatGPT Desktop) connect through the `protopoke-mcp` stdio bridge.
+Enable the embedded MCP server, then register this URL with an 
+MCP client (Claude Code, Cursor, mcp-inspector). Stdio-only 
+clients (Claude Desktop, ChatGPT Desktop) connect through the 
+`protopoke-mcp` stdio bridge.
 
-The server runs inside this process and shares the same state you see in
-the UI, so the AI sees every session, rule, and frame — and vice versa.
+The server runs inside this process and shares the same state 
+you see in the UI, so the AI sees every session, rule, and frame
+ — and vice versa.
 
 ──────────────────────────────────────────
 Profile
 ──────────────────────────────────────────
-Every tool's description and parameter schema is re-sent to the AI on every
-turn, so the exposed tool catalogue is a fixed per-turn token cost. The
-Profile setting controls how big that catalogue is:
+Every tool's description and parameter schema is re-sent to the 
+AI on every turn, so the exposed tool catalogue is a fixed 
+per-turn token cost. The Profile setting controls how big that 
+catalogue is:
 
-  Full
-    Exposes every tool. The AI can drive everything: forwarders, rules,
-    tamper/intercept, playbooks, fuzzing, replay, variables, and TLS, on
-    top of all the inspection and analysis tools.
+Full: Exposes every tool. The AI can drive everything: 
+forwarders, rules, tamper/intercept, playbooks, fuzzing, replay,
+variables, and TLS, on top of all the inspection and analysis 
+tools.
 
-  Analysis
-    A reverse-engineering subset, roughly half the per-turn cost. Keeps
-    session/frame inspection, all analysis tools, the knowledge base
-    (findings/notes), read-only protocol-definition tools, and the
-    active-probe send/inject/forge tools. Drops the operational surface:
-    forwarder lifecycle/config, replace & intercept rules, the tamper
-    queue, playbooks, replay, fuzzing, variables, and TLS CA.
+Analysis: A reverse-engineering subset, roughly half the 
+per-turn cost. Keeps session/frame inspection, all analysis tools,
+the knowledge base (findings/notes), read-only protocol-definition
+tools, and the active-probe send/inject/forge tools. Drops the 
+operational surface: forwarder lifecycle/config, replace & 
+intercept rules, the tamper queue, playbooks, replay, fuzzing, 
+variables, and TLS CA.
 
-Tools dropped by the Analysis profile remain available to you in the TUI —
-they are just not exposed to the AI. Changing the profile restarts the
-embedded server, since the tool surface is fixed when the server is built.
+Tools dropped by the Analysis profile remain available to you in 
+the TUI — they are just not exposed to the AI. Changing the 
+profile restarts the embedded server, since the tool surface is 
+fixed when the server is built.
 """
 
 
