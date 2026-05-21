@@ -13,6 +13,7 @@ from textual.message import Message
 from ...config import ForwarderConfig, ForwarderType
 from ...mcp.host import MCPSettings
 from ..modals.forwarder_edit import ForwarderEditModal
+from ..modals.mcp_help import MCPHelpModal
 
 logger = logging.getLogger(__name__)
 
@@ -158,11 +159,6 @@ class ConfigTab(Widget):
     ConfigTab #mcp-url-btn:hover {
         background: $panel;
     }
-    ConfigTab #mcp-url {
-        width: 1fr;
-        color: $text-muted;
-        display: none;
-    }
     """
 
     def __init__(
@@ -221,7 +217,6 @@ class ConfigTab(Widget):
                     compact=True,
                 )
                 yield Button("?", id="mcp-url-btn")
-            yield Static(self._format_mcp_url(), id="mcp-url")
 
     def on_mount(self) -> None:
         dt = self.query_one("#cfg-table", DataTable)
@@ -321,8 +316,7 @@ class ConfigTab(Widget):
         elif btn_id == "btn-cfg-remove":
             self._remove_selected()
         elif btn_id == "mcp-url-btn":
-            url_widget = self.query_one("#mcp-url", Static)
-            url_widget.display = not url_widget.display
+            self.app.push_screen(MCPHelpModal(self._mcp_settings.url()))
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Double-click or Enter on a row → open edit modal."""
@@ -431,21 +425,11 @@ class ConfigTab(Widget):
     # MCP settings
     # ------------------------------------------------------------------
 
-    def _format_mcp_url(self) -> str:
-        return f"  {self._mcp_settings.url()}"
-
-    def _refresh_mcp_url(self) -> None:
-        try:
-            self.query_one("#mcp-url", Static).update(self._format_mcp_url())
-        except Exception:
-            pass
-
     def _emit_mcp_settings(self) -> None:
         if self._suppress_mcp_emit:
             return
         from dataclasses import replace
         self.post_message(self.MCPSettingsChanged(replace(self._mcp_settings)))
-        self._refresh_mcp_url()
 
     def on_switch_changed(self, event: Switch.Changed) -> None:
         if event.switch.id == "mcp-enabled":
@@ -508,10 +492,6 @@ class ConfigTab(Widget):
                 self.query_one(f"#{wid_id}", cls).disabled = True
             except Exception:
                 pass
-        try:
-            self.query_one("#mcp-url", Static).styles.display = "none"
-        except Exception:
-            pass
 
     def load_mcp_settings(self, settings: MCPSettings) -> None:
         """Replace the displayed MCP settings (e.g. after project open)."""
@@ -523,11 +503,11 @@ class ConfigTab(Widget):
             self.query_one("#mcp-port",    Input).value  = str(settings.port)
             self.query_one("#mcp-profile", Select).value = settings.profile
         except Exception:
-            # Widgets not yet composed — _refresh_mcp_url runs after on_mount.
+            # Widgets not yet composed (load before on_mount) — the values are
+            # read straight from _mcp_settings when the help modal is opened.
             pass
         finally:
             self._suppress_mcp_emit = False
-        self._refresh_mcp_url()
 
     def confirm_remove_forwarder(self, name: str) -> None:
         """Remove a forwarder from the UI list after the user has confirmed deletion."""
