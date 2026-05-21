@@ -83,7 +83,127 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
-def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":  # type: ignore[name-defined]
+# Tools dropped by the "analysis" profile: operational surface (forwarder,
+# rule, playbook, fuzzing, variable, TLS, replay, tamper, proxy lifecycle and
+# framer/config mutation) that a passive reverse-engineering session does not
+# need. Read-only inspection, analysis, knowledge, protocol-definition reads,
+# and active-probe send/inject tools are kept.
+_ANALYSIS_PROFILE_EXCLUDE: frozenset[str] = frozenset({
+    # proxy lifecycle (proxy_status stays — read-only)
+    "proxy_start", "proxy_stop",
+    # forwarder + framer/config mutation (list_forwarders stays — read-only)
+    "add_forwarder", "remove_forwarder", "update_forwarder",
+    "start_forwarder", "stop_forwarder", "update_forwarder_config",
+    "set_framer",
+    # tamper / intercept queue
+    "tamper_status", "tamper_toggle", "list_intercepted",
+    "tamper_decode_pending", "tamper_forward", "tamper_drop",
+    "tamper_modify_and_forward", "tamper_modify_field_and_forward",
+    "tamper_forward_all", "tamper_set_direction_filter",
+    "tamper_set_session_filter",
+    # replace rules
+    "list_replace_rules", "add_replace_rule", "update_replace_rule",
+    "remove_replace_rule", "reorder_replace_rule", "clear_replace_rules",
+    # intercept rules
+    "list_intercept_rules", "add_intercept_rule", "update_intercept_rule",
+    "remove_intercept_rule", "reorder_intercept_rule", "clear_intercept_rules",
+    # playbooks
+    "list_playbooks", "create_playbook", "get_playbook", "update_playbook",
+    "delete_playbook", "run_playbook", "frame_to_forge",
+    # replay
+    "forge_session", "replay_with_field_edits",
+    # TLS
+    "get_ca_cert",
+    # fuzzing
+    "fuzz_start", "fuzz_status", "fuzz_results", "fuzz_stop",
+    "list_campaigns", "list_mutators",
+    # variables
+    "get_variables", "set_variable", "delete_variable", "clear_variables",
+    # script-rule hand-off (operational)
+    "get_script_load_instructions",
+})
+
+
+# JSON Schema keywords whose value is a *map* of name -> sub-schema. Their
+# keys are arbitrary (a property may legitimately be named "title"), so we
+# recurse into the values but never treat the keys as schema annotations.
+_SCHEMA_MAP_KEYWORDS = ("properties", "$defs", "definitions", "patternProperties")
+# Keywords whose value is a list of sub-schemas.
+_SCHEMA_LIST_KEYWORDS = ("anyOf", "oneOf", "allOf", "prefixItems")
+# Keywords whose value is a single sub-schema.
+_SCHEMA_NODE_KEYWORDS = (
+    "items", "additionalProperties", "not", "if", "then", "else", "contains",
+)
+
+
+def _slim_schema_inplace(schema: Any) -> None:
+    """Strip token bloat from a generated JSON Schema node, in place.
+
+    Two safe transforms: drop Pydantic's auto-generated ``title`` annotations
+    (they just restate the property name), and collapse the ``anyOf: [T, null]``
+    that ``Optional[...] = None`` produces down to ``T`` (optionality is already
+    conveyed by absence from ``required`` plus ``default``). This only changes
+    the schema advertised to the client — argument validation still runs against
+    FastMCP's Pydantic model, so it cannot weaken type checking.
+
+    The walk is JSON-Schema-structure-aware: it removes ``title`` only where it
+    is a schema annotation, never a property *named* "title".
+    """
+    if not isinstance(schema, dict):
+        if isinstance(schema, list):
+            for item in schema:
+                _slim_schema_inplace(item)
+        return
+
+    schema.pop("title", None)
+
+    for key, value in schema.items():
+        if key in _SCHEMA_MAP_KEYWORDS and isinstance(value, dict):
+            for sub in value.values():
+                _slim_schema_inplace(sub)
+        elif key in _SCHEMA_LIST_KEYWORDS and isinstance(value, list):
+            for sub in value:
+                _slim_schema_inplace(sub)
+        elif key in _SCHEMA_NODE_KEYWORDS:
+            _slim_schema_inplace(value)
+
+    any_of = schema.get("anyOf")
+    if (
+        isinstance(any_of, list)
+        and len(any_of) == 2
+        and {"type": "null"} in any_of
+    ):
+        non_null = [x for x in any_of if x != {"type": "null"}]
+        if len(non_null) == 1 and isinstance(non_null[0], dict):
+            merged = dict(non_null[0])
+            for key, value in schema.items():
+                if key != "anyOf":
+                    merged.setdefault(key, value)
+            schema.clear()
+            schema.update(merged)
+
+
+def _finalize_tools(mcp: Any, profile: str) -> None:
+    """Apply the profile filter and schema slimming to a built server.
+
+    Run once after every tool is registered. ``analysis`` profile removes the
+    operational tools; schema slimming always applies. Both operate on the
+    FastMCP tool manager's registered tools.
+    """
+    tool_manager = mcp._tool_manager
+    if profile == "analysis":
+        for tool_name in _ANALYSIS_PROFILE_EXCLUDE:
+            tool_manager._tools.pop(tool_name, None)
+    for tool in tool_manager._tools.values():
+        if isinstance(getattr(tool, "parameters", None), dict):
+            _slim_schema_inplace(tool.parameters)
+
+
+def build_mcp_server(
+    api: "ProtoPokeAPI",  # type: ignore[name-defined]
+    name: str = "ProtoPoke",
+    profile: str = "full",
+) -> "FastMCP":  # type: ignore[name-defined]
     """
     Construct and return a FastMCP server bound to *api*.
 
@@ -100,6 +220,12 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         api:  A :class:`~protopoke.api.ProtoPokeAPI` instance.  The server does
               **not** call ``start()`` — the caller is responsible for lifecycle.
         name: Human-readable name for the MCP server (shown to AI clients).
+        profile: Tool surface to expose. ``"full"`` (default) registers every
+              tool. ``"analysis"`` exposes only the reverse-engineering subset
+              (session inspection, analysis, knowledge base, protocol-definition
+              reads, and active-probe send/inject), dropping operational tools
+              (forwarder/rule/playbook/fuzz/variable/TLS/tamper) to shrink the
+              per-turn tool-catalog token cost. See ``_ANALYSIS_PROFILE_EXCLUDE``.
 
     Returns:
         A configured :class:`mcp.server.fastmcp.FastMCP` instance.
@@ -151,7 +277,14 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         "length/CRC relationship — each with a status and supporting frame "
         "IDs), and use notes for cross-cutting context that does not fit one "
         "field or message (open questions, test-setup reminders, overall "
-        "hypotheses about the protocol)."
+        "hypotheses about the protocol).\n"
+        "\n"
+        "Be token-frugal: prefer the scoped analysis tools (cluster_frames, "
+        "get_frame_stats, bruteforce_numeric_layout, decode_field with "
+        "deduplicate=True, diff_frames_in_bucket) over dumping raw frames. "
+        "Avoid get_frames / decode_frames / export_session on large sessions; "
+        "scope every call with direction / size_bytes / byte_patterns and use "
+        "filter_frames pagination when you do need frames."
     )
 
     mcp = FastMCP(name, instructions=instructions)
@@ -2535,6 +2668,10 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
             return refusal
         api.knowledge.remove_note(note_id)
         return {"ok": True, "note_id": note_id}
+
+    # Apply the tool-surface profile and slim the advertised parameter
+    # schemas before serving (shrinks the per-turn tool-catalog token cost).
+    _finalize_tools(mcp, profile)
 
     # Expose the rebind hook so MCPHost can swap the bound API without
     # tearing down the server task.

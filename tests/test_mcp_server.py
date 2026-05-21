@@ -12,6 +12,7 @@ and call ``tool.fn(...)`` directly.
 from __future__ import annotations
 
 import sys
+import json
 from types import ModuleType
 from unittest.mock import MagicMock
 
@@ -620,3 +621,138 @@ class TestToolIndex:
         body = resources["protopoke://tools"].fn()
         assert "protopoke://guides" in body
         assert "protopoke://recipes" in body
+
+
+# ---------------------------------------------------------------------------
+# Parameter-schema slimming (token-cost reduction)
+# ---------------------------------------------------------------------------
+
+def _schema_nodes(schema):
+    """Yield genuine schema nodes (root + each property/def/branch sub-schema).
+
+    Deliberately does NOT yield the "properties"/"$defs" *maps* themselves,
+    whose keys are arbitrary parameter names (a parameter may be named
+    "title"). This mirrors the slimmer's structure-aware walk.
+    """
+    if not isinstance(schema, dict):
+        if isinstance(schema, list):
+            for item in schema:
+                yield from _schema_nodes(item)
+        return
+    yield schema
+    for kw in ("properties", "$defs", "definitions", "patternProperties"):
+        v = schema.get(kw)
+        if isinstance(v, dict):
+            for sub in v.values():
+                yield from _schema_nodes(sub)
+    for kw in ("anyOf", "oneOf", "allOf", "prefixItems"):
+        v = schema.get(kw)
+        if isinstance(v, list):
+            for sub in v:
+                yield from _schema_nodes(sub)
+    for kw in ("items", "additionalProperties", "not", "if", "then", "else", "contains"):
+        if kw in schema:
+            yield from _schema_nodes(schema[kw])
+
+
+class TestSchemaSlimming:
+    def test_no_title_annotations_in_advertised_schema(self, mcp_server):
+        # Pydantic auto-generates a "title" annotation on every schema node;
+        # slimming strips them. A property *named* "title" lives as a key in a
+        # "properties" map and must survive (checked separately).
+        for tool in mcp_server._tool_manager.list_tools():
+            for node in _schema_nodes(tool.parameters):
+                assert "title" not in node, (
+                    f"{tool.name}: leftover title annotation {node.get('title')!r}"
+                )
+
+    def test_title_parameter_preserved(self, mcp_server):
+        # add_finding has a real parameter named "title" — it must remain.
+        af = mcp_server._tool_manager.get_tool("add_finding").parameters
+        assert "title" in af["properties"]
+        assert af["properties"]["title"].get("type") == "string"
+        assert "title" not in af["properties"]["title"]  # no annotation
+
+    def test_nullable_anyof_collapsed(self, mcp_server):
+        # Optional[...] = None produces anyOf:[T, {"type":"null"}]; slimming
+        # collapses it to T, so no "null" type should remain anywhere.
+        for tool in mcp_server._tool_manager.list_tools():
+            blob = json.dumps(tool.parameters)
+            assert '"null"' not in blob, f"{tool.name}: nullable anyOf not collapsed"
+
+    def test_optional_param_still_advertised_with_type_and_default(self, mcp_server):
+        # decode_field.direction is Optional[str] = None.
+        params = mcp_server._tool_manager.get_tool("decode_field").parameters
+        direction = params["properties"]["direction"]
+        assert direction.get("type") == "string"
+        assert direction.get("default") is None
+        assert "direction" not in params.get("required", [])
+
+    def test_validation_still_rejects_bad_types(self, api):
+        # Slimming the advertised schema must not weaken Pydantic validation.
+        import asyncio
+        from mcp.shared.exceptions import McpError
+        server = build_mcp_server(api)
+
+        async def _call():
+            # offset must be int; passing a non-numeric string should fail.
+            return await server._tool_manager.call_tool(
+                "decode_field",
+                {"session_id": "x", "offset": "not-an-int", "size": 1, "type": "uint8"},
+            )
+
+        with pytest.raises((McpError, ValueError, Exception)):
+            asyncio.get_event_loop().run_until_complete(_call())
+
+
+# ---------------------------------------------------------------------------
+# Tool-surface profiles
+# ---------------------------------------------------------------------------
+
+OPERATIONAL_SAMPLE = [
+    "add_forwarder", "start_forwarder", "set_framer", "update_forwarder_config",
+    "tamper_toggle", "tamper_modify_field_and_forward", "list_intercepted",
+    "add_replace_rule", "add_intercept_rule", "create_playbook", "run_playbook",
+    "forge_session", "replay_with_field_edits", "get_ca_cert",
+    "fuzz_start", "list_mutators", "set_variable", "get_variables",
+    "get_script_load_instructions",
+]
+
+ANALYSIS_KEEP = [
+    "proxy_status", "list_forwarders", "list_sessions", "get_frames",
+    "decode_frames", "search_frames", "cluster_frames", "decode_field",
+    "bruteforce_numeric_layout", "bisect_field_meaning", "find_length_fields",
+    "list_findings", "add_finding", "list_notes", "get_protocol_definition",
+    "get_protocol_definition_schema", "send_frame", "open_forge_session",
+    "inject_to_server", "list_field_types", "list_framers",
+]
+
+
+class TestToolProfiles:
+    def test_full_profile_registers_everything(self, api):
+        server = build_mcp_server(api, profile="full")
+        names = {t.name for t in server._tool_manager.list_tools()}
+        for n in OPERATIONAL_SAMPLE + ANALYSIS_KEEP:
+            assert n in names
+
+    def test_default_profile_is_full(self, api):
+        default = {t.name for t in build_mcp_server(api)._tool_manager.list_tools()}
+        full = {t.name for t in build_mcp_server(api, profile="full")._tool_manager.list_tools()}
+        assert default == full
+
+    def test_analysis_profile_drops_operational_tools(self, api):
+        server = build_mcp_server(api, profile="analysis")
+        names = {t.name for t in server._tool_manager.list_tools()}
+        for n in OPERATIONAL_SAMPLE:
+            assert n not in names, f"{n} should be excluded from analysis profile"
+
+    def test_analysis_profile_keeps_re_tools(self, api):
+        server = build_mcp_server(api, profile="analysis")
+        names = {t.name for t in server._tool_manager.list_tools()}
+        for n in ANALYSIS_KEEP:
+            assert n in names, f"{n} should be kept in analysis profile"
+
+    def test_analysis_profile_is_smaller(self, api):
+        full = build_mcp_server(api, profile="full")._tool_manager.list_tools()
+        analysis = build_mcp_server(api, profile="analysis")._tool_manager.list_tools()
+        assert len(analysis) < len(full)
