@@ -159,6 +159,16 @@ Pure helpers over captured frames. Composable; see the
 - `analyze_byte_ranges` — per-offset value range across many frames.
 - `find_length_fields` — candidate length-prefix offsets.
 - `offset_correlations` — pairs of offsets whose values move together.
+- `analyze_field_correlation` — decode one field as a time series across frames.
+- `bruteforce_numeric_layout` — score every encoding at every offset; top
+  field-type guesses for a fixed-size packet.
+- `group_by_field_value` — bucket frames by the value at one or more ranges
+  (flag fields, joint distributions).
+- `diff_frames` — per-byte diff of two frames + decoded field deltas.
+- `bisect_field_meaning` — sweep a field over a live forge session and capture
+  each server response.
+- `detect_periodic_streams` — flag periodic buckets (heartbeats, pings).
+- `export_session_csv` — flatten a session to CSV given declared fields.
 
 ## Authoring guides (resources + tool fallbacks)
 

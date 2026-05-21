@@ -14,11 +14,11 @@ already captured some traffic in session `S`.
 ## The workflow
 
 ```
-cluster_frames   →   find packet-type buckets
+cluster_frames + detect_periodic_streams   →   find packet-type buckets & streams
    ↓
-analyze_byte_ranges + find_length_fields   →   structure of one bucket
+analyze_byte_ranges + find_length_fields + bruteforce_numeric_layout   →   structure of one bucket
    ↓
-decode_field (with deduplicate)   →   verify each field's interpretation
+analyze_field_correlation / decode_field (with deduplicate)   →   verify each field's interpretation
    ↓
 add_finding (record what you confirmed)   →   knowledge base
    ↓
@@ -51,6 +51,12 @@ buckets together with per-offset change-rate and Shannon entropy for every
 bucket with ≥3 frames — useful for spotting which offsets actually carry
 information.
 
+`detect_periodic_streams` groups by the same `(prefix, size)` key and reports,
+per bucket, the mean / standard deviation / coefficient of variation of the
+inter-arrival times and an `is_periodic` flag. Heartbeats, position pings, and
+keepalives stand out immediately — and a steady stream is often the easiest
+packet type to start reverse-engineering.
+
 ## 2. Scope to one bucket
 
 Every analysis tool accepts the same scoping parameters so you can focus on
@@ -73,6 +79,35 @@ Example: scope to "mv" (0x6d 0x76) client→server frames of 26 bytes:
 ```
 
 ## 3. Find structure
+
+### `bruteforce_numeric_layout`
+
+The fastest first pass on a fixed-size packet type. It samples frames from one
+size bucket (the dominant size by default, or `size_bytes` if given) and scores
+**every numeric encoding at every offset** on three protocol-agnostic signals:
+float validity (no NaN/Inf), high-byte stability (real coordinates and counters
+don't span the full type range, so the most-significant byte has low entropy),
+and smoothness / monotonicity between temporally adjacent frames. The top
+candidates are exactly what a human guesses by hand — without writing a script.
+
+```
+bruteforce_numeric_layout(session_id=S, size_bytes=26, direction="client_to_server")
+→ {
+    "size_bytes": 26, "sample_size": 200,
+    "candidates": [
+      {"offset": 2, "encoding": "f32_le", "score": 0.91, "smoothness": 0.95, ...},
+      ...
+    ]
+  }
+```
+
+<Note>
+These field tools use **compact encoding names** — `u8`, `i8`, `u16_le`,
+`u16_be`, `i16_le`, `i16_be`, `u32_le`, `u32_be`, `i32_le`, `i32_be`,
+`f32_le`, `f32_be`, `f64_le`, `f64_be` — distinct from the verbose
+`decode_field` type list (`uint16_le`, `float32_be`, …). Any `byte_length`
+argument must match the encoding width.
+</Note>
 
 ### `analyze_byte_ranges`
 
@@ -128,6 +163,28 @@ long capture without dumping every frame.
 `offset_correlations` checks whether two offsets co-vary (Pearson `r` and
 `change_pairing`) — useful for detecting paired counters or related fields.
 
+`analyze_field_correlation` is the compact-encoding counterpart to
+`decode_field`: it returns a clean time series — one row per frame with
+`frame_id`, `timestamp`, `sequence_number`, and the decoded `value` — for a
+single `(byte_offset, byte_length, encoding)` field. It saves writing a
+throwaway script just to plot how one candidate field evolves.
+
+`group_by_field_value` buckets frames by the concatenated value across one or
+more `(offset, length)` ranges and returns `{key_hex: [frame_ids]}` plus
+per-bucket counts. Where `get_frame_stats` reports per-offset entropy, this
+shows multi-offset **co-occurrence** — the join distribution of, say, two
+input-axis bytes or a pair of flag fields.
+
+### `bisect_field_meaning` — confirm by observation
+
+Inference can be confirmed by experiment. Given a live forge session (open one
+with `open_forge_session`), a base frame, and a `(byte_offset, byte_length,
+encoding)` triple, `bisect_field_meaning` sweeps the field across a list (or
+`{start, stop, step}` range) of candidate values, replays the frame for each,
+and returns `{candidate_value: response_bytes_hex}`. It's the natural
+counterpart to `replay_with_field_edits`: instead of reasoning about what a
+field means, you watch how the server responds when you change it.
+
 ## 5. Compare two specific frames
 
 When you need to inspect a single transition, `compare_frames` gives a
@@ -137,6 +194,11 @@ byte-level diff between two frames:
   where applicable)
 - common prefix / suffix lengths
 - 16-byte-row side-by-side hex view
+
+`diff_frames` is the field-aware variant: it lists every differing byte
+(offset + both hex values) and, given a list of `(offset, length, encoding)`
+field declarations, also reports the **decoded delta** in each declared field —
+the direct answer to "what changed between this frame and the next?"
 
 ### `find_constant_byte_sequences`
 
@@ -203,6 +265,16 @@ Walks the session in capture order. For each source frame and width
 `(src_offset, dst_offset, width)` with at least `min_coverage` of
 source frames echoed are reported — the classic transaction-ID /
 session-token pattern.
+
+### `export_session_csv`
+
+When you want to plot or crunch a session in an external notebook,
+`export_session_csv` flattens it in one call: given a list of declared fields
+(`name`, `byte_offset`, `byte_length`, `encoding`, and an optional
+`message_filter` byte pattern), it returns a CSV string with one row per frame
+and one column per field, plus `frame_id`, `timestamp`, `sequence_number`,
+`direction`, and `size`. Cells are blank where a frame is too short or fails
+its `message_filter`.
 
 ## 6. Record findings in the knowledge base
 

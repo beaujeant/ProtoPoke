@@ -242,6 +242,22 @@ for the typical workflow.
 | `detect_timestamps` | Offsets whose uint32/uint64 value lies in a plausible epoch range (unix sec/ms, NTP, Windows FILETIME), ranked by correlation with capture time |
 | `detect_compression_encryption` | Per-frame magic-signature scan (gzip, zlib, lz4, zstd, PNG, JPEG, ZIP, ELF, PE, ASN.1, TLS records, SSH banners, …) plus high-entropy windows |
 | `echo_detection` | Find values sent in one direction that reappear at a fixed offset in the opposite direction — transaction IDs, session tokens |
+| `analyze_field_correlation` | Decode one `(byte_offset, byte_length, encoding)` field as a time series across frames (`frame_id`, `timestamp`, `sequence_number`, `value`) |
+| `bruteforce_numeric_layout` | Score every encoding at every offset on a sample of the dominant size bucket — float validity, high-byte stability, smoothness/monotonicity — and return the top candidates |
+| `group_by_field_value` | Bucket frames by the concatenated value at one or more `(offset, length)` ranges — flag fields and joint distributions across offsets |
+| `diff_frames` | Per-byte diff of two frames plus decoded deltas for declared `(offset, length, encoding)` fields |
+| `bisect_field_meaning` | Sweep a field across candidate values over a live forge session and capture each server response — confirm meaning by observation |
+| `export_session_csv` | Flatten a session to CSV given declared fields (`name`, `byte_offset`, `byte_length`, `encoding`, optional `message_filter`) |
+| `detect_periodic_streams` | Flag `(prefix, size)` buckets with periodic inter-arrival times (mean/std/cv, `is_periodic`) — heartbeats, pings, keepalives |
+
+### Compact encodings for the field-bruteforce / time-series tools
+
+`analyze_field_correlation`, `bruteforce_numeric_layout`,
+`group_by_field_value`, `diff_frames`, `bisect_field_meaning`, and
+`export_session_csv` use short encoding names (distinct from the
+`decode_field` type list): `u8`, `i8`, `u16_le`, `u16_be`, `i16_le`, `i16_be`,
+`u32_le`, `u32_be`, `i32_le`, `i32_be`, `f32_le`, `f32_be`, `f64_le`,
+`f64_be`. Any `byte_length` argument must match the encoding width.
 
 ### Field types for `decode_field` / `offset_correlations`
 
