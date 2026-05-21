@@ -25,6 +25,12 @@ _LOG_LEVEL_OPTIONS = [
 ]
 
 
+_MCP_PROFILE_OPTIONS = [
+    ("Full", "full"),
+    ("Analysis", "analysis"),
+]
+
+
 def _mcp_package_available() -> bool:
     """Return True if the optional ``mcp`` package can be imported."""
     try:
@@ -137,6 +143,9 @@ class ConfigTab(Widget):
         width: 20;
         margin-right: 1;
     }
+    ConfigTab .mcp-row Select {
+        width: 20;
+    }
     ConfigTab #mcp-url-btn {
         min-width: 3;
         width: 3;
@@ -203,6 +212,13 @@ class ConfigTab(Widget):
                 yield Input(value=self._mcp_settings.host, id="mcp-host", compact=True)
                 yield Label("Port:")
                 yield Input(value=str(self._mcp_settings.port), id="mcp-port", compact=True)
+                yield Label("Profile:")
+                yield Select(
+                    [(lbl, val) for lbl, val in _MCP_PROFILE_OPTIONS],
+                    value=self._mcp_settings.profile,
+                    allow_blank=False,
+                    id="mcp-profile",
+                )
                 yield Button("?", id="mcp-url-btn")
             yield Static(self._format_mcp_url(), id="mcp-url")
 
@@ -400,6 +416,15 @@ class ConfigTab(Widget):
                 # Apply immediately to the root logger
                 logging.getLogger().setLevel(level)
                 logger.info("Log level changed to %s", level)
+        elif event.select.id == "mcp-profile":
+            if self._suppress_mcp_emit:
+                return
+            val = event.value
+            if val and val is not Select.BLANK:
+                profile = str(val)
+                if profile != self._mcp_settings.profile:
+                    self._mcp_settings.profile = profile
+                    self._emit_mcp_settings()
 
     # ------------------------------------------------------------------
     # MCP settings
@@ -475,6 +500,7 @@ class ConfigTab(Widget):
             ("mcp-enabled", Switch),
             ("mcp-host",    Input),
             ("mcp-port",    Input),
+            ("mcp-profile", Select),
             ("mcp-url-btn", Button),
         ):
             try:
@@ -494,6 +520,7 @@ class ConfigTab(Widget):
             self.query_one("#mcp-enabled", Switch).value = settings.enabled
             self.query_one("#mcp-host",    Input).value  = settings.host
             self.query_one("#mcp-port",    Input).value  = str(settings.port)
+            self.query_one("#mcp-profile", Select).value = settings.profile
         except Exception:
             # Widgets not yet composed — _refresh_mcp_url runs after on_mount.
             pass

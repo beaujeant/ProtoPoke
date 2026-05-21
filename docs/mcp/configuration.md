@@ -45,9 +45,10 @@ available to the operator in the TUI — they are just not exposed to the AI.
 protopoke --mcp --mcp-profile analysis
 ```
 
-The profile is persisted per-project in `mcp.json`. Changing it at runtime
-restarts the embedded server (the tool surface is fixed when the server is
-built).
+The profile is persisted per-project in `mcp.json`. Set it from the
+**Profile** selector in the Config tab's MCP section, or with
+`--mcp-profile` at launch. Changing it at runtime restarts the embedded
+server (the tool surface is fixed when the server is built).
 
 ## Launch
 
