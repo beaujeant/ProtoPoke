@@ -4,8 +4,6 @@ A TCP / UDP / SOCKS5 proxy and protocol analysis tool — Burp Suite for arbitra
 
 Intercept any TCP, UDP, or SOCKS5-proxied connection, inspect and modify frames in real time, decode binary protocols with a YAML definition, replay sessions, fuzz with pluggable mutators, and let an AI assistant drive it all via MCP.
 
-Each forwarder can be a plain **TCP** proxy, a **UDP** proxy (per-client-tuple flows), or a **SOCKS5** proxy (per-connection target discovered from the SOCKS handshake). When the client or upstream server disconnects, ProtoPoke keeps the other side open by default — the session moves to `only server` / `only client` so you can keep driving the live connection from the Forge tab.
-
 ## Installation
 
 **Python 3.11+ required.**
@@ -43,9 +41,6 @@ pip install -e ".[mcp]"
 protopoke --mcp                          # 127.0.0.1:7878 by default
 protopoke --mcp --mcp-port 7878          # custom port
 ```
-
-The server can also be toggled at runtime from the Config tab (Switch +
-Host / Port inputs). The setting is persisted per-project in the `.pp` file.
 
 ### Claude Desktop
 
@@ -100,12 +95,6 @@ asyncio.run(main())
 ## Documentation
 
 Full documentation is available at **[beaujeant.github.io/protopoke](https://beaujeant.github.io/protopoke/)**.
-
-It is split into two parallel tracks — **User Interface** (the terminal UI)
-and **Core Library** (the `ProtoPokeAPI`) — each covering Config, Traffic,
-Intercept, and Forge, plus shared **Reference** pages (framers, protocol
-definition DSL, custom replace scripts, fuzzing), worked **Guides** (DNS,
-SSH-BPP), the MCP tool reference, and architecture notes.
 
 ## Running Tests
 
