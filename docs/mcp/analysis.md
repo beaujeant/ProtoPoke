@@ -193,7 +193,9 @@ byte-level diff between two frames:
 - coalesced list of differing byte ranges (with offsets and integer delta
   where applicable)
 - common prefix / suffix lengths
-- 16-byte-row side-by-side hex view
+- 16-byte-row side-by-side hex view (each row has `a_hex` and `differs`;
+  `b_hex` appears only on rows that differ — when absent the row is identical,
+  so `b_hex == a_hex`)
 
 `diff_frames` is the field-aware variant: it lists every differing byte
 (offset + both hex values) and, given a list of `(offset, length, encoding)`

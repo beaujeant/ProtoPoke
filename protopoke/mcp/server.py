@@ -199,6 +199,86 @@ def _finalize_tools(mcp: Any, profile: str) -> None:
             _slim_schema_inplace(tool.parameters)
 
 
+# Free-text preview length for knowledge-base *list* views. Entries shorter
+# than this keep their full text; longer ones are previewed (full text remains
+# available via get_finding / get_note). Chosen to fit a typical 1-3 sentence
+# finding/note untouched.
+_KB_PREVIEW_CHARS = 280
+
+
+def _kb_preview(text: Optional[str]) -> tuple[Optional[str], bool]:
+    """Return (text_or_preview, truncated?). Cuts on a word boundary."""
+    if not text or len(text) <= _KB_PREVIEW_CHARS:
+        return text, False
+    cut = text.rfind(" ", 0, _KB_PREVIEW_CHARS)
+    if cut < _KB_PREVIEW_CHARS - 40:
+        cut = _KB_PREVIEW_CHARS
+    return text[:cut].rstrip() + " …", True
+
+
+# Scope fields kept in a finding list row only when non-null (null == unset, so
+# omitting is lossless). forwarder_id/forwarder_name are kept even when null.
+_FINDING_OPTIONAL_SCOPE = (
+    "protocol_name", "message_name", "field_name",
+    "byte_offset", "byte_length", "direction",
+)
+
+
+def _compact_finding(d: dict) -> dict:
+    """List-view finding: keep triage fields, drop null scope fields, replace
+    evidence id lists with counts, and preview a long description. The full
+    record (full description + evidence frame IDs) is available via get_finding.
+    """
+    out: dict[str, Any] = {
+        "id":         d["id"],
+        "title":      d["title"],
+        "status":     d["status"],
+        "confidence": d["confidence"],
+        "author":     d["author"],
+        "locked":     d["locked"],
+        "created_at": d["created_at"],
+        "updated_at": d["updated_at"],
+        # kept even when null (callers/tests rely on their presence)
+        "forwarder_id":   d.get("forwarder_id"),
+        "forwarder_name": d.get("forwarder_name"),
+    }
+    for key in _FINDING_OPTIONAL_SCOPE:
+        if d.get(key) is not None:
+            out[key] = d[key]
+    if d.get("tags"):
+        out["tags"] = d["tags"]
+    preview, truncated = _kb_preview(d.get("description"))
+    out["description"] = preview
+    if truncated:
+        out["description_truncated"] = True
+    ev = d.get("evidence_frame_ids") or []
+    cev = d.get("counter_evidence_frame_ids") or []
+    if ev:
+        out["evidence_frame_count"] = len(ev)
+    if cev:
+        out["counter_evidence_frame_count"] = len(cev)
+    return out
+
+
+def _compact_note(d: dict) -> dict:
+    """List-view note: keep metadata, preview a long body. Full body via get_note."""
+    out: dict[str, Any] = {
+        "id":         d["id"],
+        "title":      d["title"],
+        "author":     d["author"],
+        "locked":     d["locked"],
+        "created_at": d["created_at"],
+        "updated_at": d["updated_at"],
+    }
+    if d.get("tags"):
+        out["tags"] = d["tags"]
+    preview, truncated = _kb_preview(d.get("body_md"))
+    out["body_md"] = preview
+    if truncated:
+        out["body_truncated"] = True
+    return out
+
+
 def build_mcp_server(
     api: "ProtoPokeAPI",  # type: ignore[name-defined]
     name: str = "ProtoPoke",
@@ -2478,13 +2558,13 @@ def build_mcp_server(
         forwarder_id:  Optional[str]       = None,
         tags:          Optional[list[str]] = None,
     ) -> list[dict]:
-        """Return knowledge-base findings, optionally filtered. Read on session start to recover prior work. query (title/description/tags substring), status (hypothesis/confirmed/ruled_out/needs_review), author ("ai"/"user"), protocol_name/message_name/field_name/forwarder_id scope, tags."""
+        """Return knowledge-base findings, optionally filtered. Read on session start to recover prior work. query (title/description/tags substring), status (hypothesis/confirmed/ruled_out/needs_review), author ("ai"/"user"), protocol_name/message_name/field_name/forwarder_id scope, tags. Rows are compact (long descriptions previewed, evidence frame IDs given as counts); call get_finding(id) for the full record."""
         results = api.knowledge.list_findings(
             query=query, status=status, author=author,
             protocol_name=protocol_name, message_name=message_name,
             field_name=field_name, forwarder_id=forwarder_id, tags=tags,
         )
-        return [_serialise_finding(f) for f in results]
+        return [_compact_finding(_serialise_finding(f)) for f in results]
 
     @mcp.tool()
     def get_finding(finding_id: str) -> dict:
@@ -2611,8 +2691,8 @@ def build_mcp_server(
         author: Optional[str]       = None,
         tags:   Optional[list[str]] = None,
     ) -> list[dict]:
-        """Return free-form knowledge-base notes, optionally filtered. query (title/body/tags substring), author, tags."""
-        return [n.to_dict() for n in api.knowledge.list_notes(
+        """Return free-form knowledge-base notes, optionally filtered. query (title/body/tags substring), author, tags. Rows are compact (long bodies previewed); call get_note(id) for the full body."""
+        return [_compact_note(n.to_dict()) for n in api.knowledge.list_notes(
             query=query, author=author, tags=tags,
         )]
 

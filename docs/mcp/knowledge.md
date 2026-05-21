@@ -20,6 +20,14 @@ on every session.  On session start, call `list_findings` and
 `list_notes` to recover what previous sessions established before
 re-running the analysis tools.
 
+`list_findings` and `list_notes` return **compact rows** to keep the
+session-start recovery cheap: long descriptions / note bodies are
+previewed (with a `description_truncated` / `body_truncated` flag),
+evidence frame-ID lists are given as `evidence_frame_count` /
+`counter_evidence_frame_count`, and null scope fields are omitted. Call
+`get_finding(id)` / `get_note(id)` for the complete record — full text
+and the full evidence frame-ID lists.
+
 ## Why "AI as advisor"
 
 The knowledge base is deliberately additive.  The MCP layer **does
