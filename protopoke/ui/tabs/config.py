@@ -218,6 +218,7 @@ class ConfigTab(Widget):
                     value=self._mcp_settings.profile,
                     allow_blank=False,
                     id="mcp-profile",
+                    compact=True,
                 )
                 yield Button("?", id="mcp-url-btn")
             yield Static(self._format_mcp_url(), id="mcp-url")
