@@ -87,6 +87,31 @@ def get_tool(mcp_server, name):
 
 
 # ---------------------------------------------------------------------------
+# Server-level instructions (returned at initialize)
+# ---------------------------------------------------------------------------
+
+class TestServerInstructions:
+    def test_instructions_are_set(self, mcp_server):
+        assert mcp_server.instructions
+
+    def test_instructions_describe_protopoke(self, mcp_server):
+        text = mcp_server.instructions.lower()
+        assert "interception proxy" in text
+        assert "reverse-engineering" in text
+
+    def test_instructions_point_to_findings_on_start(self, mcp_server):
+        text = mcp_server.instructions
+        assert "list_findings" in text
+        assert "protocol_name" in text
+        assert "forwarder_id" in text
+
+    def test_instructions_distinguish_findings_and_notes(self, mcp_server):
+        text = mcp_server.instructions.lower()
+        assert "findings" in text
+        assert "notes" in text
+
+
+# ---------------------------------------------------------------------------
 # proxy_status
 # ---------------------------------------------------------------------------
 
