@@ -108,11 +108,12 @@ it back once things work.
 
 Below the forwarder table is the **MCP** section. Toggle it on to start the
 embedded MCP server, which exposes ProtoPoke's operations as AI tools bound
-to the *same* state the UI shows. Configure host/port and reveal the
-connection URL here. The **Profile** selector chooses the tool surface
-exposed to the AI — `Full` (everything) or `Analysis` (the
-reverse-engineering subset, which lowers per-turn token cost); changing it
-restarts the embedded server. See [MCP Server](/mcp/overview).
+to the *same* state the UI shows. Configure host/port here, and click the
+**?** button for a help modal that shows the connection URL and explains the
+**Profile** selector. That selector chooses the tool surface exposed to the
+AI — `Full` (everything) or `Analysis` (the reverse-engineering subset, which
+lowers per-turn token cost); changing it restarts the embedded server. See
+[MCP Server](/mcp/overview).
 
 ## Projects
 
