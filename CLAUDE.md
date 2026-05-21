@@ -25,7 +25,6 @@ tool** — Burp Suite for arbitrary binary protocols. It:
 - Decodes binary frames using a YAML/JSON protocol definition (named fields,
   typed, with size/offset metadata for Wireshark-style display).
 - Replays (Forge) captured sessions against a server, optionally editing fields.
-- Fuzzes sessions with a pluggable mutator pipeline.
 - Exposes all proxy operations as MCP tools for AI-driven testing.
 - Provides a full terminal UI (Textual) and a Python API.
 
@@ -35,7 +34,7 @@ tool** — Burp Suite for arbitrary binary protocols. It:
 
 ```bash
 # Install (dev mode, includes pytest)
-pip install -e ".[dev]"
+pip install -e ".[dev,mcp]"
 
 # Run tests
 pytest                          # all tests
@@ -292,13 +291,6 @@ widgets must only be updated from the Textual main loop.
    ```python
    FRAMER_REGISTRY["myframer"] = MyFramer
    ```
-
-### Add a new mutator
-
-1. Subclass `protopoke.fuzzing.mutators.base.FrameMutator`.
-2. Implement `async mutate(frame, parsed_message) → bytes | None`.
-   Return `None` to skip (e.g. frame is too short to mutate).
-3. Pass an instance to `api.fuzz_session(..., mutators=[MyMutator()])`.
 
 ### Add a protocol decoder
 
