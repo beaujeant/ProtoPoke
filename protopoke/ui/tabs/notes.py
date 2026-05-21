@@ -26,7 +26,7 @@ import time
 from typing import TYPE_CHECKING, Optional
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, Input, Label, Static
 
@@ -92,9 +92,12 @@ class NotesTab(Widget):
         height: 1;
         text-style: bold;
     }
-    NotesTab #detail-body {
+    NotesTab #detail-scroll {
         height: 1fr;
         background: $surface;
+    }
+    NotesTab #detail-body {
+        height: auto;
         padding: 0 1;
     }
     """
@@ -136,7 +139,8 @@ class NotesTab(Widget):
         yield DataTable(id="kb-table", cursor_type="row")
         with Vertical(id="detail-pane"):
             yield Static("Details", classes="pane-header")
-            yield Static("(select an entry)", id="detail-body", markup=False)
+            with VerticalScroll(id="detail-scroll"):
+                yield Static("(select an entry)", id="detail-body", markup=False)
 
     def on_mount(self) -> None:
         self._build_columns()
