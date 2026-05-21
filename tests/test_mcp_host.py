@@ -74,15 +74,21 @@ def api():
 
 @pytest.fixture
 def patched_run_async(monkeypatch):
-    """Replace FastMCP.run_streamable_http_async with a slow coroutine we can cancel."""
+    """Replace ``uvicorn.Server.serve`` with a coroutine that never binds a port.
 
-    async def fake_run(self):
-        # Loop forever until cancelled; never actually bind a port.
-        await asyncio.sleep(3600)
+    It honours ``should_exit`` (so :meth:`MCPHost.stop`'s graceful shutdown
+    returns promptly) and cancellation, mirroring real uvicorn behaviour
+    without opening a socket.
+    """
+    import uvicorn
 
-    from mcp.server.fastmcp import FastMCP
-    monkeypatch.setattr(FastMCP, "run_streamable_http_async", fake_run)
-    return fake_run
+    async def fake_serve(self, sockets=None):
+        self.started = True
+        while not self.should_exit:
+            await asyncio.sleep(0.01)
+
+    monkeypatch.setattr(uvicorn.Server, "serve", fake_serve)
+    return fake_serve
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +278,73 @@ async def test_apply_rolls_back_settings_on_start_failure(api, monkeypatch):
 
     # Settings rolled back: enabled=False, no task running.
     assert host.settings.enabled is False
+    assert host.is_running is False
+
+
+# ---------------------------------------------------------------------------
+# Regression: restart must free the port; a bind failure must not kill the app
+# ---------------------------------------------------------------------------
+
+async def test_run_server_swallows_systemexit(api, monkeypatch):
+    """uvicorn calls ``sys.exit(1)`` when it cannot bind its socket, raising
+    ``SystemExit`` (a ``BaseException``). If that escaped the server task it
+    would tear down the whole host application with no message — exactly the
+    reported crash. The task must finish quietly and leave MCP not running.
+    """
+    import uvicorn
+
+    async def boom_serve(self, sockets=None):
+        raise SystemExit(1)
+
+    monkeypatch.setattr(uvicorn.Server, "serve", boom_serve)
+    host = MCPHost(api, MCPSettings(enabled=True, port=18900))
+    await host.start()
+
+    # Awaiting the task must not propagate SystemExit.
+    await asyncio.wait_for(asyncio.shield(host._task), timeout=2.0)
+    assert host._task.done()
+    assert host.is_running is False
+    await host.stop()
+
+
+async def test_apply_profile_change_restarts_on_same_port(api, unused_port):
+    """Regression for the reported crash: enabling MCP then changing the
+    profile restarts the server on the *same* port. A hard task cancel used
+    to skip uvicorn's shutdown and leak the listening socket, so the rebind
+    hit ``EADDRINUSE`` → ``sys.exit(1)`` → the app exited silently. The
+    graceful stop now frees the port so the restart succeeds.
+
+    Binds a real port (twice), so it needs the optional ``mcp`` package.
+    """
+
+    async def _await_bound() -> None:
+        for _ in range(200):
+            if host._uvicorn is not None and host._uvicorn.started:
+                return
+            await asyncio.sleep(0.02)
+        raise AssertionError("uvicorn server did not bind in time")
+
+    host = MCPHost(
+        api,
+        MCPSettings(enabled=True, host="127.0.0.1", port=unused_port,
+                    profile="full"),
+    )
+    await host.start()
+    try:
+        await _await_bound()
+        assert host.is_running
+
+        await host.apply(
+            MCPSettings(enabled=True, host="127.0.0.1", port=unused_port,
+                        profile="analysis"),
+        )
+
+        # The restart must have rebound on the same port without dying.
+        await _await_bound()
+        assert host.is_running
+        assert host.settings.profile == "analysis"
+    finally:
+        await host.stop()
     assert host.is_running is False
 
 

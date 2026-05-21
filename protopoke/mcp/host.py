@@ -42,6 +42,9 @@ logger = logging.getLogger(__name__)
 
 APIProvider = Union[ProtoPokeAPI, Callable[[], ProtoPokeAPI]]
 
+# How long to wait for uvicorn's graceful shutdown before hard-cancelling.
+_GRACEFUL_SHUTDOWN_TIMEOUT = 5.0
+
 
 def mcp_available() -> bool:
     """Return ``True`` if the optional ``mcp`` package can be imported.
@@ -121,6 +124,10 @@ class MCPHost:
         self._initial_provider = api_provider
         self._settings: MCPSettings = replace(settings) if settings else MCPSettings()
         self._server: Any = None
+        # The uvicorn.Server driving the FastMCP app. Owned here (rather than
+        # hidden inside FastMCP.run_streamable_http_async) so stop() can request
+        # a graceful shutdown that closes the listening socket.
+        self._uvicorn: Any = None
         self._task: Optional[asyncio.Task] = None
         self._current_api: Optional[ProtoPokeAPI] = None
 
@@ -178,6 +185,22 @@ class MCPHost:
 
         logging.getLogger("mcp.server.streamable_http_manager").setLevel(logging.WARNING)
 
+        # Build (but don't yet serve) the uvicorn server here so we own a
+        # handle to it before the task runs. stop() needs that handle to drive
+        # a graceful shutdown; building it synchronously avoids a start/stop
+        # race where the handle isn't set yet. The socket is only bound once
+        # serve() runs inside _run_server.
+        import uvicorn
+
+        app = self._server.streamable_http_app()
+        config = uvicorn.Config(
+            app,
+            host=self._settings.host,
+            port=self._settings.port,
+            log_level=self._server.settings.log_level.lower(),
+        )
+        self._uvicorn = uvicorn.Server(config)
+
         logger.info(
             "MCP server starting on %s (transport=streamable-http)",
             self._settings.url(),
@@ -188,18 +211,35 @@ class MCPHost:
         )
 
     async def stop(self) -> None:
-        """Cancel the running MCP task and wait for it to exit."""
+        """Stop the running MCP server and wait for it to exit.
+
+        Prefer a *graceful* shutdown (set uvicorn's ``should_exit`` flag) over a
+        hard task cancel: a cancelled ``serve()`` skips uvicorn's ``shutdown()``
+        and leaks the listening socket, so an immediate restart on the same
+        host/port fails to bind. Falls back to cancelling the task if the
+        graceful shutdown does not finish in time.
+        """
         if self._task is None:
             return
         task = self._task
+        uvicorn_server = self._uvicorn
         self._task = None
         self._server = None
+        self._uvicorn = None
         self._current_api = None
 
         if not task.done():
-            task.cancel()
+            if uvicorn_server is not None:
+                # Ask uvicorn to wind down: it stops accepting connections and
+                # closes its listening socket, freeing the port so a restart on
+                # the same host/port can rebind.
+                uvicorn_server.should_exit = True
             try:
-                await task
+                await asyncio.wait_for(task, timeout=_GRACEFUL_SHUTDOWN_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "MCPHost.stop: graceful shutdown timed out; task cancelled"
+                )
             except asyncio.CancelledError:
                 pass
             except Exception:
@@ -280,10 +320,16 @@ class MCPHost:
 
     async def _run_server(self) -> None:
         try:
-            await self._server.run_streamable_http_async()
+            await self._uvicorn.serve()
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except (SystemExit, Exception):
+            # uvicorn calls ``sys.exit(1)`` when it cannot bind its listening
+            # socket (e.g. the port is still in use). That raises ``SystemExit``,
+            # which is a ``BaseException`` — if it escaped this task it would
+            # tear down the whole host application with no traceback or message.
+            # Log it and let the task finish instead, leaving MCP simply not
+            # running.
             logger.exception("MCP server task crashed")
 
     def _resolve_api(self) -> ProtoPokeAPI:
