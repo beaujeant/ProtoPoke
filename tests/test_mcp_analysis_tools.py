@@ -531,3 +531,214 @@ class TestEchoDetection:
         ]
         assert good
         assert good[0]["coverage"] >= 0.9
+
+
+# ---------------------------------------------------------------------------
+# Field-type bruteforce / time series tools
+# ---------------------------------------------------------------------------
+
+import asyncio  # noqa: E402
+import socket  # noqa: E402
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+async def _echo_server(host: str, port: int):
+    async def handler(reader, writer):
+        try:
+            while True:
+                data = await reader.read(4096)
+                if not data:
+                    break
+                writer.write(data)
+                await writer.drain()
+        except Exception:
+            pass
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+    return await asyncio.start_server(handler, host, port)
+
+
+class TestAnalyzeFieldCorrelation:
+    def test_decodes_time_series(self, mcp_server, api):
+        session = populate_position_session(api)
+        fn = get_tool(mcp_server, "analyze_field_correlation")
+        out = fn(session.id, byte_offset=2, byte_length=4, encoding="f32_le",
+                 direction="client_to_server")
+        vals = [round(r["value"], 4) for r in out["rows"]]
+        assert vals == [0.1, 0.2, 0.3, 0.4, 0.5]
+        assert "suggestion" in out
+        assert "frame_id" in out["rows"][0]
+
+    def test_byte_length_mismatch_errors(self, mcp_server, api):
+        session = populate_position_session(api)
+        fn = get_tool(mcp_server, "analyze_field_correlation")
+        out = fn(session.id, byte_offset=2, byte_length=2, encoding="f32_le")
+        assert "error" in out
+
+    def test_bad_encoding_errors(self, mcp_server, api):
+        session = populate_position_session(api)
+        fn = get_tool(mcp_server, "analyze_field_correlation")
+        out = fn(session.id, byte_offset=0, byte_length=1, encoding="uint8")
+        assert "error" in out
+
+
+class TestBruteforceNumericLayout:
+    def test_returns_candidates(self, mcp_server, api):
+        session = populate_position_session(api)
+        fn = get_tool(mcp_server, "bruteforce_numeric_layout")
+        out = fn(session.id, direction="client_to_server", top_n=50)
+        assert out["size_bytes"] == 14
+        offenc = {(c["offset"], c["encoding"]) for c in out["candidates"]}
+        assert (2, "f32_le") in offenc
+        assert "suggestion" in out
+
+    def test_no_frames(self, mcp_server, api):
+        session = api.session_registry.create("127.0.0.1", 1, "10.0.0.1", 2)
+        fn = get_tool(mcp_server, "bruteforce_numeric_layout")
+        out = fn(session.id)
+        assert out["candidates"] == []
+
+
+class TestGroupByFieldValue:
+    def test_buckets(self, mcp_server, api):
+        session = api.session_registry.create("127.0.0.1", 1, "10.0.0.1", 2)
+        for i, b in enumerate([b"\x01\xaa", b"\x01\xbb", b"\x02\xcc"]):
+            session.add_frame(Frame.create(session.id, Direction.CLIENT_TO_SERVER, b, i))
+        fn = get_tool(mcp_server, "group_by_field_value")
+        out = fn(session.id, ranges=[{"offset": 0, "length": 1}])
+        assert out["counts"] == {"01": 2, "02": 1}
+        assert "suggestion" in out
+
+    def test_invalid_range(self, mcp_server, api):
+        session = api.session_registry.create("127.0.0.1", 1, "10.0.0.1", 2)
+        fn = get_tool(mcp_server, "group_by_field_value")
+        out = fn(session.id, ranges=[{"offset": 0}])
+        assert "error" in out
+
+
+class TestDiffFrames:
+    def test_diff_with_field_delta(self, mcp_server, api):
+        session = api.session_registry.create("127.0.0.1", 1, "10.0.0.1", 2)
+        f0 = Frame.create(session.id, Direction.CLIENT_TO_SERVER, struct.pack("<I", 100), 0)
+        f1 = Frame.create(session.id, Direction.CLIENT_TO_SERVER, struct.pack("<I", 175), 1)
+        session.add_frame(f0)
+        session.add_frame(f1)
+        fn = get_tool(mcp_server, "diff_frames")
+        out = fn(session.id, frame_id_a=f0.id, frame_id_b=f1.id,
+                 field_decls=[{"offset": 0, "length": 4, "encoding": "u32_le"}])
+        assert out["field_deltas"][0]["delta"] == 75
+        assert "suggestion" in out
+
+    def test_unknown_frame(self, mcp_server, api):
+        session = api.session_registry.create("127.0.0.1", 1, "10.0.0.1", 2)
+        fn = get_tool(mcp_server, "diff_frames")
+        out = fn(session.id, frame_id_a="nope", frame_id_b="nope2")
+        assert "error" in out
+
+
+class TestExportSessionCsv:
+    def test_csv_output(self, mcp_server, api):
+        session = populate_position_session(api)
+        fn = get_tool(mcp_server, "export_session_csv")
+        out = fn(session.id, direction="client_to_server", fields=[
+            {"name": "x", "byte_offset": 2, "byte_length": 4, "encoding": "f32_le"},
+        ])
+        header = out["csv"].splitlines()[0]
+        assert header == "frame_id,timestamp,sequence_number,direction,size,x"
+        assert out["rows"] == 5
+
+    def test_bad_field(self, mcp_server, api):
+        session = populate_position_session(api)
+        fn = get_tool(mcp_server, "export_session_csv")
+        out = fn(session.id, fields=[
+            {"name": "x", "byte_offset": 0, "byte_length": 1, "encoding": "u16_le"},
+        ])
+        assert "error" in out
+
+
+class TestDetectPeriodicStreams:
+    def test_periodic(self, mcp_server, api):
+        session = api.session_registry.create("127.0.0.1", 1, "10.0.0.1", 2)
+        for i in range(15):
+            f = Frame.create(session.id, Direction.SERVER_TO_CLIENT, b"\xaa\xbbping", i)
+            f.timestamp = 1000.0 + i  # 1s apart
+            session.add_frame(f)
+        fn = get_tool(mcp_server, "detect_periodic_streams")
+        out = fn(session.id)
+        assert out["periodic_count"] == 1
+        assert out["buckets"][0]["is_periodic"] is True
+        assert "suggestion" in out
+
+
+class TestBisectFieldMeaning:
+    async def test_sweeps_candidates_over_forge(self, mcp_server, api):
+        port = _free_port()
+        server = await _echo_server("127.0.0.1", port)
+        async with server:
+            sid = await api.open_forge_session("127.0.0.1", port)
+            fn = get_tool(mcp_server, "bisect_field_meaning")
+            base = b"\x01\x00\x00"  # u16_le field at offset 1
+            out = await fn(
+                forge_session_id=sid,
+                base_frame_hex=base.hex(),
+                byte_offset=1, byte_length=2, encoding="u16_le",
+                candidate_values=[1, 2, 300],
+                receive_timeout=1.0,
+            )
+        assert out["ok"] is True
+        # Echo server returns the mutated frame, so each response carries the
+        # candidate value at offset 1.
+        assert out["results"]["1"] == (b"\x01" + (1).to_bytes(2, "little")).hex()
+        assert out["results"]["2"] == (b"\x01" + (2).to_bytes(2, "little")).hex()
+        assert out["results"]["300"] == (b"\x01" + (300).to_bytes(2, "little")).hex()
+        assert "suggestion" in out
+
+    async def test_value_range(self, mcp_server, api):
+        port = _free_port()
+        server = await _echo_server("127.0.0.1", port)
+        async with server:
+            sid = await api.open_forge_session("127.0.0.1", port)
+            fn = get_tool(mcp_server, "bisect_field_meaning")
+            out = await fn(
+                forge_session_id=sid,
+                base_frame_hex="00",
+                byte_offset=0, byte_length=1, encoding="u8",
+                value_range={"start": 0, "stop": 3, "step": 1},
+                receive_timeout=1.0,
+            )
+        assert out["ok"] is True
+        assert set(out["results"]) == {"0", "1", "2"}
+
+    async def test_width_mismatch(self, mcp_server, api):
+        fn = get_tool(mcp_server, "bisect_field_meaning")
+        out = await fn(
+            forge_session_id="x", base_frame_hex="0000",
+            byte_offset=0, byte_length=1, encoding="u16_le",
+            candidate_values=[1],
+        )
+        assert out["ok"] is False
+
+    async def test_no_candidates(self, mcp_server, api):
+        fn = get_tool(mcp_server, "bisect_field_meaning")
+        out = await fn(
+            forge_session_id="x", base_frame_hex="0000",
+            byte_offset=0, byte_length=2, encoding="u16_le",
+        )
+        assert out["ok"] is False
+
+    async def test_field_out_of_range(self, mcp_server, api):
+        fn = get_tool(mcp_server, "bisect_field_meaning")
+        out = await fn(
+            forge_session_id="x", base_frame_hex="00",
+            byte_offset=4, byte_length=1, encoding="u8",
+            candidate_values=[1],
+        )
+        assert out["ok"] is False

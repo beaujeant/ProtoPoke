@@ -770,3 +770,260 @@ class TestEchoDetection:
         ]
         out = analysis.echo_detection(fs, widths=(4,))
         assert out["candidates"] == []
+
+
+# ---------------------------------------------------------------------------
+# Compact encodings: decode_value / encode_value / supported_encodings
+# ---------------------------------------------------------------------------
+
+class TestCompactEncodings:
+    def test_roundtrip_int(self):
+        raw = analysis.encode_value(513, "u16_le")
+        assert raw == b"\x01\x02"
+        assert analysis.decode_value(raw, "u16_le") == 513
+
+    def test_roundtrip_float(self):
+        raw = analysis.encode_value(1.5, "f32_le")
+        assert analysis.decode_value(raw, "f32_le") == 1.5
+
+    def test_signed(self):
+        assert analysis.decode_value(b"\xff", "i8") == -1
+
+    def test_width(self):
+        assert analysis.encoding_width("u32_be") == 4
+        assert analysis.encoding_width("f64_le") == 8
+
+    def test_unknown_encoding_raises(self):
+        with pytest.raises(ValueError):
+            analysis.decode_value(b"\x00", "uint8")  # verbose name not accepted here
+
+    def test_wrong_length_raises(self):
+        with pytest.raises(ValueError):
+            analysis.decode_value(b"\x00", "u16_le")
+
+    def test_encode_overflow_raises(self):
+        with pytest.raises(ValueError):
+            analysis.encode_value(99999, "u8")
+
+    def test_supported_list(self):
+        names = analysis.supported_encodings()
+        assert "u8" in names and "f64_be" in names and len(names) == 14
+
+
+# ---------------------------------------------------------------------------
+# field_time_series
+# ---------------------------------------------------------------------------
+
+class TestFieldTimeSeries:
+    def test_decodes_each_frame(self):
+        frames = [position_frame(i, x=float(i), y=10.0, z=20.0) for i in range(4)]
+        out = analysis.field_time_series(frames, byte_offset=2, byte_length=4, encoding="f32_le")
+        assert out["decoded"] == 4
+        assert [r["value"] for r in out["rows"]] == [0.0, 1.0, 2.0, 3.0]
+        assert out["rows"][0]["frame_id"] == frames[0].id
+        assert "timestamp" in out["rows"][0] and "sequence_number" in out["rows"][0]
+
+    def test_byte_length_must_match_encoding(self):
+        with pytest.raises(ValueError):
+            analysis.field_time_series([make_frame(b"\x00\x00")], 0, 2, "u8")
+
+    def test_short_frames_skipped(self):
+        frames = [make_frame(b"\x01\x02\x03\x04", 0), make_frame(b"\x01", 1)]
+        out = analysis.field_time_series(frames, 0, 4, "u32_le")
+        assert out["decoded"] == 1 and out["skipped"] == 1
+
+
+# ---------------------------------------------------------------------------
+# bruteforce_numeric_layout
+# ---------------------------------------------------------------------------
+
+class TestBruteforceNumericLayout:
+    def test_finds_smooth_float_field(self):
+        # Three little-endian floats; the first sweeps smoothly, others constant.
+        frames = [position_frame(i, x=i * 0.5, y=10.0, z=20.0) for i in range(20)]
+        out = analysis.bruteforce_numeric_layout(frames, top_n=100)
+        assert out["size_bytes"] == 14
+        # The aligned, finite, smoothly-varying float should be among the
+        # candidates with a healthy score (bruteforce ranks overlapping
+        # windows too, so it need not be #1).
+        aligned = [
+            c for c in out["candidates"]
+            if c["offset"] == 2 and c["encoding"] == "f32_le"
+        ]
+        assert aligned
+        assert aligned[0]["has_non_finite"] is False
+        assert aligned[0]["score"] > 0.4
+
+    def test_constant_window_skipped(self):
+        # offset 0-1 is a constant 0xaabb prefix; offset 2-3 is a u16 counter.
+        frames = [make_frame(b"\xaa\xbb" + struct.pack("<H", i), i) for i in range(10)]
+        out = analysis.bruteforce_numeric_layout(frames)
+        offenc = {(c["offset"], c["encoding"]) for c in out["candidates"]}
+        # The fully-constant 2-byte prefix window carries no signal → skipped.
+        assert (0, "u16_le") not in offenc
+        # The real counter at offset 2 is a candidate.
+        assert (2, "u16_le") in offenc
+
+    def test_pin_size_bytes(self):
+        frames = [make_frame(bytes([i]) * 4, i) for i in range(6)]
+        frames += [make_frame(bytes([i]) * 8, i) for i in range(6)]
+        out = analysis.bruteforce_numeric_layout(frames, size_bytes=8)
+        assert out["size_bytes"] == 8
+
+    def test_empty(self):
+        out = analysis.bruteforce_numeric_layout([])
+        assert out["candidates"] == []
+
+
+# ---------------------------------------------------------------------------
+# group_by_field_value
+# ---------------------------------------------------------------------------
+
+class TestGroupByFieldValue:
+    def test_buckets_by_single_range(self):
+        frames = [
+            make_frame(b"\x01\xaa", 0),
+            make_frame(b"\x01\xbb", 1),
+            make_frame(b"\x02\xcc", 2),
+        ]
+        out = analysis.group_by_field_value(frames, [(0, 1)])
+        assert out["counts"] == {"01": 2, "02": 1}
+        assert out["groups"]["01"] == [frames[0].id, frames[1].id]
+
+    def test_multi_range_cooccurrence(self):
+        frames = [
+            make_frame(b"\xaa\x00\x00\x01", 0),
+            make_frame(b"\xaa\x00\x00\x02", 1),
+            make_frame(b"\xbb\x00\x00\x01", 2),
+        ]
+        out = analysis.group_by_field_value(frames, [(0, 1), (3, 1)])
+        assert out["bucket_count"] == 3
+        assert out["counts"]["aa01"] == 1
+
+    def test_short_frames_skipped(self):
+        frames = [make_frame(b"\x01\x02\x03", 0), make_frame(b"\x01", 1)]
+        out = analysis.group_by_field_value(frames, [(2, 1)])
+        assert out["skipped"] == 1
+
+    def test_empty_ranges_raises(self):
+        with pytest.raises(ValueError):
+            analysis.group_by_field_value([make_frame(b"\x00")], [])
+
+    def test_id_cap(self):
+        frames = [make_frame(b"\x01", i) for i in range(5)]
+        out = analysis.group_by_field_value(frames, [(0, 1)], max_ids_per_bucket=2)
+        assert len(out["groups"]["01"]) == 2
+        assert out["counts"]["01"] == 5
+
+
+# ---------------------------------------------------------------------------
+# diff_frames
+# ---------------------------------------------------------------------------
+
+class TestDiffFrames:
+    def test_per_byte_diff(self):
+        a = make_frame(b"\x01\x02\x03", 0)
+        b = make_frame(b"\x01\x09\x03", 1)
+        out = analysis.diff_frames(a, b)
+        assert out["differing_byte_count"] == 1
+        assert out["differing_bytes"][0] == {"offset": 1, "a_hex": "02", "b_hex": "09"}
+
+    def test_length_mismatch(self):
+        a = make_frame(b"\x01\x02", 0)
+        b = make_frame(b"\x01", 1)
+        out = analysis.diff_frames(a, b)
+        assert out["differing_bytes"][0]["b_hex"] is None
+
+    def test_field_delta(self):
+        a = make_frame(struct.pack("<I", 100), 0)
+        b = make_frame(struct.pack("<I", 175), 1)
+        out = analysis.diff_frames(a, b, field_decls=[{"offset": 0, "length": 4, "encoding": "u32_le"}])
+        d = out["field_deltas"][0]
+        assert d["value_a"] == 100 and d["value_b"] == 175 and d["delta"] == 75
+
+    def test_bad_field_decl_reports_error(self):
+        a = make_frame(b"\x00\x00", 0)
+        b = make_frame(b"\x00\x01", 1)
+        out = analysis.diff_frames(a, b, field_decls=[{"offset": 0, "length": 2, "encoding": "nope"}])
+        assert "error" in out["field_deltas"][0]
+
+
+# ---------------------------------------------------------------------------
+# detect_periodic_streams
+# ---------------------------------------------------------------------------
+
+class TestDetectPeriodicStreams:
+    def test_periodic_bucket(self):
+        frames = []
+        for i in range(15):
+            f = make_frame(b"\xaa\xbbheartbeat", i)
+            f.timestamp = 1000.0 + i * 1.0  # exactly 1s apart
+            frames.append(f)
+        out = analysis.detect_periodic_streams(frames)
+        bucket = out["buckets"][0]
+        assert bucket["is_periodic"] is True
+        assert abs(bucket["mean_interval"] - 1.0) < 1e-6
+        assert bucket["coefficient_of_variation"] < 0.2
+        assert out["periodic_count"] == 1
+
+    def test_jittery_not_periodic(self):
+        intervals = [0.1, 2.0, 0.05, 5.0, 0.3, 1.2, 0.02, 3.3, 0.5, 4.0, 0.1, 2.2]
+        frames = []
+        t = 1000.0
+        for i, dt in enumerate([0.0] + intervals):
+            t += dt
+            f = make_frame(b"\xaa\xbbx", i)
+            f.timestamp = t
+            frames.append(f)
+        out = analysis.detect_periodic_streams(frames)
+        assert out["buckets"][0]["is_periodic"] is False
+
+    def test_below_min_count(self):
+        frames = []
+        for i in range(5):
+            f = make_frame(b"\xaa\xbbz", i)
+            f.timestamp = 1000.0 + i
+            frames.append(f)
+        out = analysis.detect_periodic_streams(frames)
+        assert out["buckets"][0]["is_periodic"] is False  # count not > 10
+
+
+# ---------------------------------------------------------------------------
+# export_session_csv
+# ---------------------------------------------------------------------------
+
+class TestExportSessionCsv:
+    def test_basic_columns(self):
+        frames = [make_frame(struct.pack("<H", i) + b"\x07", i) for i in range(3)]
+        out = analysis.export_session_csv(
+            frames,
+            [{"name": "counter", "byte_offset": 0, "byte_length": 2, "encoding": "u16_le"}],
+        )
+        lines = out["csv"].strip().splitlines()
+        assert lines[0] == "frame_id,timestamp,sequence_number,direction,size,counter"
+        assert out["rows"] == 3
+        assert lines[1].split(",")[-1] == "0"
+        assert lines[3].split(",")[-1] == "2"
+
+    def test_message_filter_blanks_non_matching(self):
+        frames = [
+            make_frame(b"\x01" + struct.pack("<H", 42), 0),
+            make_frame(b"\x02" + struct.pack("<H", 99), 1),
+        ]
+        out = analysis.export_session_csv(
+            frames,
+            [{
+                "name": "val", "byte_offset": 1, "byte_length": 2, "encoding": "u16_le",
+                "message_filter": {"offset": 0, "hex": "01"},
+            }],
+        )
+        rows = out["csv"].strip().splitlines()
+        assert rows[1].split(",")[-1] == "42"   # matches filter
+        assert rows[2].split(",")[-1] == ""     # filtered out
+
+    def test_encoding_width_mismatch_raises(self):
+        with pytest.raises(ValueError):
+            analysis.export_session_csv(
+                [make_frame(b"\x00\x00")],
+                [{"name": "x", "byte_offset": 0, "byte_length": 1, "encoding": "u16_le"}],
+            )

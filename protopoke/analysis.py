@@ -41,6 +41,14 @@ The helpers are grouped by purpose:
         ``detect_compression_encryption``— high-entropy regions + known magic signatures.
         ``echo_detection``               — values sent in one direction that reappear in the other.
 
+    Field-type bruteforce / time series (compact ``u8`` / ``f32_le`` … encodings)
+        ``field_time_series``            — decode one (offset, length, encoding) field per frame.
+        ``bruteforce_numeric_layout``    — score every encoding at every offset.
+        ``group_by_field_value``         — bucket frames by the value at one or more ranges.
+        ``diff_frames``                  — per-byte diff of two frames + decoded field deltas.
+        ``detect_periodic_streams``      — flag buckets with periodic inter-arrival times.
+        ``export_session_csv``           — flatten a session to CSV given declared fields.
+
 All helpers are deliberately protocol-agnostic: no hard-coded magic bytes, no
 domain-specific value ranges, no game-protocol assumptions.
 """
@@ -1952,4 +1960,504 @@ def echo_detection(
         "frame_count":         n,
         "total_opportunities": sum(opp_counts.values()),
         "candidates":          candidates[:max_results],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Field-type bruteforce / time series
+# ---------------------------------------------------------------------------
+#
+# These helpers use a compact set of encoding names (``u8``, ``i16_le``,
+# ``f32_be`` …) distinct from the verbose ``decode_field`` type names.  They
+# back the field-hypothesis-testing MCP tools — decode a field as a time
+# series, score every (offset, encoding) pair, bucket by value, diff two
+# frames, find periodic streams, and export a session to CSV.
+
+# name -> (struct format string, width in bytes)
+_ENCODINGS: dict[str, tuple[str, int]] = {
+    "u8":     ("B",  1),
+    "i8":     ("b",  1),
+    "u16_le": ("<H", 2),
+    "u16_be": (">H", 2),
+    "i16_le": ("<h", 2),
+    "i16_be": (">h", 2),
+    "u32_le": ("<I", 4),
+    "u32_be": (">I", 4),
+    "i32_le": ("<i", 4),
+    "i32_be": (">i", 4),
+    "f32_le": ("<f", 4),
+    "f32_be": (">f", 4),
+    "f64_le": ("<d", 8),
+    "f64_be": (">d", 8),
+}
+
+_FLOAT_ENCODINGS = frozenset({"f32_le", "f32_be", "f64_le", "f64_be"})
+
+
+def supported_encodings() -> list[str]:
+    """Compact encoding names accepted by the field-bruteforce / time-series tools."""
+    return list(_ENCODINGS)
+
+
+def encoding_width(encoding: str) -> int:
+    """Width in bytes of an encoding.  Raises ValueError on an unknown name."""
+    try:
+        return _ENCODINGS[encoding][1]
+    except KeyError:
+        raise ValueError(
+            f"Unknown encoding {encoding!r}.  Valid: {supported_encodings()}"
+        )
+
+
+def decode_value(raw: bytes, encoding: str) -> Any:
+    """Decode a single numeric value from raw bytes using a compact encoding."""
+    try:
+        fmt, width = _ENCODINGS[encoding]
+    except KeyError:
+        raise ValueError(
+            f"Unknown encoding {encoding!r}.  Valid: {supported_encodings()}"
+        )
+    if len(raw) != width:
+        raise ValueError(f"encoding {encoding!r} needs {width} bytes, got {len(raw)}")
+    return struct.unpack(fmt, raw)[0]
+
+
+def encode_value(value: Any, encoding: str) -> bytes:
+    """Encode a numeric value into raw bytes using a compact encoding."""
+    try:
+        fmt, _ = _ENCODINGS[encoding]
+    except KeyError:
+        raise ValueError(
+            f"Unknown encoding {encoding!r}.  Valid: {supported_encodings()}"
+        )
+    coerced = float(value) if encoding in _FLOAT_ENCODINGS else int(value)
+    try:
+        return struct.pack(fmt, coerced)
+    except struct.error as exc:
+        raise ValueError(f"cannot encode {value!r} as {encoding}: {exc}")
+
+
+def _json_safe_num(x: Any) -> Any:
+    """Replace non-finite floats with a string so the value survives JSON."""
+    if isinstance(x, float) and not math.isfinite(x):
+        return "nan" if math.isnan(x) else ("inf" if x > 0 else "-inf")
+    return x
+
+
+def _round_safe(x: Any, ndigits: int = 6) -> Any:
+    """JSON-safe + round floats (for summary stats where precision is moot)."""
+    x = _json_safe_num(x)
+    return round(x, ndigits) if isinstance(x, float) else x
+
+
+def field_time_series(
+    frames:      list[Frame],
+    byte_offset: int,
+    byte_length: int,
+    encoding:    str,
+) -> dict:
+    """
+    Decode one ``(byte_offset, byte_length, encoding)`` field across every
+    frame as a time series.
+
+    ``byte_length`` must equal the encoding's native width.  Frames too short
+    for the field are skipped (counted in ``skipped``).
+
+    Returns ``{frame_count, decoded, skipped, byte_offset, byte_length,
+    encoding, rows: [{frame_id, timestamp, sequence_number, value}]}`` in
+    capture order.
+    """
+    width = encoding_width(encoding)
+    if byte_length != width:
+        raise ValueError(
+            f"encoding {encoding!r} is {width} bytes wide but byte_length={byte_length}"
+        )
+    rows: list[dict] = []
+    skipped = 0
+    for f in frames:
+        raw = f.raw_bytes[byte_offset:byte_offset + width]
+        if len(raw) < width:
+            skipped += 1
+            continue
+        value = struct.unpack(_ENCODINGS[encoding][0], raw)[0]
+        rows.append({
+            "frame_id":        f.id,
+            "timestamp":       f.timestamp,
+            "sequence_number": f.sequence_number,
+            "value":           _json_safe_num(value),
+        })
+    return {
+        "frame_count": len(frames),
+        "decoded":     len(rows),
+        "skipped":     skipped,
+        "byte_offset": byte_offset,
+        "byte_length": byte_length,
+        "encoding":    encoding,
+        "rows":        rows,
+    }
+
+
+def _dominant_size(frames: list[Frame]) -> Optional[int]:
+    """The frame size with the most frames (ties broken toward the larger size)."""
+    if not frames:
+        return None
+    sizes: Counter = Counter(len(f.raw_bytes) for f in frames)
+    return max(sizes.items(), key=lambda kv: (kv[1], kv[0]))[0]
+
+
+def _smoothness_and_monotonicity(values: list[float]) -> tuple[float, float]:
+    """
+    Return ``(smoothness, monotonic_fraction)``, both in ``[0, 1]``.
+
+    Smoothness rewards small successive deltas relative to the overall value
+    range (real-world coordinates / counters move in small steps); a series
+    of independent random draws scores low.  ``monotonic_fraction`` is the
+    larger of the non-decreasing and non-increasing step fractions.
+    """
+    if len(values) < 2:
+        return 0.0, 0.0
+    rng = max(values) - min(values)
+    deltas = [values[i + 1] - values[i] for i in range(len(values) - 1)]
+    if rng == 0:
+        smooth = 0.0
+    else:
+        mean_abs = sum(abs(d) for d in deltas) / len(deltas)
+        smooth = max(0.0, 1.0 - mean_abs / rng)
+    non_dec = sum(1 for d in deltas if d >= 0) / len(deltas)
+    non_inc = sum(1 for d in deltas if d <= 0) / len(deltas)
+    return smooth, max(non_dec, non_inc)
+
+
+def bruteforce_numeric_layout(
+    frames:     list[Frame],
+    size_bytes: Optional[int]       = None,
+    max_sample: int                 = 200,
+    top_n:      int                 = 20,
+    encodings:  Optional[list[str]] = None,
+) -> dict:
+    """
+    Try every common numeric encoding at every offset on a sample of frames
+    from one packet-size bucket, and score each ``(offset, encoding)`` pair
+    for plausibility as a real field.
+
+    The bucket defaults to the dominant frame size (most frames); pass
+    ``size_bytes`` to pin a specific size.  At most ``max_sample`` frames are
+    used, in capture order, so adjacency-based smoothness is meaningful.
+
+    Each candidate is scored on three protocol-agnostic signals:
+
+    - **float validity** — float encodings that decode to NaN/Inf in any
+      sampled frame score 0 (and are flagged ``has_non_finite``).
+    - **high-byte stability** — low Shannon entropy of the most-significant
+      byte (real coordinates/counters don't span the full type range).
+    - **smoothness / monotonicity** — small successive deltas relative to the
+      value range, plus a monotonic-step bonus.
+
+    Constant offsets (a single distinct value) carry no numeric signal and
+    are skipped.
+
+    Returns ``{size_bytes, sample_size, encodings_tried, candidates}`` sorted
+    by descending ``score`` and capped at ``top_n``.  Each candidate has
+    ``offset, encoding, score, distinct_values, min, max, first_values,
+    high_byte_entropy_bits, smoothness, monotonic_fraction, has_non_finite``.
+    """
+    if not frames:
+        return {"size_bytes": None, "sample_size": 0, "candidates": []}
+    target_size = size_bytes if size_bytes is not None else _dominant_size(frames)
+    bucket = [f for f in frames if len(f.raw_bytes) == target_size]
+    if not bucket:
+        return {"size_bytes": target_size, "sample_size": 0, "candidates": []}
+    sample = bucket[:max(0, max_sample)]
+
+    enc_names = encodings or list(_ENCODINGS)
+    candidates: list[dict] = []
+    for enc in enc_names:
+        if enc not in _ENCODINGS:
+            continue
+        fmt, width = _ENCODINGS[enc]
+        is_float = enc in _FLOAT_ENCODINGS
+        little_endian = fmt.startswith("<")  # width-1 fmt is "B"/"b" → msb is the byte
+        for off in range(0, target_size - width + 1):
+            raws = [f.raw_bytes[off:off + width] for f in sample]
+            try:
+                values = [struct.unpack(fmt, r)[0] for r in raws]
+            except struct.error:
+                continue
+            if len(set(values)) <= 1:
+                continue  # constant — no numeric signal
+
+            has_non_finite = is_float and any(
+                isinstance(v, float) and not math.isfinite(v) for v in values
+            )
+            msb = [(r[-1] if little_endian else r[0]) for r in raws]
+            hb_entropy = _shannon_entropy(msb)
+            hb_score = 1.0 - hb_entropy / 8.0
+
+            if has_non_finite:
+                score = 0.0
+                smooth = monotonic = 0.0
+            else:
+                smooth, monotonic = _smoothness_and_monotonicity([float(v) for v in values])
+                score = 0.4 * smooth + 0.4 * hb_score + 0.2 * monotonic
+
+            finite = [v for v in values
+                      if not (isinstance(v, float) and not math.isfinite(v))]
+            candidates.append({
+                "offset":                 off,
+                "encoding":               enc,
+                "score":                  round(score, 4),
+                "distinct_values":        len(set(values)),
+                "min":                    _round_safe(min(finite)) if finite else None,
+                "max":                    _round_safe(max(finite)) if finite else None,
+                "first_values":           [_round_safe(v) for v in values[:5]],
+                "high_byte_entropy_bits": round(hb_entropy, 4),
+                "smoothness":             round(smooth, 4),
+                "monotonic_fraction":     round(monotonic, 4),
+                "has_non_finite":         has_non_finite,
+            })
+
+    candidates.sort(key=lambda c: -c["score"])
+    return {
+        "size_bytes":      target_size,
+        "sample_size":     len(sample),
+        "encodings_tried": [e for e in enc_names if e in _ENCODINGS],
+        "candidates":      candidates[:top_n],
+    }
+
+
+def group_by_field_value(
+    frames:             list[Frame],
+    ranges:             list[tuple[int, int]],
+    max_ids_per_bucket: int = 1000,
+) -> dict:
+    """
+    Bucket frames by the concatenated raw value at one or more
+    ``(offset, length)`` ranges.
+
+    Surfaces flag fields and joint distributions across offsets (e.g. a pair
+    of input-axis bytes) that per-offset entropy alone can't show.  Frames too
+    short for any range are skipped (counted in ``skipped``).
+
+    Returns ``{frame_count, skipped, ranges, bucket_count, counts:
+    {key_hex: n}, groups: {key_hex: [frame_ids]}}`` ordered by descending
+    count.  Each bucket's id list is capped at ``max_ids_per_bucket``.
+    """
+    if not ranges:
+        raise ValueError("ranges must be a non-empty list of (offset, length)")
+    norm: list[tuple[int, int]] = []
+    for r in ranges:
+        off, ln = int(r[0]), int(r[1])
+        if ln <= 0:
+            raise ValueError(f"range length must be > 0: {r!r}")
+        norm.append((off, ln))
+
+    groups: dict[str, list[str]] = defaultdict(list)
+    counts: dict[str, int] = defaultdict(int)
+    skipped = 0
+    for f in frames:
+        parts: list[bytes] = []
+        ok = True
+        for off, ln in norm:
+            chunk = f.raw_bytes[off:off + ln]
+            if len(chunk) < ln:
+                ok = False
+                break
+            parts.append(chunk)
+        if not ok:
+            skipped += 1
+            continue
+        key = b"".join(parts).hex()
+        counts[key] += 1
+        if len(groups[key]) < max_ids_per_bucket:
+            groups[key].append(f.id)
+
+    ordered = sorted(counts, key=lambda k: -counts[k])
+    return {
+        "frame_count":  len(frames),
+        "skipped":      skipped,
+        "ranges":       [{"offset": o, "length": l} for o, l in norm],
+        "bucket_count": len(counts),
+        "counts":       {k: counts[k] for k in ordered},
+        "groups":       {k: groups[k] for k in ordered},
+    }
+
+
+def diff_frames(
+    frame_a:        Frame,
+    frame_b:        Frame,
+    field_decls:    Optional[list[dict]] = None,
+    max_diff_bytes: int                  = 512,
+) -> dict:
+    """
+    Per-byte diff of two frames, plus decoded deltas for declared fields.
+
+    ``field_decls`` is an optional list of ``{offset, length, encoding}``
+    dicts; for each one the value is decoded in both frames and the delta
+    reported (regardless of whether the bytes differ).
+
+    Returns ``{frame_a_id, frame_b_id, size_a, size_b, differing_byte_count,
+    differing_bytes: [{offset, a_hex, b_hex}], differing_bytes_truncated,
+    field_deltas: [{offset, length, encoding, value_a, value_b, delta}]}``.
+    """
+    a, b = frame_a.raw_bytes, frame_b.raw_bytes
+    n = max(len(a), len(b))
+    differing: list[dict] = []
+    for i in range(n):
+        va = a[i] if i < len(a) else None
+        vb = b[i] if i < len(b) else None
+        if va != vb:
+            differing.append({
+                "offset": i,
+                "a_hex":  f"{va:02x}" if va is not None else None,
+                "b_hex":  f"{vb:02x}" if vb is not None else None,
+            })
+
+    field_deltas: list[dict] = []
+    for decl in (field_decls or []):
+        off, ln, enc = int(decl["offset"]), int(decl["length"]), str(decl["encoding"])
+        entry: dict[str, Any] = {"offset": off, "length": ln, "encoding": enc}
+        ra, rb = a[off:off + ln], b[off:off + ln]
+        try:
+            va_dec = decode_value(ra, enc) if len(ra) == ln else None
+            vb_dec = decode_value(rb, enc) if len(rb) == ln else None
+        except ValueError as exc:
+            entry["error"] = str(exc)
+            field_deltas.append(entry)
+            continue
+        delta: Any = None
+        if (va_dec is not None and vb_dec is not None
+                and not (isinstance(va_dec, float) and not math.isfinite(va_dec))
+                and not (isinstance(vb_dec, float) and not math.isfinite(vb_dec))):
+            delta = vb_dec - va_dec
+        entry["value_a"] = _json_safe_num(va_dec) if va_dec is not None else None
+        entry["value_b"] = _json_safe_num(vb_dec) if vb_dec is not None else None
+        entry["delta"]   = _json_safe_num(delta) if delta is not None else None
+        field_deltas.append(entry)
+
+    return {
+        "frame_a_id":                frame_a.id,
+        "frame_b_id":                frame_b.id,
+        "size_a":                    len(a),
+        "size_b":                    len(b),
+        "differing_byte_count":      len(differing),
+        "differing_bytes":           differing[:max_diff_bytes],
+        "differing_bytes_truncated": len(differing) > max_diff_bytes,
+        "field_deltas":              field_deltas,
+    }
+
+
+def detect_periodic_streams(
+    frames:            list[Frame],
+    bucket_prefix_len: int   = 2,
+    cv_threshold:      float = 0.2,
+    min_count:         int   = 10,
+) -> dict:
+    """
+    Group frames into ``(prefix_hex, size_bytes)`` buckets (same key as
+    ``frame_stats``) and report whether each bucket's inter-arrival times look
+    periodic — the signature of heartbeats, position pings, and keepalives.
+
+    For each bucket the timestamps are sorted and the inter-arrival intervals
+    summarised: ``mean_interval``, ``std_interval``, and
+    ``coefficient_of_variation`` (std / mean).  ``is_periodic`` is True when
+    ``cv < cv_threshold`` and ``count > min_count``.
+
+    Returns ``{frame_count, periodic_count, buckets: [{prefix_hex, size_bytes,
+    count, mean_interval, std_interval, coefficient_of_variation,
+    is_periodic}]}`` ordered by descending count.
+    """
+    grouped: dict[tuple[str, int], list[Frame]] = defaultdict(list)
+    for f in frames:
+        grouped[_bucket_key(f, bucket_prefix_len)].append(f)
+
+    buckets: list[dict] = []
+    for (pfx, sz), bucket in sorted(grouped.items(), key=lambda kv: -len(kv[1])):
+        times = sorted(f.timestamp for f in bucket)
+        count = len(times)
+        intervals = [times[i + 1] - times[i] for i in range(len(times) - 1)]
+        mean = std = cv = None
+        if intervals:
+            mean = sum(intervals) / len(intervals)
+            var = sum((x - mean) ** 2 for x in intervals) / len(intervals)
+            std = math.sqrt(var)
+            cv = std / mean if mean > 0 else None
+        is_periodic = cv is not None and cv < cv_threshold and count > min_count
+        buckets.append({
+            "prefix_hex":                pfx,
+            "size_bytes":                sz,
+            "count":                     count,
+            "mean_interval":             round(mean, 6) if mean is not None else None,
+            "std_interval":              round(std, 6) if std is not None else None,
+            "coefficient_of_variation":  round(cv, 6) if cv is not None else None,
+            "is_periodic":               is_periodic,
+        })
+
+    return {
+        "frame_count":    len(frames),
+        "periodic_count": sum(1 for b in buckets if b["is_periodic"]),
+        "buckets":        buckets,
+    }
+
+
+def export_session_csv(
+    frames: list[Frame],
+    fields: list[dict],
+) -> dict:
+    """
+    Flatten a session to CSV: one row per frame, one column per declared field
+    plus ``frame_id, timestamp, sequence_number, direction, size``.
+
+    Each field is a dict ``{name, byte_offset, byte_length, encoding}`` and may
+    carry an optional ``message_filter`` — a byte pattern (``{offset, hex}`` or
+    a list of them) that restricts the column to matching frames; non-matching
+    frames get a blank cell, as do frames too short for the field.
+
+    Returns ``{frame_count, rows, columns, csv}`` where ``csv`` is the rendered
+    text.
+    """
+    import csv as _csv
+    import io as _io
+
+    norm: list[tuple[str, int, int, str, list[tuple[int, bytes]]]] = []
+    for fd in fields:
+        name = str(fd["name"])
+        off, ln, enc = int(fd["byte_offset"]), int(fd["byte_length"]), str(fd["encoding"])
+        width = encoding_width(enc)
+        if ln != width:
+            raise ValueError(
+                f"field {name!r}: encoding {enc!r} is {width} bytes wide, byte_length={ln}"
+            )
+        patterns: list[tuple[int, bytes]] = []
+        mf = fd.get("message_filter")
+        if mf:
+            for p in (mf if isinstance(mf, list) else [mf]):
+                patterns.append((int(p["offset"]), _parse_hex(str(p["hex"]))))
+        norm.append((name, off, ln, enc, patterns))
+
+    header = ["frame_id", "timestamp", "sequence_number", "direction", "size"]
+    header += [nf[0] for nf in norm]
+    buf = _io.StringIO()
+    writer = _csv.writer(buf)
+    writer.writerow(header)
+
+    for f in frames:
+        raw = f.raw_bytes
+        row: list[Any] = [f.id, f.timestamp, f.sequence_number, f.direction.value, len(raw)]
+        for (name, off, ln, enc, patterns) in norm:
+            cell: Any = ""
+            if all(raw[po:po + len(pr)] == pr for po, pr in patterns):
+                chunk = raw[off:off + ln]
+                if len(chunk) == ln:
+                    try:
+                        cell = _json_safe_num(decode_value(chunk, enc))
+                    except ValueError:
+                        cell = ""
+            row.append(cell)
+        writer.writerow(row)
+
+    return {
+        "frame_count": len(frames),
+        "rows":        len(frames),
+        "columns":     header,
+        "csv":         buf.getvalue(),
     }

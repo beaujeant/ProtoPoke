@@ -54,7 +54,14 @@ Tools are grouped by concern:
                               cluster_frames, filter_frames, decode_field,
                               compare_frames, diff_frames_in_bucket,
                               analyze_byte_ranges, find_length_fields,
-                              offset_correlations
+                              offset_correlations, find_constant_byte_sequences,
+                              align_frames, extract_strings, detect_tlv,
+                              detect_checksums_crcs, detect_timestamps,
+                              detect_compression_encryption, echo_detection,
+                              analyze_field_correlation, bruteforce_numeric_layout,
+                              group_by_field_value, diff_frames,
+                              bisect_field_meaning, export_session_csv,
+                              detect_periodic_streams
     Authoring guides        : list_authoring_guides, get_authoring_guide,
                               get_script_load_instructions
                               (guides also exposed as ``protopoke://guides``
@@ -3051,6 +3058,336 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
             min_coverage=min_coverage,
             max_results=max_results,
         )
+
+    # ------------------------------------------------------------------ #
+    # Field-type bruteforce / time series                                  #
+    # ------------------------------------------------------------------ #
+    # Compact encoding names: u8, i8, u16_le/u16_be, i16_le/i16_be,
+    # u32_le/u32_be, i32_le/i32_be, f32_le/f32_be, f64_le/f64_be.
+
+    _FINDING_HINT = (
+        "If this confirms a field interpretation, consider recording it as a "
+        "finding via add_finding so it persists in the knowledge base."
+    )
+
+    @mcp.tool()
+    def analyze_field_correlation(
+        session_id:  str,
+        byte_offset: int,
+        byte_length: int,
+        encoding:    str,
+        direction:   Optional[str] = None,
+        size_bytes:  Optional[int] = None,
+    ) -> dict:
+        """
+        Decode one field as a time series across a session's frames.
+
+        Pull ``raw_bytes[byte_offset:byte_offset+byte_length]`` from every
+        matching frame and decode it with ``encoding`` (one of ``u8``, ``i8``,
+        ``u16_le``, ``u16_be``, ``i16_le``, ``i16_be``, ``u32_le``, ``u32_be``,
+        ``i32_le``, ``i32_be``, ``f32_le``, ``f32_be``, ``f64_le``, ``f64_be``).
+        ``byte_length`` must equal the encoding width.
+
+        Saves writing a throwaway script to test a field-type hypothesis: one
+        row per frame with ``frame_id``, ``timestamp``, ``sequence_number`` and
+        the decoded ``value``, in capture order.  Use ``direction`` and
+        ``size_bytes`` to scope to one packet type.
+        """
+        try:
+            frames = _select_session_frames(
+                session_id, direction, size_bytes, None, None, None
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        try:
+            result = analysis.field_time_series(
+                frames, byte_offset, byte_length, encoding
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        result["suggestion"] = _FINDING_HINT
+        return result
+
+    @mcp.tool()
+    def bruteforce_numeric_layout(
+        session_id: str,
+        size_bytes: Optional[int] = None,
+        direction:  Optional[str] = None,
+        max_sample: int           = 200,
+        top_n:      int           = 20,
+    ) -> dict:
+        """
+        Score every numeric encoding at every offset to guess field types.
+
+        Runs on a sample of frames from one packet-size bucket (the dominant
+        size by default, or ``size_bytes`` if given) and tries each encoding
+        (``u8`` … ``f64_be``) at every offset that fits.  Each ``(offset,
+        encoding)`` pair is scored on:
+
+        - **float validity** — float encodings with any NaN/Inf score 0;
+        - **high-byte stability** — low entropy in the most-significant byte
+          (real coordinates/counters don't span the full type range);
+        - **smoothness / monotonicity** — small successive deltas between
+          temporally adjacent frames.
+
+        Constant offsets are skipped.  Returns the top ``top_n`` candidates
+        sorted by score — the automated version of guessing field types by
+        hand.  This is usually the fastest first pass on a new fixed-size
+        packet type.
+        """
+        try:
+            frames = _select_session_frames(
+                session_id, direction, None, None, None, None
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        result = analysis.bruteforce_numeric_layout(
+            frames, size_bytes=size_bytes, max_sample=max_sample, top_n=top_n
+        )
+        if result.get("candidates"):
+            result["suggestion"] = _FINDING_HINT
+        return result
+
+    @mcp.tool()
+    def group_by_field_value(
+        session_id:         str,
+        ranges:             list[dict],
+        direction:          Optional[str] = None,
+        size_bytes:         Optional[int] = None,
+        max_ids_per_bucket: int           = 1000,
+    ) -> dict:
+        """
+        Bucket frames by the concatenated value at one or more byte ranges.
+
+        ``ranges`` is a list of ``{"offset": int, "length": int}`` dicts; the
+        raw bytes at all ranges are concatenated to form each frame's bucket
+        key.  Surfaces flag fields and joint distributions across two offsets
+        (e.g. a pair of input-axis bytes) that per-offset entropy can't show.
+
+        Returns ``counts`` (``{key_hex: n}``) and ``groups``
+        (``{key_hex: [frame_ids]}``), ordered by descending count.  Frames too
+        short for a range are skipped.
+        """
+        norm: list[tuple[int, int]] = []
+        for r in ranges:
+            try:
+                norm.append((int(r["offset"]), int(r["length"])))
+            except (KeyError, TypeError, ValueError) as exc:
+                return {"error": f"Invalid range {r!r}: {exc}"}
+        try:
+            frames = _select_session_frames(
+                session_id, direction, size_bytes, None, None, None
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        try:
+            result = analysis.group_by_field_value(
+                frames, norm, max_ids_per_bucket=max_ids_per_bucket
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        result["suggestion"] = _FINDING_HINT
+        return result
+
+    @mcp.tool()
+    def diff_frames(
+        session_id:     str,
+        frame_id_a:     str,
+        frame_id_b:     str,
+        field_decls:    Optional[list[dict]] = None,
+        max_diff_bytes: int                  = 512,
+    ) -> dict:
+        """
+        Per-byte diff of two frames, plus decoded deltas for declared fields.
+
+        Returns every differing byte (offset + both hex values).  Optionally
+        pass ``field_decls`` — a list of ``{"offset", "length", "encoding"}``
+        dicts — to also get the decoded value in each frame and the delta for
+        those fields (``encoding`` is one of ``u8`` … ``f64_be``).
+
+        Answers "what changed between this frame and the next?" directly.
+        """
+        session = api.get_session(session_id)
+        if session is None:
+            return {"error": f"Session {session_id} not found"}
+        fa = next((f for f in session.frames if f.id == frame_id_a), None)
+        fb = next((f for f in session.frames if f.id == frame_id_b), None)
+        if fa is None:
+            return {"error": f"frame_id_a={frame_id_a} not found in session"}
+        if fb is None:
+            return {"error": f"frame_id_b={frame_id_b} not found in session"}
+        try:
+            result = analysis.diff_frames(
+                fa, fb, field_decls=field_decls, max_diff_bytes=max_diff_bytes
+            )
+        except (ValueError, KeyError, TypeError) as exc:
+            return {"error": f"Invalid field declaration: {exc}"}
+        if result.get("field_deltas"):
+            result["suggestion"] = _FINDING_HINT
+        return result
+
+    @mcp.tool()
+    async def bisect_field_meaning(
+        forge_session_id: str,
+        base_frame_hex:   str,
+        byte_offset:      int,
+        byte_length:      int,
+        encoding:         str,
+        candidate_values: Optional[list[float]] = None,
+        value_range:      Optional[dict]        = None,
+        receive_timeout:  Optional[float]       = None,
+    ) -> dict:
+        """
+        Sweep a field across candidate values and capture the server response.
+
+        For each candidate, the field at ``byte_offset`` (``byte_length`` bytes,
+        decoded with ``encoding`` — ``u8`` … ``f64_be``) in ``base_frame_hex``
+        is overwritten and the resulting frame is sent over the persistent
+        forge session ``forge_session_id`` (open one with
+        ``open_forge_session``).  Confirms a field's meaning by observation
+        rather than inference — the natural counterpart to
+        ``replay_with_field_edits``.
+
+        Provide candidates either as ``candidate_values`` (a list of numbers)
+        or ``value_range`` (``{"start", "stop", "step"}``; ``step`` defaults to
+        1, ``stop`` exclusive).  Capped at 256 candidates.
+
+        Returns ``{ok, results: {candidate: response_bytes_hex}, errors:
+        {candidate: message}}``.
+        """
+        try:
+            base = bytes.fromhex(base_frame_hex)
+        except ValueError as exc:
+            return {"ok": False, "error": f"Invalid base_frame_hex: {exc}"}
+        try:
+            width = analysis.encoding_width(encoding)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if byte_length != width:
+            return {"ok": False, "error":
+                    f"encoding {encoding!r} is {width} bytes wide but byte_length={byte_length}"}
+        if byte_offset < 0 or byte_offset + width > len(base):
+            return {"ok": False, "error": "field range is outside the base frame"}
+
+        values: list = list(candidate_values or [])
+        if value_range:
+            try:
+                start = value_range["start"]
+                stop = value_range["stop"]
+                step = value_range.get("step", 1)
+            except (KeyError, TypeError) as exc:
+                return {"ok": False, "error": f"Invalid value_range: {exc}"}
+            if step == 0:
+                return {"ok": False, "error": "value_range step must be non-zero"}
+            v = start
+            while (step > 0 and v < stop) or (step < 0 and v > stop):
+                values.append(v)
+                v += step
+                if len(values) > 256:
+                    break
+        if not values:
+            return {"ok": False, "error": "provide candidate_values or value_range"}
+        if len(values) > 256:
+            return {"ok": False, "error": f"too many candidates ({len(values)}); cap is 256"}
+
+        results: dict[str, Optional[str]] = {}
+        errors: dict[str, str] = {}
+        for cv in values:
+            key = str(cv)
+            try:
+                field_bytes = analysis.encode_value(cv, encoding)
+            except ValueError as exc:
+                errors[key] = f"encode failed: {exc}"
+                continue
+            mutated = base[:byte_offset] + field_bytes + base[byte_offset + width:]
+            try:
+                res = await api.send_on_forge_session(
+                    session_id=forge_session_id,
+                    data=mutated,
+                    receive_timeout=receive_timeout,
+                )
+            except Exception as exc:
+                errors[key] = str(exc)
+                continue
+            if res.success:
+                results[key] = res.received_bytes.hex()
+            else:
+                results[key] = None
+                errors[key] = res.error or "send failed"
+
+        return {
+            "ok":         True,
+            "results":    results,
+            "errors":     errors,
+            "suggestion": _FINDING_HINT,
+        }
+
+    @mcp.tool()
+    def export_session_csv(
+        session_id: str,
+        fields:     list[dict],
+        direction:  Optional[str] = None,
+    ) -> dict:
+        """
+        Flatten a session to CSV for external plotting / notebooks.
+
+        ``fields`` is a list of declared columns, each
+        ``{"name", "byte_offset", "byte_length", "encoding"}`` (encoding one of
+        ``u8`` … ``f64_be``) with an optional ``"message_filter"`` byte pattern
+        (``{"offset", "hex"}`` or a list of them) that restricts the column to
+        matching frames.
+
+        Returns ``{frame_count, rows, columns, csv}`` — one row per frame with
+        ``frame_id, timestamp, sequence_number, direction, size`` followed by
+        one column per declared field.  Cells are blank where a frame is too
+        short or fails its ``message_filter``.
+        """
+        try:
+            frames = _select_session_frames(
+                session_id, direction, None, None, None, None
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        try:
+            return analysis.export_session_csv(frames, fields)
+        except (ValueError, KeyError, TypeError) as exc:
+            return {"error": f"Invalid field declaration: {exc}"}
+
+    @mcp.tool()
+    def detect_periodic_streams(
+        session_id:        str,
+        direction:         Optional[str] = None,
+        bucket_prefix_len: int           = 2,
+        cv_threshold:      float         = 0.2,
+        min_count:         int           = 10,
+    ) -> dict:
+        """
+        Flag packet-type buckets whose inter-arrival times look periodic.
+
+        Groups frames by ``(prefix_hex, size_bytes)`` (same key as
+        ``get_frame_stats``) and, for each bucket, reports the mean and
+        standard deviation of the inter-arrival intervals, their coefficient of
+        variation, and ``is_periodic`` (``cv < cv_threshold`` and
+        ``count > min_count``).
+
+        Surfaces heartbeats, position pings, and keepalives — usually the entry
+        point to reverse-engineering a new protocol.
+        """
+        try:
+            frames = _select_session_frames(
+                session_id, direction, None, None, None, None
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        result = analysis.detect_periodic_streams(
+            frames,
+            bucket_prefix_len=bucket_prefix_len,
+            cv_threshold=cv_threshold,
+            min_count=min_count,
+        )
+        if result.get("periodic_count"):
+            result["suggestion"] = _FINDING_HINT
+        return result
 
     # ------------------------------------------------------------------ #
     # Protocol definition — READ-ONLY                                       #
