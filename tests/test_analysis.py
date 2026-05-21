@@ -211,6 +211,28 @@ class TestCompareTwoFrames:
         assert out["size_a"] == 2
         assert out["size_b"] == 4
 
+    def test_side_by_side_omits_b_hex_on_identical_rows(self):
+        a = make_frame(b"\x01\x02\x03", 0)
+        b = make_frame(b"\x01\x02\x03", 1)
+        out = analysis.compare_two_frames(a, b)
+        assert out["side_by_side"]  # non-empty
+        for row in out["side_by_side"]:
+            assert row["differs"] is False
+            # identical row: b_hex omitted (it equals a_hex — lossless)
+            assert "b_hex" not in row
+
+    def test_side_by_side_includes_b_hex_only_on_differing_rows(self):
+        a = make_frame(bytes(20), 0)             # 20 zero bytes -> 2 rows
+        bb = bytearray(20)
+        bb[0] = 0xFF                              # differs only in the first row
+        b = make_frame(bytes(bb), 1)
+        out = analysis.compare_two_frames(a, b)
+        rows = {r["offset"]: r for r in out["side_by_side"]}
+        assert rows[0]["differs"] is True
+        assert "b_hex" in rows[0] and rows[0]["b_hex"] != rows[0]["a_hex"]
+        assert rows[16]["differs"] is False
+        assert "b_hex" not in rows[16]            # identical row -> b == a
+
 
 # ---------------------------------------------------------------------------
 # diff_bucket

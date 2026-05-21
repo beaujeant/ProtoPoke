@@ -239,6 +239,69 @@ class TestNotesCRUD:
 
 
 # ---------------------------------------------------------------------------
+# List-view compaction (token cost) — full record stays available via get_*
+# ---------------------------------------------------------------------------
+
+class TestListCompaction:
+    def test_findings_long_description_previewed_full_via_get(self, mcp_server):
+        add = tool(mcp_server, "add_finding")
+        long_desc = "word " * 200  # ~1000 chars
+        fid = add(title="t", description=long_desc,
+                  status="hypothesis", confidence="low")["finding"]["id"]
+        row = tool(mcp_server, "list_findings")()[0]
+        assert row["description_truncated"] is True
+        assert len(row["description"]) < len(long_desc)
+        # full text recoverable, and not flagged as truncated
+        full = tool(mcp_server, "get_finding")(fid)
+        assert full["description"] == long_desc
+        assert "description_truncated" not in full
+
+    def test_findings_short_description_kept_intact(self, mcp_server):
+        add = tool(mcp_server, "add_finding")
+        add(title="t", description="short claim", status="hypothesis")
+        row = tool(mcp_server, "list_findings")()[0]
+        assert row["description"] == "short claim"
+        assert "description_truncated" not in row
+
+    def test_findings_evidence_ids_become_count_full_via_get(self, mcp_server):
+        add = tool(mcp_server, "add_finding")
+        out = add(title="t", evidence_frame_ids=["a", "b", "c"])
+        fid = out["finding"]["id"]
+        row = tool(mcp_server, "list_findings")()[0]
+        assert row["evidence_frame_count"] == 3
+        assert "evidence_frame_ids" not in row
+        full = tool(mcp_server, "get_finding")(fid)
+        assert full["evidence_frame_ids"] == ["a", "b", "c"]
+
+    def test_findings_null_scope_fields_omitted_but_forwarder_kept(self, mcp_server):
+        add = tool(mcp_server, "add_finding")
+        add(title="t", message_name="LoginRequest")  # other scope fields null
+        row = tool(mcp_server, "list_findings")()[0]
+        assert row["message_name"] == "LoginRequest"
+        assert "protocol_name" not in row
+        assert "field_name" not in row
+        # forwarder_id / forwarder_name are always present (callers rely on it)
+        assert "forwarder_id" in row
+        assert "forwarder_name" in row
+
+    def test_notes_long_body_previewed_full_via_get(self, mcp_server):
+        add = tool(mcp_server, "add_note")
+        long_body = "a line of notes\n" * 60  # ~960 chars
+        nid = add(title="n", body_md=long_body)["note"]["id"]
+        row = tool(mcp_server, "list_notes")()[0]
+        assert row["body_truncated"] is True
+        assert len(row["body_md"]) < len(long_body)
+        assert tool(mcp_server, "get_note")(nid)["body_md"] == long_body
+
+    def test_notes_short_body_kept_intact(self, mcp_server):
+        add = tool(mcp_server, "add_note")
+        add(title="n", body_md="* just one line")
+        row = tool(mcp_server, "list_notes")()[0]
+        assert row["body_md"] == "* just one line"
+        assert "body_truncated" not in row
+
+
+# ---------------------------------------------------------------------------
 # Schema tool
 # ---------------------------------------------------------------------------
 

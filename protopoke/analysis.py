@@ -346,7 +346,9 @@ def compare_two_frames(frame_a: Frame, frame_b: Frame) -> dict:
     Returns:
         size_a, size_b, common_prefix_len, common_suffix_len,
         differences:   [{offset, value_a_hex, value_b_hex, delta_as_int}],
-        side_by_side:  list of {offset, a_hex, b_hex, differs} rows (16 bytes each).
+        side_by_side:  list of 16-byte rows {offset, a_hex, differs[, b_hex]}.
+                       ``b_hex`` is included only on rows where the two frames
+                       differ; when absent the row is identical (b_hex == a_hex).
     """
     a = frame_a.raw_bytes
     b = frame_b.raw_bytes
@@ -371,12 +373,18 @@ def compare_two_frames(frame_a: Frame, frame_b: Frame) -> dict:
     for off in range(0, n, 16):
         a_chunk = a[off:off + 16]
         b_chunk = b[off:off + 16]
-        side_by_side.append({
+        differs = a_chunk != b_chunk
+        row: dict[str, Any] = {
             "offset":  off,
             "a_hex":   _hex_grouped(a_chunk),
-            "b_hex":   _hex_grouped(b_chunk),
-            "differs": a_chunk != b_chunk,
-        })
+            "differs": differs,
+        }
+        # b_hex is redundant on identical rows (it equals a_hex); emit it only
+        # where the frames actually differ. Lossless — halves the side-by-side
+        # view for a diff between two similar frames.
+        if differs:
+            row["b_hex"] = _hex_grouped(b_chunk)
+        side_by_side.append(row)
 
     # Common prefix / suffix
     prefix = 0
