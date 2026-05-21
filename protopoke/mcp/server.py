@@ -135,7 +135,26 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         nonlocal api
         api = new_api
 
-    mcp = FastMCP(name)
+    instructions = (
+        "ProtoPoke is a TCP/UDP interception proxy for reverse-engineering "
+        "binary network protocols, with session capture, frame inspection, "
+        "replay (forge), and tampering.\n"
+        "\n"
+        "Start every session by reading the existing knowledge base before "
+        "re-running analysis: call list_findings(protocol_name=...) (or scope "
+        "with forwarder_id=...) to recover what prior sessions already "
+        "established, and list_notes() for cross-cutting context. Build on "
+        "that prior state instead of rediscovering it.\n"
+        "\n"
+        "Record what you learn as you go: use findings for concrete, scoped "
+        "claims about the protocol (a field's meaning, a message layout, a "
+        "length/CRC relationship — each with a status and supporting frame "
+        "IDs), and use notes for cross-cutting context that does not fit one "
+        "field or message (open questions, test-setup reminders, overall "
+        "hypotheses about the protocol)."
+    )
+
+    mcp = FastMCP(name, instructions=instructions)
 
     # ------------------------------------------------------------------ #
     # Authoring guides                                                      #
@@ -3558,6 +3577,18 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         """
         Record a new finding in the knowledge base.
 
+        Use a **finding** (not a note) for a concrete, scoped claim about the
+        protocol — something that is true or false about the bytes on the
+        wire and that you can pin to a location and back with evidence.
+        Examples: "byte 0 is a message-type tag", "bytes 4-5 are a big-endian
+        length covering the payload", "the trailing 2 bytes are a CRC16 over
+        the header".  Give it a ``status`` (hypothesis until you have
+        evidence, then confirmed or ruled_out), a ``confidence``, the
+        tightest scope you can (protocol / message / field / byte range), and
+        the frame IDs that support or refute it.  For broad context that does
+        not belong to one field or message — open questions, test-setup
+        notes, overall protocol hypotheses — use ``add_note`` instead.
+
         The finding is always attributed to the AI (``author="ai"``) and
         starts unlocked.  Scope fields are optional — pin the finding at
         whatever level makes sense (protocol-wide, message-level,
@@ -3727,6 +3758,15 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
     ) -> dict:
         """
         Record a new note in the knowledge base.
+
+        Use a **note** (not a finding) for cross-cutting context that does not
+        reduce to a single claim about a field, message, or byte range — open
+        questions to revisit, test-setup reminders, working hypotheses about
+        the protocol as a whole, or a narrative summary tying several findings
+        together.  When you have a concrete, locatable claim you can back with
+        evidence ("byte N means X", "this field is the length"), record it as
+        a structured ``add_finding`` instead so it can be scoped, statused,
+        and filtered.
 
         Always attributed to the AI (``author="ai"``) and starts unlocked.
 

@@ -4,6 +4,8 @@ title: "MCP Server"
 
 ProtoPoke exposes all proxy operations as [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) tools. Once connected, an AI assistant can fully control the proxy — inspect sessions, tamper and modify frames, forge/replay traffic, manage rules, run fuzzing campaigns, and more — all through natural language.
 
+The server also returns **instructions** at `initialize` time — server-level guidance surfaced to the AI client describing what ProtoPoke is and how to use it well. The instructions tell the assistant to recover prior state on session start by calling `list_findings` (scoped by `protocol_name` or `forwarder_id`) and `list_notes` before re-running analysis, and to record what it learns as **findings** (concrete, scoped, evidence-backed protocol claims) versus **notes** (cross-cutting context).
+
 ## What the AI Can Do
 
 | Capability | Example prompts |
