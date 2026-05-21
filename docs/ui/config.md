@@ -109,7 +109,10 @@ it back once things work.
 Below the forwarder table is the **MCP** section. Toggle it on to start the
 embedded MCP server, which exposes ProtoPoke's operations as AI tools bound
 to the *same* state the UI shows. Configure host/port and reveal the
-connection URL here. See [MCP Server](/mcp/overview).
+connection URL here. The **Profile** selector chooses the tool surface
+exposed to the AI — `Full` (everything) or `Analysis` (the
+reverse-engineering subset, which lowers per-turn token cost); changing it
+restarts the embedded server. See [MCP Server](/mcp/overview).
 
 ## Projects
 
@@ -137,7 +140,7 @@ A `.pp` archive contains:
 | `forge.json` | Playbooks, frames, and run history |
 | `logs.json` | Captured sessions and frames (the Traffic tab) |
 | `filters.json` | Frame display filters |
-| `mcp.json` | Embedded MCP server settings (enabled, host, port) |
+| `mcp.json` | Embedded MCP server settings (enabled, host, port, profile) |
 
 Loading is bounded for safety (max 32 members, 100 MB per member).
 
