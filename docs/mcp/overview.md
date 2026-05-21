@@ -104,8 +104,12 @@ the operator.
 # Enable on startup (default 127.0.0.1:7878)
 protopoke --mcp
 
+# Expose only the reverse-engineering tool subset (smaller per-turn token cost)
+protopoke --mcp --mcp-profile analysis
+
 # Or from the Config tab in the running TUI — toggle the "MCP" switch.
 ```
 
 Connect an AI client to `http://127.0.0.1:7878/mcp`. See
-[Configuration](/mcp/configuration) for all CLI flags and integration guides.
+[Configuration](/mcp/configuration) for all CLI flags, the `full` vs
+`analysis` tool profiles, and integration guides.

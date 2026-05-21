@@ -83,7 +83,127 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
-def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":  # type: ignore[name-defined]
+# Tools dropped by the "analysis" profile: operational surface (forwarder,
+# rule, playbook, fuzzing, variable, TLS, replay, tamper, proxy lifecycle and
+# framer/config mutation) that a passive reverse-engineering session does not
+# need. Read-only inspection, analysis, knowledge, protocol-definition reads,
+# and active-probe send/inject tools are kept.
+_ANALYSIS_PROFILE_EXCLUDE: frozenset[str] = frozenset({
+    # proxy lifecycle (proxy_status stays — read-only)
+    "proxy_start", "proxy_stop",
+    # forwarder + framer/config mutation (list_forwarders stays — read-only)
+    "add_forwarder", "remove_forwarder", "update_forwarder",
+    "start_forwarder", "stop_forwarder", "update_forwarder_config",
+    "set_framer",
+    # tamper / intercept queue
+    "tamper_status", "tamper_toggle", "list_intercepted",
+    "tamper_decode_pending", "tamper_forward", "tamper_drop",
+    "tamper_modify_and_forward", "tamper_modify_field_and_forward",
+    "tamper_forward_all", "tamper_set_direction_filter",
+    "tamper_set_session_filter",
+    # replace rules
+    "list_replace_rules", "add_replace_rule", "update_replace_rule",
+    "remove_replace_rule", "reorder_replace_rule", "clear_replace_rules",
+    # intercept rules
+    "list_intercept_rules", "add_intercept_rule", "update_intercept_rule",
+    "remove_intercept_rule", "reorder_intercept_rule", "clear_intercept_rules",
+    # playbooks
+    "list_playbooks", "create_playbook", "get_playbook", "update_playbook",
+    "delete_playbook", "run_playbook", "frame_to_forge",
+    # replay
+    "forge_session", "replay_with_field_edits",
+    # TLS
+    "get_ca_cert",
+    # fuzzing
+    "fuzz_start", "fuzz_status", "fuzz_results", "fuzz_stop",
+    "list_campaigns", "list_mutators",
+    # variables
+    "get_variables", "set_variable", "delete_variable", "clear_variables",
+    # script-rule hand-off (operational)
+    "get_script_load_instructions",
+})
+
+
+# JSON Schema keywords whose value is a *map* of name -> sub-schema. Their
+# keys are arbitrary (a property may legitimately be named "title"), so we
+# recurse into the values but never treat the keys as schema annotations.
+_SCHEMA_MAP_KEYWORDS = ("properties", "$defs", "definitions", "patternProperties")
+# Keywords whose value is a list of sub-schemas.
+_SCHEMA_LIST_KEYWORDS = ("anyOf", "oneOf", "allOf", "prefixItems")
+# Keywords whose value is a single sub-schema.
+_SCHEMA_NODE_KEYWORDS = (
+    "items", "additionalProperties", "not", "if", "then", "else", "contains",
+)
+
+
+def _slim_schema_inplace(schema: Any) -> None:
+    """Strip token bloat from a generated JSON Schema node, in place.
+
+    Two safe transforms: drop Pydantic's auto-generated ``title`` annotations
+    (they just restate the property name), and collapse the ``anyOf: [T, null]``
+    that ``Optional[...] = None`` produces down to ``T`` (optionality is already
+    conveyed by absence from ``required`` plus ``default``). This only changes
+    the schema advertised to the client — argument validation still runs against
+    FastMCP's Pydantic model, so it cannot weaken type checking.
+
+    The walk is JSON-Schema-structure-aware: it removes ``title`` only where it
+    is a schema annotation, never a property *named* "title".
+    """
+    if not isinstance(schema, dict):
+        if isinstance(schema, list):
+            for item in schema:
+                _slim_schema_inplace(item)
+        return
+
+    schema.pop("title", None)
+
+    for key, value in schema.items():
+        if key in _SCHEMA_MAP_KEYWORDS and isinstance(value, dict):
+            for sub in value.values():
+                _slim_schema_inplace(sub)
+        elif key in _SCHEMA_LIST_KEYWORDS and isinstance(value, list):
+            for sub in value:
+                _slim_schema_inplace(sub)
+        elif key in _SCHEMA_NODE_KEYWORDS:
+            _slim_schema_inplace(value)
+
+    any_of = schema.get("anyOf")
+    if (
+        isinstance(any_of, list)
+        and len(any_of) == 2
+        and {"type": "null"} in any_of
+    ):
+        non_null = [x for x in any_of if x != {"type": "null"}]
+        if len(non_null) == 1 and isinstance(non_null[0], dict):
+            merged = dict(non_null[0])
+            for key, value in schema.items():
+                if key != "anyOf":
+                    merged.setdefault(key, value)
+            schema.clear()
+            schema.update(merged)
+
+
+def _finalize_tools(mcp: Any, profile: str) -> None:
+    """Apply the profile filter and schema slimming to a built server.
+
+    Run once after every tool is registered. ``analysis`` profile removes the
+    operational tools; schema slimming always applies. Both operate on the
+    FastMCP tool manager's registered tools.
+    """
+    tool_manager = mcp._tool_manager
+    if profile == "analysis":
+        for tool_name in _ANALYSIS_PROFILE_EXCLUDE:
+            tool_manager._tools.pop(tool_name, None)
+    for tool in tool_manager._tools.values():
+        if isinstance(getattr(tool, "parameters", None), dict):
+            _slim_schema_inplace(tool.parameters)
+
+
+def build_mcp_server(
+    api: "ProtoPokeAPI",  # type: ignore[name-defined]
+    name: str = "ProtoPoke",
+    profile: str = "full",
+) -> "FastMCP":  # type: ignore[name-defined]
     """
     Construct and return a FastMCP server bound to *api*.
 
@@ -100,6 +220,12 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         api:  A :class:`~protopoke.api.ProtoPokeAPI` instance.  The server does
               **not** call ``start()`` — the caller is responsible for lifecycle.
         name: Human-readable name for the MCP server (shown to AI clients).
+        profile: Tool surface to expose. ``"full"`` (default) registers every
+              tool. ``"analysis"`` exposes only the reverse-engineering subset
+              (session inspection, analysis, knowledge base, protocol-definition
+              reads, and active-probe send/inject), dropping operational tools
+              (forwarder/rule/playbook/fuzz/variable/TLS/tamper) to shrink the
+              per-turn tool-catalog token cost. See ``_ANALYSIS_PROFILE_EXCLUDE``.
 
     Returns:
         A configured :class:`mcp.server.fastmcp.FastMCP` instance.
@@ -151,7 +277,14 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         "length/CRC relationship — each with a status and supporting frame "
         "IDs), and use notes for cross-cutting context that does not fit one "
         "field or message (open questions, test-setup reminders, overall "
-        "hypotheses about the protocol)."
+        "hypotheses about the protocol).\n"
+        "\n"
+        "Be token-frugal: prefer the scoped analysis tools (cluster_frames, "
+        "get_frame_stats, bruteforce_numeric_layout, decode_field with "
+        "deduplicate=True, diff_frames_in_bucket) over dumping raw frames. "
+        "Avoid get_frames / decode_frames / export_session on large sessions; "
+        "scope every call with direction / size_bytes / byte_patterns and use "
+        "filter_frames pagination when you do need frames."
     )
 
     mcp = FastMCP(name, instructions=instructions)
@@ -187,14 +320,9 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def list_authoring_guides() -> list[dict]:
-        """
-        List authoring guides shipped with the MCP server.
-
-        Each guide explains how to write a ProtoPoke extension point
-        (custom framer, protocol definition YAML, custom replace script).
-        Read a guide with ``get_authoring_guide(slug)``, or fetch the same
-        content as the MCP resource ``protopoke://guides/<slug>``.
-        """
+        """List authoring guides for ProtoPoke extension points (custom framer,
+        protocol definition YAML, custom replace script). Read one with
+        get_authoring_guide(slug)."""
         return [
             {"slug": slug, "title": title, "description": desc,
              "uri": f"protopoke://guides/{slug}"}
@@ -203,14 +331,9 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def get_authoring_guide(slug: str) -> dict:
-        """
-        Return the markdown body of one of the authoring guides.
-
-        Valid slugs come from ``list_authoring_guides()`` (e.g. ``"framers"``,
-        ``"protocol-definitions"``, ``"replace-scripts"``). Use this when
-        you are about to write a custom framer, a protocol definition, or
-        a script replace rule and want the authoritative format spec.
-        """
+        """Return the markdown body of one authoring guide. Valid slugs come
+        from list_authoring_guides() (e.g. "framers", "protocol-definitions",
+        "replace-scripts")."""
         if slug not in GUIDES:
             return {"error": f"Unknown guide {slug!r}",
                     "available": list(GUIDES.keys())}
@@ -218,19 +341,10 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def get_script_load_instructions() -> dict:
-        """
-        Return the operator-facing steps to load a custom replace script.
-
-        ProtoPoke does not expose any MCP tool to persist a script file or
-        register a script-type replace rule — script rules execute arbitrary
-        Python in the proxy process, so the operator must be the one to
-        accept the code.  Call this tool after generating an ``apply()``
-        script so you can quote the exact click-path back to the user.
-
-        Returns a dict with ``steps`` (ordered list of plain-text
-        instructions), ``ui_path`` (a short breadcrumb), and ``notes``
-        (caveats worth mentioning in the hand-off).
-        """
+        """Operator-facing steps to load a custom replace script (script rules
+        run arbitrary Python, so only the operator can register them). Call
+        after generating an apply() script to quote the click-path to the user.
+        Returns steps, ui_path, notes."""
         return {
             "ui_path": "Tamper tab (F3) → Global Replace Rules → Add",
             "steps": [
@@ -292,15 +406,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def list_workflow_recipes() -> list[dict]:
-        """
-        List workflow recipes shipped with the MCP server.
-
-        Each recipe walks through an end-to-end task by chaining several
-        ProtoPoke MCP tools together (reverse-engineering an unknown
-        protocol, replaying with mutation, intercepting and rewriting).
-        Read a recipe with ``get_workflow_recipe(slug)``, or fetch the
-        same content as the MCP resource ``protopoke://recipes/<slug>``.
-        """
+        """List end-to-end workflow recipes (chains of ProtoPoke tools). Read one with get_workflow_recipe(slug)."""
         return [
             {"slug": slug, "title": title, "description": desc,
              "uri": f"protopoke://recipes/{slug}"}
@@ -309,14 +415,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def get_workflow_recipe(slug: str) -> dict:
-        """
-        Return the markdown body of one of the workflow recipes.
-
-        Valid slugs come from ``list_workflow_recipes()`` (e.g.
-        ``"reverse-engineer-unknown-protocol"``, ``"replay-with-mutation"``,
-        ``"intercept-and-rewrite"``). Use this when you are about to drive
-        an end-to-end task and want a tool-by-tool walkthrough.
-        """
+        """Return the markdown body of one workflow recipe. Valid slugs from list_workflow_recipes() (e.g. "reverse-engineer-unknown-protocol", "replay-with-mutation", "intercept-and-rewrite")."""
         if slug not in RECIPES:
             return {"error": f"Unknown recipe {slug!r}",
                     "available": list(RECIPES.keys())}
@@ -389,17 +488,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def list_forwarders() -> list[dict]:
-        """
-        List all configured forwarders with their running state and full config.
-
-        Each entry includes the forwarder's name, enabled flag, running state,
-        and the complete ForwarderConfig dict.  Useful when multiple
-        forwarders are configured (e.g. separate listeners for different
-        protocols or ports).
-
-        Returns:
-            List of dicts with keys: name, enabled, running, config.
-        """
+        """List configured forwarders with running state. Each entry: name, enabled, running, config (ForwarderConfig dict)."""
         running = set(api.list_running())
         return [
             {
@@ -413,22 +502,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     async def add_forwarder(config: dict) -> dict:
-        """
-        Add a new forwarder from a ForwarderConfig dict.
-
-        The dict must include a unique ``name`` and may set any
-        ForwarderConfig field (listen_host, listen_port, upstream_host,
-        upstream_port, forwarder_type "tcp"/"udp"/"socks5", tls_listen,
-        tls_upstream, tamper_enabled, framer_name, framer_kwargs,
-        protocol_definition_path, custom_framer_path, …).
-
-        The new forwarder is added in stopped state — call ``start_forwarder``
-        to begin listening.
-
-        Returns:
-            ``{"ok": True, "name": <name>}`` on success, or
-            ``{"ok": False, "error": ...}``.
-        """
+        """Add a forwarder from a ForwarderConfig dict (needs a unique 'name'; any ForwarderConfig field allowed). Added stopped — call start_forwarder."""
         from ..config import ForwarderConfig
         try:
             new_fwd = ForwarderConfig.from_dict(config)
@@ -443,16 +517,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     async def remove_forwarder(name: str) -> dict:
-        """
-        Remove a forwarder by name.
-
-        If the forwarder is currently running it is stopped first.  Captured
-        sessions remain in the registry for inspection.
-
-        Returns:
-            ``{"ok": True, "name": <name>}`` on success, or
-            ``{"ok": False, "error": ...}`` if not found.
-        """
+        """Remove a forwarder by name (stopped first if running). Captured sessions are kept."""
         if not any(f.name == name for f in api.forwarders):
             return {"ok": False, "error": f"Forwarder {name!r} not found"}
         if api.is_running(name):
@@ -462,27 +527,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     async def update_forwarder(name: str, fields: dict) -> dict:
-        """
-        Update arbitrary fields on a forwarder.
-
-        ``fields`` is a partial ForwarderConfig dict: any field present on
-        :class:`~protopoke.config.ForwarderConfig` (e.g. ``listen_port``,
-        ``upstream_host``, ``tls_listen``, ``tamper_enabled``,
-        ``forwarder_type``, ``socks_auth_username``, ``connect_timeout``, …)
-        may be set.
-
-        Network-level changes (host/port/transport/tls) only take effect
-        after the forwarder is restarted: if the forwarder is currently
-        running it is stopped and started again so the new settings apply.
-        Framing and protocol-definition changes are applied in-place on
-        live sessions.
-
-        Use ``update_forwarder_config`` for hot-swap-only changes (name,
-        framer, protocol) without a restart.
-
-        Returns:
-            ``{"ok": True, "config": <new ForwarderConfig dict>}``.
-        """
+        """Update fields on a forwarder. fields: partial ForwarderConfig dict. Network changes (host/port/transport/tls) take effect after an automatic restart; framing/protocol changes apply in-place. Use update_forwarder_config for restart-free name/framer/protocol swaps."""
         fwd = next((f for f in api.forwarders if f.name == name), None)
         if fwd is None:
             return {"ok": False, "error": f"Forwarder {name!r} not found"}
@@ -527,18 +572,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     async def start_forwarder(name: str) -> dict:
-        """
-        Start a specific named forwarder.
-
-        Use list_forwarders() to get the available forwarder names.
-        The protocol definition (if configured) is auto-loaded on start.
-
-        Args:
-            name: Forwarder name from list_forwarders.
-
-        Returns:
-            {"ok": True} on success, {"ok": False, "error": ...} on failure.
-        """
+        """Start a named forwarder (auto-loads its protocol definition if configured). name: from list_forwarders."""
         try:
             await api.start_forwarder(name)
             return {"ok": True, "name": name}
@@ -549,18 +583,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     async def stop_forwarder(name: str) -> dict:
-        """
-        Stop a specific named forwarder without affecting others.
-
-        Existing sessions on this forwarder are closed; their frames remain
-        in the session registry for inspection.
-
-        Args:
-            name: Forwarder name from list_forwarders.
-
-        Returns:
-            {"ok": True} on success, {"ok": False, "error": ...} on failure.
-        """
+        """Stop a named forwarder. Its sessions close; frames are kept for inspection. name: from list_forwarders."""
         try:
             await api.stop_forwarder(name)
             return {"ok": True, "name": name}
@@ -573,25 +596,12 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def list_sessions() -> list[dict]:
-        """
-        List all captured sessions (active and closed).
-
-        Returns session metadata: id, client/server host:port, state, timestamps.
-        Use get_frames() to retrieve the actual communication data.
-        """
+        """List all captured sessions (metadata only: id, client/server host:port, state, timestamps). Use get_frames() for the data."""
         return [s.info.to_dict() for s in api.list_sessions()]
 
     @mcp.tool()
     def get_session(session_id: str) -> Optional[dict]:
-        """
-        Get details for a specific session.
-
-        Args:
-            session_id: The session UUID to look up.
-
-        Returns:
-            Session info dict, or None if not found.
-        """
+        """Return one session's info dict by UUID, or None."""
         session = api.get_session(session_id)
         if session is None:
             return None
@@ -599,16 +609,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def get_session_summary(session_id: str) -> Optional[dict]:
-        """
-        Get a comprehensive summary for a session, including frame counts,
-        byte totals per direction, duration, and per-direction breakdown.
-
-        Args:
-            session_id: The session UUID to summarise.
-
-        Returns:
-            Summary dict with stats, or None if session not found.
-        """
+        """Return a session summary: frame/byte counts per direction, duration, first/last frame times. None if not found."""
         session = api.get_session(session_id)
         if session is None:
             return None
@@ -643,17 +644,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def get_frames(session_id: str, direction: Optional[str] = None) -> list[dict]:
-        """
-        Get all captured frames for a session, including raw bytes.
-
-        Args:
-            session_id: Session UUID.
-            direction:  Optional filter — "client_to_server" or "server_to_client".
-
-        Returns:
-            List of frame dicts. raw_bytes is hex-encoded. Frames are in
-            capture order with sequence numbers and timestamps.
-        """
+        """Return all captured frames for a session (raw_bytes hex), in capture order. direction: optional "client_to_server"/"server_to_client" filter. Large for big sessions."""
         dir_enum = None
         if direction is not None:
             try:
@@ -665,16 +656,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def get_frame(session_id: str, frame_id: str) -> Optional[dict]:
-        """
-        Get a single specific frame by its ID within a session.
-
-        Args:
-            session_id: Session UUID.
-            frame_id:   Frame UUID to retrieve.
-
-        Returns:
-            Frame dict (raw_bytes as hex), or None if not found.
-        """
+        """Return one frame by ID (raw_bytes hex), or None."""
         session = api.get_session(session_id)
         if session is None:
             return None
@@ -685,20 +667,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def decode_frames(session_id: str, direction: Optional[str] = None) -> list[dict]:
-        """
-        Decode all frames for a session using the attached protocol decoder.
-
-        Requires a protocol definition to be loaded (configured on a forwarder or set by the operator from the TUI).
-        Returns passthrough (hex-only) results if no decoder is configured.
-
-        Args:
-            session_id: Session UUID.
-            direction:  Optional filter — "client_to_server" or "server_to_client".
-
-        Returns:
-            List of ParsedMessage dicts with structured fields, message_type,
-            and per-field offset/size metadata.
-        """
+        """Decode all frames in a session with the loaded protocol decoder (passthrough/hex if none). Returns ParsedMessage dicts with fields and per-field offset/size. direction: optional filter."""
         dir_enum = None
         if direction is not None:
             try:
@@ -710,16 +679,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def decode_frame_by_id(session_id: str, frame_id: str) -> Optional[dict]:
-        """
-        Decode a single frame by its ID using the attached protocol decoder.
-
-        Args:
-            session_id: Session UUID.
-            frame_id:   Frame UUID to decode.
-
-        Returns:
-            ParsedMessage dict with structured fields, or None if frame not found.
-        """
+        """Decode one frame by ID with the loaded decoder. Returns a ParsedMessage dict, or None."""
         session = api.get_session(session_id)
         if session is None:
             return None
@@ -735,23 +695,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         direction:  Optional[str] = None,
         max_results: int = 100,
     ) -> list[dict]:
-        """
-        Search for a binary pattern across captured frames.
-
-        Uses the same binary hex pattern syntax as rules:
-          "01 02 ??"  — literal bytes with a wildcard
-          "FF [03-09]" — byte range
-          "(01|02) 00" — alternation
-
-        Args:
-            pattern:     Binary hex pattern to search for.
-            session_id:  Limit search to a specific session (None = all sessions).
-            direction:   Limit to "client_to_server" or "server_to_client" (None = both).
-            max_results: Maximum number of matching frames to return (default 100).
-
-        Returns:
-            List of frame dicts for all frames that match the pattern.
-        """
+        """Search frames for a binary pattern (rule syntax: "01 02 ??" wildcard, "FF [03-09]" range, "(01|02) 00" alternation). session_id/direction: optional scope (None = all). max_results: cap (default 100)."""
         from protopoke.rules.rule import compile_binary_pattern, PatternError
 
         try:
@@ -787,61 +731,19 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     async def terminate_session(session_id: str) -> dict:
-        """
-        Forcefully close an active session's TCP connections.
-
-        Cancels the relay task for the session, closing both the client and
-        server TCP connections and marking the session CLOSED.  If the session
-        is already closed (or not found) this is a no-op.
-
-        Useful during reverse engineering to cleanly cut a session after
-        capturing what you need, or to test server reconnect behaviour.
-
-        Args:
-            session_id: UUID of the session to terminate.
-
-        Returns:
-            {"ok": True} if terminated, {"ok": False} if already closed or not found.
-        """
+        """Force-close an active session's connections and mark it CLOSED. No-op if already closed/not found."""
         ok = await api.terminate_session(session_id)
         return {"ok": ok, "session_id": session_id}
 
     @mcp.tool()
     def delete_session(session_id: str) -> dict:
-        """
-        Permanently remove a session and all its frames from the registry.
-
-        This only removes the in-memory record; it does **not** close the
-        underlying connection.  Call terminate_session() first if the session
-        is still active.
-
-        Useful for cleaning up uninteresting sessions to keep the view focused
-        on the traffic that matters for reverse engineering.
-
-        Args:
-            session_id: UUID of the session to delete.
-
-        Returns:
-            {"ok": True} if deleted, {"ok": False} if not found.
-        """
+        """Remove a session and its frames from the registry (in-memory only; does not close the connection — call terminate_session first if active)."""
         ok = api.delete_session(session_id)
         return {"ok": ok, "session_id": session_id}
 
     @mcp.tool()
     def export_session(session_id: str) -> Optional[dict]:
-        """
-        Export a full session including all captured frames as a serialisable dict.
-
-        Returns the complete session record (info + all frames with raw bytes
-        as hex strings).  Useful for saving or transferring captured traffic
-        for offline analysis or sharing with collaborators.
-
-        Args:
-            session_id: UUID of the session to export.
-
-        Returns:
-            Full session dict (info + frames), or None if not found.
-        """
+        """Export a full session (info + all frames, raw_bytes hex) as a dict, or None. Large for big sessions."""
         session = api.get_session(session_id)
         if session is None:
             return None
@@ -863,12 +765,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def get_protocol_info() -> dict:
-        """
-        Return information about the currently loaded protocol decoder.
-
-        Returns:
-            Dict with protocol_name and whether a decoder/encoder is active.
-        """
+        """Return info about the loaded protocol decoder: protocol_name, has_definition, has_encoder."""
         from protopoke.protocol.base import PassthroughDecoder
         decoder = api._decoder
         has_definition = not isinstance(decoder, PassthroughDecoder)
@@ -902,41 +799,18 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def tamper_toggle(enabled: bool) -> dict:
-        """
-        Enable or disable tamper at runtime.
-
-        When disabled, all pending frames are immediately forwarded.
-        When enabled, subsequent frames matching intercept rules are held.
-
-        Args:
-            enabled: True to enable, False to disable.
-        """
+        """Enable/disable tamper at runtime. Disabling immediately forwards all pending frames. enabled: True/False."""
         api.tamper_enabled = enabled
         return {"tamper_enabled": api.tamper_enabled}
 
     @mcp.tool()
     def list_intercepted() -> list[dict]:
-        """
-        Return all frames currently waiting in the tamper queue.
-
-        Each entry includes the frame's raw bytes as a hex string, the unit
-        ID needed to forward/drop/modify it, and the current action verdict.
-        """
+        """Return frames waiting in the tamper queue. Each entry has raw_bytes (hex), the unit_id for forward/drop/modify, and the current verdict."""
         return [u.to_dict() for u in api.list_intercepted()]
 
     @mcp.tool()
     def tamper_decode_pending() -> list[dict]:
-        """
-        Return all pending tampered frames with their protocol-decoded views.
-
-        Like list_intercepted() but each entry also includes a ``parsed``
-        field with the structured ParsedMessage for that frame. Requires a
-        protocol definition to be loaded (configured on a forwarder or set by the operator from the TUI) for useful output.
-
-        Returns:
-            List of dicts, each with "unit" (TamperedUnit) and "parsed"
-            (ParsedMessage) sub-dicts.
-        """
+        """Like list_intercepted but each entry also has a 'parsed' ParsedMessage (needs a loaded protocol definition). Returns dicts with 'unit' and 'parsed'."""
         results = []
         for unit in api.list_intercepted():
             parsed = api.decode_frame(unit.frame)
@@ -948,38 +822,19 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def tamper_forward(unit_id: str) -> dict:
-        """
-        Forward a tampered frame as-is (no modifications).
-
-        Args:
-            unit_id: The tampered unit ID (from list_intercepted).
-        """
+        """Forward a queued frame unchanged. unit_id: from list_intercepted."""
         ok = api.forward(unit_id)
         return {"ok": ok, "unit_id": unit_id}
 
     @mcp.tool()
     def tamper_drop(unit_id: str) -> dict:
-        """
-        Drop a tampered frame (do not forward it to the peer).
-
-        Args:
-            unit_id: The tampered unit ID (from list_intercepted).
-        """
+        """Drop a queued frame (do not forward). unit_id: from list_intercepted."""
         ok = api.drop(unit_id)
         return {"ok": ok, "unit_id": unit_id}
 
     @mcp.tool()
     def tamper_modify_and_forward(unit_id: str, new_bytes_hex: str) -> dict:
-        """
-        Replace a tampered frame's payload with raw bytes and forward it.
-
-        Use this for raw binary edits. For protocol-aware field-level edits,
-        use tamper_modify_field_and_forward() instead.
-
-        Args:
-            unit_id:       The intercepted unit ID (from list_intercepted).
-            new_bytes_hex: Replacement bytes as a hex string (e.g. "deadbeef").
-        """
+        """Replace a queued frame's bytes and forward. unit_id: from list_intercepted; new_bytes_hex: replacement hex. For field edits use tamper_modify_field_and_forward."""
         try:
             new_data = bytes.fromhex(new_bytes_hex)
         except ValueError as exc:
@@ -992,29 +847,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         unit_id:     str,
         field_edits: dict[str, Any],
     ) -> dict:
-        """
-        Re-encode a tampered frame with protocol field edits, then forward it.
-
-        Requires a protocol definition to be loaded (configured on a forwarder or set by the operator from the TUI).
-        The frame is decoded, the specified fields are replaced, the message
-        is re-encoded (with length fields automatically recomputed), and the
-        result is forwarded.
-
-        Args:
-            unit_id:     The tampered unit ID (from list_intercepted).
-            field_edits: Dict of field_name → new_value. Values are typed
-                         according to the protocol definition (int, str, bytes-as-hex).
-
-        Example::
-
-            tamper_modify_field_and_forward(
-                unit_id="abc-123",
-                field_edits={"username": "admin", "msg_type": 2}
-            )
-
-        Returns:
-            {"ok": True/False, "unit_id": ...}
-        """
+        """Re-encode a queued frame with protocol field edits and forward (needs a loaded definition; length fields recomputed). unit_id: from list_intercepted; field_edits: {field_name: new_value} (typed per definition; bytes as hex)."""
         ok = api.modify_field_and_forward(unit_id, field_edits)
         if not ok:
             # Check if it failed because no encoder is loaded
@@ -1034,12 +867,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def tamper_set_direction_filter(direction: Optional[str]) -> dict:
-        """
-        Restrict tampering to one traffic direction.
-
-        Args:
-            direction: "client_to_server", "server_to_client", or null to clear.
-        """
+        """Restrict tampering to one direction. direction: "client_to_server", "server_to_client", or null to clear."""
         if direction is None:
             api.tamper_direction_filter = None
             return {"direction_filter": None}
@@ -1051,12 +879,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def tamper_set_session_filter(session_ids: Optional[list[str]]) -> dict:
-        """
-        Restrict tampering to specific sessions.
-
-        Args:
-            session_ids: List of session UUIDs to tamper, or null to clear.
-        """
+        """Restrict tampering to specific sessions. session_ids: list of session UUIDs, or null to clear."""
         if session_ids is None:
             api.tamper_session_filter = None
             return {"session_filter": None}
@@ -1080,22 +903,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         direction:        Optional[str] = None,
         enabled:          bool          = True,
     ) -> dict:
-        """
-        Add a binary find-and-replace rule applied to all matching frames.
-
-        Replace rules are applied to frame bytes automatically before forwarding.
-        Multiple rules stack: the output of rule N becomes the input to rule N+1.
-
-        Args:
-            label:           Human-readable name.
-            pattern:         Binary pattern string, e.g. "01 02 ??" or "[00-0F]".
-            replacement_hex: Replacement bytes as hex string (e.g. "deadbeef").
-            direction:       Optional "client_to_server" or "server_to_client".
-            enabled:         Whether the rule is active immediately.
-
-        Returns:
-            The new rule dict including its generated ID.
-        """
+        """Add a binary find-and-replace rule applied to matching frames before forwarding (rules stack in order). pattern: binary pattern ("01 02 ??", "[00-0F]"); replacement_hex: replacement bytes; direction: optional. Returns the new rule dict with its id."""
         try:
             replacement = bytes.fromhex(replacement_hex)
         except ValueError as exc:
@@ -1122,19 +930,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         label:   Optional[str]  = None,
         enabled: Optional[bool] = None,
     ) -> dict:
-        """
-        Update a replace rule's label or enabled state.
-
-        Use this to toggle a rule on/off without removing it, or to rename it.
-
-        Args:
-            rule_id: Rule UUID from list_replace_rules.
-            label:   New human-readable name (or null to keep current).
-            enabled: True to enable, False to disable (or null to keep current).
-
-        Returns:
-            Updated rule dict, or {"ok": False} if not found.
-        """
+        """Update a replace rule's label or enabled state (null to keep). rule_id: from list_replace_rules. Returns the updated rule."""
         rule = api.rules_engine.get_rule(rule_id)
         if rule is None:
             return {"ok": False, "error": f"Rule '{rule_id}' not found."}
@@ -1146,29 +942,13 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def remove_replace_rule(rule_id: str) -> dict:
-        """
-        Remove a replace rule by its ID.
-
-        Args:
-            rule_id: Rule UUID from list_replace_rules.
-        """
+        """Remove a replace rule by id."""
         ok = api.remove_replace_rule(rule_id)
         return {"ok": ok, "rule_id": rule_id}
 
     @mcp.tool()
     def reorder_replace_rule(rule_id: str, new_index: int) -> dict:
-        """
-        Move a replace rule to a different position in the evaluation order.
-
-        Rules are applied in order; position 0 is evaluated first.
-
-        Args:
-            rule_id:   Rule UUID from list_replace_rules.
-            new_index: Zero-based target position (0 = top/first).
-
-        Returns:
-            {"ok": True} on success, or {"ok": False} if rule not found.
-        """
+        """Move a replace rule in evaluation order (position 0 = first). rule_id, new_index (0-based)."""
         ok = api.rules_engine.move_rule(rule_id, new_index)
         return {"ok": ok, "rule_id": rule_id, "new_index": new_index}
 
@@ -1184,13 +964,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def list_intercept_rules() -> list[dict]:
-        """
-        List all active intercept filter rules in order.
-
-        Rules use first-match semantics: the first matching rule's action wins.
-        When no rules are configured, all frames are intercepted.
-        When rules are configured but none match, frames are auto-forwarded.
-        """
+        """List intercept filter rules in order. First-match wins; no rules = intercept all; rules present but none match = auto-forward."""
         return [r.to_dict() for r in api.list_intercept_rules()]
 
     @mcp.tool()
@@ -1202,23 +976,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         session_ids: Optional[list[str]] = None,
         enabled:    bool                = True,
     ) -> dict:
-        """
-        Add an intercept filter rule.
-
-        Intercept rules use first-match semantics and decide whether a frame
-        is held for inspection or automatically forwarded.
-
-        Args:
-            label:       Human-readable name.
-            pattern:     Binary pattern string (empty string = match all frames).
-            action:      "intercept" (hold for review) or "forward" (auto-forward).
-            direction:   Optional "client_to_server" or "server_to_client".
-            session_ids: Optional list of session UUIDs this rule applies to.
-            enabled:     Whether the rule is active immediately.
-
-        Returns:
-            The new rule dict including its generated ID.
-        """
+        """Add an intercept filter rule (first-match decides hold vs auto-forward). pattern: binary pattern (empty = match all); action: "intercept"/"forward"; direction/session_ids: optional. Returns the new rule dict with its id."""
         try:
             action_enum = RuleAction(action)
         except ValueError:
@@ -1253,21 +1011,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         action:  Optional[str]  = None,
         enabled: Optional[bool] = None,
     ) -> dict:
-        """
-        Update an intercept rule's label, action, or enabled state.
-
-        Use this to flip a rule between intercept/forward, toggle it on/off,
-        or rename it, without removing and re-adding it.
-
-        Args:
-            rule_id: Rule UUID from list_intercept_rules.
-            label:   New name (or null to keep current).
-            action:  "intercept" or "forward" (or null to keep current).
-            enabled: True/False (or null to keep current).
-
-        Returns:
-            Updated rule dict, or {"ok": False} if not found.
-        """
+        """Update an intercept rule's label/action/enabled (null to keep). rule_id: from list_intercept_rules. Returns the updated rule."""
         rule = api.intercept_filter.get_rule(rule_id)
         if rule is None:
             return {"ok": False, "error": f"Rule '{rule_id}' not found."}
@@ -1284,41 +1028,19 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def remove_intercept_rule(rule_id: str) -> dict:
-        """
-        Remove an intercept filter rule by its ID.
-
-        Args:
-            rule_id: Rule UUID from list_intercept_rules.
-        """
+        """Remove an intercept rule by id."""
         ok = api.remove_intercept_rule(rule_id)
         return {"ok": ok, "rule_id": rule_id}
 
     @mcp.tool()
     def reorder_intercept_rule(rule_id: str, new_index: int) -> dict:
-        """
-        Move an intercept rule to a different position in the evaluation order.
-
-        Rules are evaluated top-to-bottom; the first match wins.
-        Position 0 is evaluated first (highest priority).
-
-        Args:
-            rule_id:   Rule UUID from list_intercept_rules.
-            new_index: Zero-based target position (0 = top/highest priority).
-
-        Returns:
-            {"ok": True} on success, or {"ok": False} if rule not found.
-        """
+        """Move an intercept rule in evaluation order (position 0 = highest priority, first match wins). rule_id, new_index (0-based)."""
         ok = api.intercept_filter.move_rule(rule_id, new_index)
         return {"ok": ok, "rule_id": rule_id, "new_index": new_index}
 
     @mcp.tool()
     def clear_intercept_rules() -> dict:
-        """
-        Remove all intercept filter rules.
-
-        After clearing, the default behaviour resumes: all frames are intercepted
-        (when tamper_enabled is True).
-        """
+        """Remove all intercept rules. Default resumes: all frames intercepted when tamper is enabled."""
         api.intercept_filter.clear()
         return {"ok": True, "message": "All intercept rules cleared."}
 
@@ -1338,43 +1060,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         source_session_id: Optional[str]   = None,
         direction:         str             = "client_to_server",
     ) -> dict:
-        """
-        Send raw bytes and return the response.
-
-        Three modes:
-
-        * **One-shot** (default, ``source_session_id`` omitted): opens a
-          fresh ``transport`` connection to ``host:port``, sends the bytes,
-          reads the response, then closes.
-        * **Forge session reuse** (``source_session_id`` is a live forge
-          session): sends over its persistent socket. Works for TCP/UDP.
-          ``direction`` is ignored (forge sessions are client→server).
-        * **Proxy session injection** (``source_session_id`` is a live
-          proxy session): injects into the existing forwarder session and
-          collects frames captured for ``receive_timeout`` seconds. Use
-          ``direction="server_to_client"`` to push toward the client.
-
-        When ``source_session_id`` is set, ``host``/``port``/``tls`` are
-        taken from the bound session and the corresponding arguments are
-        ignored; ``transport`` (if given) must match the session.
-
-        Args:
-            data_hex:          Bytes to send as a hex string.
-            host:              Target host (one-shot mode only).
-            port:              Target port (one-shot mode only).
-            tls:               Wrap connection in TLS (one-shot TCP only).
-            connect_timeout:   Override the default connect timeout.
-            receive_timeout:   Seconds to wait for the response.
-            transport:         "tcp" (default) or "udp".
-            source_session_id: Reuse this existing forge or proxy session
-                               instead of opening a new connection.
-            direction:         "client_to_server" (default) or
-                               "server_to_client" — only used for proxy
-                               session injection.
-
-        Returns:
-            SendResult dict: sent_bytes_hex, received_bytes_hex, success, error.
-        """
+        """Send raw bytes and return the response. Modes: one-shot (default) opens host:port, sends, reads, closes; forge-session reuse (source_session_id = live forge session) sends over its socket (direction ignored); proxy-session injection (source_session_id = live proxy session) injects and collects frames for receive_timeout. When source_session_id is set, host/port/tls come from the session. data_hex: bytes; transport: tcp/udp; direction: proxy injection only. Returns sent/received hex, success, error."""
         try:
             data = bytes.fromhex(data_hex)
         except ValueError as exc:
@@ -1400,30 +1086,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         tls:  bool = False,
         transport: str = "tcp",
     ) -> dict:
-        """
-        Open a persistent connection for interactive Forge sends.
-
-        Unlike send_frame() which opens and closes a connection per send,
-        this creates a named session that stays open so you can send multiple
-        requests sequentially (e.g. to maintain authentication state or test
-        multi-step protocols).
-
-        The connection appears in the Traffic tab as a regular session so
-        all frames sent and received are captured for analysis.
-
-        Use send_on_forge_session() to send data through the returned session.
-        For TCP the session is marked CLOSED when the server drops it; for
-        UDP the session stays open until you call ``terminate_session``.
-
-        Args:
-            host:      Target hostname or IP address.
-            port:      Target port.
-            tls:       Wrap the connection in TLS (TCP only; no cert verification).
-            transport: ``"tcp"`` (default) or ``"udp"``.
-
-        Returns:
-            {"ok": True, "session_id": "<uuid>"} on success.
-        """
+        """Open a persistent connection for interactive Forge sends (stays open across sends; captured in Traffic). Use send_on_forge_session to send. TCP closes when the server drops it; UDP stays until terminate_session. tls: TCP only; transport: tcp/udp. Returns session_id."""
         try:
             session_id = await api.open_forge_session(host, port, tls, transport=transport)
             return {"ok": True, "session_id": session_id}
@@ -1438,23 +1101,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         data_hex:        str,
         receive_timeout: Optional[float] = None,
     ) -> dict:
-        """
-        Send bytes through an existing persistent forge session.
-
-        The session must have been opened with open_forge_session().
-        All sent and received frames are captured in the session's frame log
-        so they can be inspected with get_frames() / decode_frames().
-
-        Args:
-            session_id:      Session ID returned by open_forge_session.
-            data_hex:        Bytes to send as a hex string (e.g. "deadbeef01").
-            receive_timeout: Seconds to wait for a response.  Defaults to the
-                             proxy's configured connect_timeout.
-
-        Returns:
-            SendResult dict: sent_bytes_hex, received_bytes_hex, response_packets,
-            success, error.
-        """
+        """Send bytes over a forge session opened with open_forge_session (frames captured in its log). receive_timeout defaults to connect_timeout. Returns sent/received hex, response_packets, success, error."""
         try:
             data = bytes.fromhex(data_hex)
         except ValueError as exc:
@@ -1472,26 +1119,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     async def inject_to_server(session_id: str, data_hex: str) -> dict:
-        """
-        Inject bytes directly into the upstream (server) side of an active session.
-
-        The bytes are sent on the same TCP connection that the real client is
-        using, so the server sees them as part of the established session.
-        The server's response flows back through the relay to the original
-        client and is captured as normal session frames.
-
-        This is the primary tool for mid-session injection during reverse
-        engineering: modify in-flight requests to test server behaviour without
-        re-establishing the full connection.
-
-        Args:
-            session_id: UUID of an active (not closed) session.
-            data_hex:   Bytes to inject as a hex string (e.g. "deadbeef").
-
-        Returns:
-            {"ok": True} on success, {"ok": False, "error": ...} if the session
-            is not active or the write failed (use send_frame as fallback).
-        """
+        """Inject bytes into the upstream side of an active session (server sees them in-session; response flows back to the client and is captured). session_id: active session; data_hex: bytes."""
         try:
             data = bytes.fromhex(data_hex)
         except ValueError as exc:
@@ -1502,21 +1130,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     async def inject_to_client(session_id: str, data_hex: str) -> dict:
-        """
-        Inject bytes directly into the client side of an active session.
-
-        The bytes arrive on the same TCP connection the real server is using,
-        so the client sees them as if they came from the server.  Useful for
-        injecting server-to-client traffic to probe client-side parsing during
-        reverse engineering.
-
-        Args:
-            session_id: UUID of an active (not closed) session.
-            data_hex:   Bytes to inject as a hex string (e.g. "deadbeef").
-
-        Returns:
-            {"ok": True} on success, {"ok": False} if session is not active.
-        """
+        """Inject bytes into the client side of an active session (client sees them as if from the server). session_id: active session; data_hex: bytes."""
         try:
             data = bytes.fromhex(data_hex)
         except ValueError as exc:
@@ -1531,12 +1145,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def list_playbooks() -> list[dict]:
-        """
-        List all forge playbooks.
-
-        Returns:
-            List of playbook dicts (without full run history).
-        """
+        """List forge playbooks (no run history)."""
         result = []
         for pb in _playbooks.values():
             d = pb.to_dict()
@@ -1556,22 +1165,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         source_session_id: Optional[str] = None,
         response_window:   float         = 1.0,
     ) -> dict:
-        """
-        Create a new playbook with a single frame.
-
-        Args:
-            label:             Human-readable name.
-            host:              Target hostname or IP address.
-            port:              Target port.
-            data_hex:          Frame bytes as hex string.
-            tls:               Whether to use TLS (TCP only).
-            transport:         ``"tcp"`` (default) or ``"udp"``.
-            source_session_id: Optional session ID to inject into.
-            response_window:   Seconds to wait for server response per frame.
-
-        Returns:
-            The new playbook dict including its generated ID.
-        """
+        """Create a playbook with a single frame. data_hex: frame bytes; tls: TCP only; source_session_id: optional inject target; response_window: seconds per frame. Returns the new playbook."""
         try:
             frame_bytes = bytes.fromhex(data_hex) if data_hex else b""
         except ValueError as exc:
@@ -1594,15 +1188,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def get_playbook(playbook_id: str) -> Optional[dict]:
-        """
-        Get a playbook including its full run history.
-
-        Args:
-            playbook_id: The playbook UUID from list_playbooks.
-
-        Returns:
-            Full playbook dict with runs, or None if not found.
-        """
+        """Return a playbook including its full run history (large). playbook_id: from list_playbooks."""
         pb = _playbooks.get(playbook_id)
         return pb.to_dict() if pb is not None else None
 
@@ -1617,22 +1203,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         data_hex:    Optional[str]  = None,
         response_window: Optional[float] = None,
     ) -> dict:
-        """
-        Update a playbook's connection config and/or the first frame's bytes.
-
-        Args:
-            playbook_id:     The playbook UUID.
-            label:           New name (or null to keep current).
-            host:            New target host (or null to keep current).
-            port:            New target port (or null to keep current).
-            tls:             New TLS setting (or null to keep current).
-            transport:       ``"tcp"`` or ``"udp"`` (or null to keep current).
-            data_hex:        New bytes for the first frame as hex (or null to keep current).
-            response_window: Seconds to wait per frame (or null to keep current).
-
-        Returns:
-            Updated playbook dict, or {"ok": False} if not found.
-        """
+        """Update a playbook's connection config and/or first frame's bytes (null to keep each). Returns the updated playbook."""
         pb = _playbooks.get(playbook_id)
         if pb is None:
             return {"ok": False, "error": f"Playbook '{playbook_id}' not found."}
@@ -1656,12 +1227,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def delete_playbook(playbook_id: str) -> dict:
-        """
-        Delete a playbook and its run history.
-
-        Args:
-            playbook_id: The playbook UUID to delete.
-        """
+        """Delete a playbook and its run history."""
         if playbook_id not in _playbooks:
             return {"ok": False, "error": f"Playbook '{playbook_id}' not found."}
         del _playbooks[playbook_id]
@@ -1669,15 +1235,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     async def run_playbook(playbook_id: str) -> dict:
-        """
-        Execute all frames in a playbook and record the run.
-
-        Args:
-            playbook_id: The playbook UUID from list_playbooks.
-
-        Returns:
-            The PlaybookRun dict including all traffic entries.
-        """
+        """Run all frames in a playbook and record the run. Returns the PlaybookRun (includes captured traffic)."""
         pb = _playbooks.get(playbook_id)
         if pb is None:
             return {"ok": False, "error": f"Playbook '{playbook_id}' not found."}
@@ -1697,19 +1255,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         frame_id:   str,
         label:      Optional[str] = None,
     ) -> dict:
-        """
-        Create a playbook pre-loaded with a captured frame's bytes.
-
-        This is the MCP equivalent of Ctrl+R "Send to Forge" in the UI.
-
-        Args:
-            session_id: Session UUID containing the frame.
-            frame_id:   Frame UUID to load into the playbook.
-            label:      Name for the new playbook (default: "From <session_id[:8]>").
-
-        Returns:
-            The new playbook dict.
-        """
+        """Create a playbook pre-loaded with a captured frame's bytes (MCP equivalent of 'Send to Forge'). session_id, frame_id, label (optional). Returns the new playbook."""
         session = api.get_session(session_id)
         if session is None:
             return {"ok": False, "error": f"Session '{session_id}' not found."}
@@ -1755,29 +1301,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         frame_selector:  Optional[str]            = None,
         modified_frames: Optional[dict[str, str]] = None,
     ) -> dict:
-        """
-        Replay a captured session against the upstream server.
-
-        Replays the captured frames (in the selected direction) to the server.
-        Useful for reproducing observed traffic, regression testing, or fuzzing.
-
-        Args:
-            session_id:      Session UUID to replay.
-            server_host:     Override target host (default: original server host).
-            server_port:     Override target port (default: original server port).
-            frame_delay:     Seconds to wait between sending each frame.
-            direction:       Which direction to replay: "client_to_server" (default)
-                             or "server_to_client".
-            frame_selector:  Comma/range selector for specific frames, e.g.
-                             "0,2,4-6" or "3". None means all frames.
-            modified_frames: Optional dict of ``frame_id → replacement_hex`` for
-                             byte-level overrides on specific frames. Frames not
-                             listed use their original bytes. Use
-                             ``replay_with_field_edits`` for protocol field edits.
-
-        Returns:
-            ForgeResult dict with replayed_session_id, success, frame counts, etc.
-        """
+        """Replay a captured session against the upstream server. server_host/server_port: overrides; frame_delay: seconds between frames; direction: replay direction; frame_selector: e.g. "0,2,4-6" (None = all); modified_frames: {frame_id: replacement_hex} byte overrides. Returns a ForgeResult. For field edits use replay_with_field_edits."""
         try:
             dir_enum = Direction(direction)
         except ValueError:
@@ -1813,33 +1337,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         direction:      str            = "client_to_server",
         frame_selector: Optional[str]  = None,
     ) -> dict:
-        """
-        Replay a captured session with protocol field-level edits applied.
-
-        Requires a protocol definition to be loaded (configured on a forwarder or set by the operator from the TUI).
-        Each message type can have specific fields overridden. The encoder
-        automatically recomputes length fields after edits.
-
-        Args:
-            session_id:     Session UUID to replay.
-            field_edits:    Dict of message_type_name → {field_name → new_value}.
-                            Example:
-                              {
-                                "LoginRequest": {
-                                  "username": "admin2",
-                                  "session_token": 99
-                                }
-                              }
-            server_host:    Override target host (default: original server host).
-            server_port:    Override target port (default: original server port).
-            frame_delay:    Seconds between frames.
-            direction:      "client_to_server" (default) or "server_to_client".
-            frame_selector: Selector string for specific frames (e.g. "0,2,4-6").
-
-        Returns:
-            ForgeResult dict. Falls back to original bytes for frames whose
-            message type is not in field_edits or whose encoding fails.
-        """
+        """Replay a captured session with protocol field edits (needs a loaded definition; length fields recomputed). field_edits: {message_type: {field_name: new_value}}. server_host/server_port/frame_delay/direction/frame_selector as in forge_session. Frames whose type isn't edited (or fail to encode) replay unchanged."""
         if api._encoder is None:
             return {
                 "ok": False,
@@ -1875,17 +1373,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def get_ca_cert() -> dict:
-        """
-        Return the proxy's TLS CA certificate in PEM format.
-
-        Install this certificate in your client application or OS trust store
-        so that the client trusts the proxy's per-session certificates during
-        TLS interception.
-
-        Returns:
-            {"pem": "<certificate PEM string>"} or an error if TLS is not
-            configured or the CA has not been initialised.
-        """
+        """Return the proxy's TLS CA certificate (PEM) to install in the client/OS trust store for TLS interception. Returns {"pem": ...}, or an error if TLS/CA is not initialised."""
         ca = api.ca
         if ca is None:
             return {
@@ -1982,42 +1470,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         server_port:      Optional[int] = None,
         response_timeout: float         = 10.0,
     ) -> dict:
-        """
-        Start a fuzzing campaign in the background and return immediately.
-
-        Mutators are specified as a list of objects, each with a ``"name"`` field
-        and optional parameters:
-
-        - ``{"name": "bit_flip"}``                          — flip random bits
-        - ``{"name": "bit_flip", "count": 4}``             — flip 4 bits per frame
-        - ``{"name": "byte_insert"}``                       — insert random bytes
-        - ``{"name": "byte_delete"}``                       — delete random bytes
-        - ``{"name": "known_bad"}``                         — known-bad payloads (overflows, SQL, fmt strings)
-        - ``{"name": "radamsa"}``                           — radamsa (must be on PATH)
-        - ``{"name": "radamsa", "radamsa_path": "/path"}``  — radamsa at a custom path
-        - ``{"name": "field_boundary"}``                    — integer boundary values (protocol-aware)
-        - ``{"name": "field_overflow", "lengths": [256]}``  — string/bytes overflow (protocol-aware)
-        - ``{"name": "null_byte"}``                         — null-byte injection (protocol-aware)
-        - ``{"name": "length_mangle"}``                     — corrupt length fields (protocol-aware)
-
-        Protocol-aware mutators (field_*) require a protocol definition to be loaded.
-
-        The campaign runs as an asyncio background task.  Poll with
-        ``fuzz_status`` and retrieve results with ``fuzz_results``.
-
-        Args:
-            session_id:       Template session UUID (must be a captured session).
-            mutators:         List of mutator spec objects (see above).
-            iterations:       Total number of mutations to send (default: 50).
-            frame_selector:   Comma/range spec, e.g. ``"0,2-4"``. None = all frames.
-            stop_on_crash:    Stop on first TCP connection reset.
-            server_host:      Override target host (default: session's original server).
-            server_port:      Override target port.
-            response_timeout: Per-iteration read timeout in seconds.
-
-        Returns:
-            ``{"ok": true, "campaign_id": "<uuid>", "status": "running"}``
-        """
+        """Start a background fuzzing campaign and return immediately. mutators: list of {"name": ..., ...params} — see list_mutators for names and parameters (protocol-aware mutators need a loaded definition). iterations (default 50); frame_selector; stop_on_crash; server_host/server_port overrides; response_timeout. Returns campaign_id and status. Poll with fuzz_status; details via fuzz_results."""
         from protopoke.fuzzing.models import FuzzCampaign
 
         built, err = _build_mutators(mutators)
@@ -2051,17 +1504,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def fuzz_status(campaign_id: str) -> dict:
-        """
-        Return the current status and summary of a fuzzing campaign.
-
-        Useful for polling a running campaign started with ``fuzz_start``.
-
-        Args:
-            campaign_id: Campaign UUID returned by ``fuzz_start``.
-
-        Returns:
-            Campaign summary dict (no per-result details; use ``fuzz_results`` for those).
-        """
+        """Return a fuzzing campaign's status summary (no per-iteration detail; use fuzz_results). campaign_id: from fuzz_start."""
         entry = _campaigns.get(campaign_id)
         if entry is None:
             return {"ok": False, "error": f"Campaign '{campaign_id}' not found."}
@@ -2084,21 +1527,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def fuzz_results(campaign_id: str, interesting_only: bool = False) -> dict:
-        """
-        Return per-iteration results for a fuzzing campaign.
-
-        Each result includes the mutated bytes (hex), response bytes (hex),
-        response time, connection reset flag, timeout flag, and the
-        ``interesting`` heuristic flag.
-
-        Args:
-            campaign_id:     Campaign UUID returned by ``fuzz_start``.
-            interesting_only: If True, return only results flagged as interesting
-                              (connection reset, timeout, or response size anomaly).
-
-        Returns:
-            ``{"ok": true, "id": "...", "status": "...", "results": [...]}``
-        """
+        """Return per-iteration results for a campaign (each: mutated_bytes hex, response_bytes hex, response time, reset/timeout flags, 'interesting' flag). interesting_only: only flagged results."""
         entry = _campaigns.get(campaign_id)
         if entry is None:
             return {"ok": False, "error": f"Campaign '{campaign_id}' not found."}
@@ -2113,19 +1542,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def fuzz_stop(campaign_id: str) -> dict:
-        """
-        Request early termination of a running campaign.
-
-        Sets the campaign's status to ``"stopped"``; the engine will finish
-        the current iteration and then exit gracefully.  Has no effect if the
-        campaign is already done or stopped.
-
-        Args:
-            campaign_id: Campaign UUID returned by ``fuzz_start``.
-
-        Returns:
-            ``{"ok": true, "status": "stopped"}``
-        """
+        """Request early stop of a running campaign (finishes the current iteration). campaign_id: from fuzz_start."""
         entry = _campaigns.get(campaign_id)
         if entry is None:
             return {"ok": False, "error": f"Campaign '{campaign_id}' not found."}
@@ -2137,15 +1554,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def list_campaigns() -> list[dict]:
-        """
-        List all fuzzing campaigns (running and completed) with summary info.
-
-        To retrieve per-iteration details call ``fuzz_results`` with the
-        campaign ID.
-
-        Returns:
-            List of campaign summary dicts ordered by insertion time (oldest first).
-        """
+        """List all fuzzing campaigns with summary info (oldest first). Per-iteration detail via fuzz_results."""
         return [
             {
                 "id":                   c.id,
@@ -2173,41 +1582,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         custom_framer_path: Optional[str]  = None,
         forwarder_name:     Optional[str]  = None,
     ) -> dict:
-        """
-        Hot-swap the active framer on running sessions without restarting.
-
-        The framer determines how the raw TCP byte stream is segmented into
-        discrete frames for capture and display.  Choosing the right framer
-        is often one of the first steps in reverse engineering an unknown
-        binary protocol.
-
-        Available built-in framers:
-          - "raw"            — Each read() chunk = one frame. Use as a starting point.
-          - "delimiter"      — Split on a byte sequence (e.g. \\r\\n for line protocols).
-                               Requires framer_kwargs={"delimiter": "<hex>"}, where
-                               the delimiter is provided as a hex string
-                               (e.g. "0d0a" for CRLF).
-          - "length_prefix"  — Fixed-size integer length header before each frame.
-                               Requires framer_kwargs={"length_size": 2} (bytes).
-                               Optional: {"byte_order": "big"} (default "big") and
-                               {"includes_header": false} (default false).
-          - "line"           — Split on \\r\\n or \\n (shorthand for delimiter framer).
-          - "custom"         — Load a custom Framer subclass from a Python file.
-                               Requires custom_framer_path.
-
-        Args:
-            framer_name:        Framer key (see above).
-            framer_kwargs:      Extra options for the framer (see above).
-                                Bytes values should be provided as hex strings.
-            custom_framer_path: Path to a Python file with a custom Framer subclass.
-                                Required when framer_name == "custom".
-            forwarder_name:     If set, only update sessions on this forwarder.
-                                None (default) = update all forwarders.
-
-        Returns:
-            {"ok": True, "swapped_sessions": <count>} — number of active sessions
-            whose framer was hot-swapped.
-        """
+        """Hot-swap the active framer on running sessions without restarting. framer_name: built-in key ("raw", "delimiter", "length_prefix", "line") or custom; framer_kwargs: e.g. {"delimiter": "0d0a"} (hex) or {"length_size": 2}; custom_framer_path: .py for a custom framer; forwarder_name: limit to one forwarder. See list_framers. Returns swapped_sessions count."""
         kwargs: dict = {}
         if framer_kwargs:
             for k, v in framer_kwargs.items():
@@ -2239,36 +1614,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         custom_framer_path:      Optional[str]  = None,
         protocol_definition_path: Optional[str] = None,
     ) -> dict:
-        """
-        Hot-swap name, framing, and/or protocol definition on a running
-        forwarder without restarting it.
-
-        This is the preferred way to change a forwarder's configuration
-        while it is running.  Changes take effect immediately:
-
-        - **Name**: the forwarder and all its existing sessions are
-          relabelled.
-        - **Framing**: the framer is swapped on every active session so
-          new data is segmented with the updated strategy.
-        - **Protocol definition**: the decoder/encoder are replaced so
-          subsequent ``decode_frame()`` calls use the new definition.
-
-        Args:
-            forwarder_name:          Current name of the forwarder to update.
-            new_name:                Rename the forwarder (must be unique).
-            framer_name:             New framer key ("raw", "delimiter",
-                                     "length_prefix", "line", or "custom").
-            framer_kwargs:           Extra options for the framer. Byte values
-                                     should be hex strings (e.g. "0d0a").
-            custom_framer_path:      Path to a custom framer Python file
-                                     (required when framer_name == "custom").
-            protocol_definition_path: Path to a .yaml/.json protocol
-                                     definition, or "" to clear.
-
-        Returns:
-            {"ok": True, "renamed": bool, "sessions_reframed": int,
-             "protocol_set": bool}
-        """
+        """Hot-swap name, framing, and/or protocol definition on a running forwarder without restarting (applies immediately to live sessions). new_name (unique); framer_name/framer_kwargs/custom_framer_path; protocol_definition_path. See list_framers. Returns renamed, sessions_reframed, protocol_set."""
         kwargs: dict = {}
         if framer_kwargs:
             for k, v in framer_kwargs.items():
@@ -2301,38 +1647,12 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def get_variables() -> dict:
-        """
-        Return the global variable store used by replace rules and playbooks.
-
-        Variables are hex-encoded byte strings (e.g. {"SEQ": "00000001"}).
-        They can be read and written by script-type replace rules and are
-        shared across all pipelines (intercept, forge, sequence/playbook).
-
-        Useful during reverse engineering to track session state such as
-        sequence numbers, session tokens, or checksums extracted from
-        captured frames.
-
-        Returns:
-            Dict of variable_name → hex_value_string.
-        """
+        """Return the global variable store (name -> hex value) shared by replace rules and playbooks ({{VAR}} placeholders)."""
         return dict(api.variables)
 
     @mcp.tool()
     def set_variable(name: str, value_hex: str) -> dict:
-        """
-        Set a variable in the global variable store.
-
-        Variables are used as {{VAR}} placeholders in playbook frames and
-        by script-type replace rules.  Setting a variable here updates it
-        immediately for all subsequent forge/playbook sends.
-
-        Args:
-            name:      Variable name (case-sensitive, e.g. "SEQ" or "TOKEN").
-            value_hex: Value as a hex string (e.g. "deadbeef" or "00000001").
-
-        Returns:
-            {"ok": True, "name": ..., "value_hex": ...}
-        """
+        """Set a variable in the global store (used as {{VAR}} in playbooks and by script rules). name; value_hex."""
         try:
             bytes.fromhex(value_hex)
         except ValueError as exc:
@@ -2342,15 +1662,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def delete_variable(name: str) -> dict:
-        """
-        Remove a single variable from the global variable store.
-
-        Args:
-            name: Variable name to remove.
-
-        Returns:
-            {"ok": True, "name": ...} if it existed, {"ok": False, "error": ...} otherwise.
-        """
+        """Remove one variable by name."""
         if name not in api.variables:
             return {"ok": False, "error": f"Variable {name!r} not found."}
         del api.variables[name]
@@ -2358,12 +1670,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def clear_variables() -> dict:
-        """
-        Clear all variables from the global variable store.
-
-        Returns:
-            {"ok": True, "cleared": <count>}
-        """
+        """Clear all variables. Returns the count cleared."""
         count = len(api.variables)
         api.variables.clear()
         return {"ok": True, "cleared": count}
@@ -2387,14 +1694,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def list_mutators() -> list[dict]:
-        """
-        List the fuzzing mutators available to ``fuzz_start``.
-
-        Each entry has ``name`` (the spec key), ``parameters`` (optional
-        kwargs and their defaults), and ``requires_protocol`` (True for
-        protocol-aware mutators that need a protocol definition to be loaded
-        first).
-        """
+        """List fuzzing mutators for fuzz_start. Each: name (spec key), parameters (kwargs + defaults), requires_protocol."""
         return [
             {"name": "bit_flip",       "parameters": {"count": 1},                       "requires_protocol": False},
             {"name": "byte_insert",    "parameters": {"count": 4},                       "requires_protocol": False},
@@ -2443,14 +1743,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def list_field_types() -> list[str]:
-        """
-        Return the field-type names accepted by ``decode_field`` /
-        ``offset_correlations``.
-
-        Numeric types come in explicit endianness variants (e.g. ``uint16_le``,
-        ``float32_be``).  Non-numeric helpers: ``ascii`` (printable rendering),
-        ``bytes`` (hex string), ``cstring`` (NUL-terminated UTF-8).
-        """
+        """List supported field-type names for decode_field (e.g. uint16_le, float32_be, int8, ascii, cstring, bytes)."""
         return analysis.supported_field_types()
 
     @mcp.tool()
@@ -2461,23 +1754,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         bucket_prefix_len: int        = 2,
         max_bucket_offsets: int       = 256,
     ) -> dict:
-        """
-        Summary statistics for a session's frames.
-
-        Buckets frames by ``(first-N-byte prefix, frame length)`` — the
-        natural shape of "packet types" in most binary protocols — then for
-        each bucket with ≥3 frames reports per-offset change-rate, distinct-
-        value count, and Shannon entropy.  Also returns the size distribution,
-        prefix distributions for 1/2/4-byte prefixes, and the timestamp range.
-
-        Args:
-            session_id:         Session UUID.
-            direction:          Optional direction filter.
-            size_bytes:         If set, only consider frames of this exact size.
-            bucket_prefix_len:  How many leading bytes define a "packet type"
-                                bucket (default 2 — covers most opcodes).
-            max_bucket_offsets: Cap per-offset stats per bucket (default 256).
-        """
+        """Per-session frame statistics: direction/size distribution, prefix buckets, and for each (prefix,size) bucket with >=3 frames, per-offset change-rate, distinct-value count, and Shannon entropy. Standard scoping params (direction, size_bytes, byte_patterns)."""
         try:
             frames = _select_session_frames(
                 session_id, direction, size_bytes, None, None, None
@@ -2497,16 +1774,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         size_bytes:    Optional[int] = None,
         byte_patterns: Optional[list[dict]] = None,
     ) -> dict:
-        """
-        Per-offset Shannon entropy across a bucket of same-size frames.
-
-        Useful for quickly spotting constant padding (entropy ≈ 0),
-        encrypted/compressed regions (entropy near 8), and structured fields
-        (somewhere in between).
-
-        All selected frames MUST be the same size.  Use ``size_bytes`` and/or
-        ``byte_patterns`` to scope to a single packet type.
-        """
+        """Per-offset Shannon entropy across a same-size bucket (0 = constant, ~8 = random). Standard scoping params."""
         try:
             frames = _select_session_frames(
                 session_id, direction, size_bytes, None, None, byte_patterns
@@ -2521,13 +1789,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         direction:  Optional[str] = None,
         prefix_len: int           = 2,
     ) -> dict:
-        """
-        Auto-discover packet-type clusters by ``(first-N-bytes, length)``.
-
-        Cheap alternative to guessing prefix lengths manually.  Returns one
-        entry per cluster with count, sequence-number range, and a sample
-        hex dump of the first frame in the cluster.
-        """
+        """Bucket frames into candidate packet types by (first prefix_len bytes, length). Returns per-cluster count, sequence range, and a short sample hex."""
         try:
             frames = _select_session_frames(
                 session_id, direction, None, None, None, None
@@ -2547,16 +1809,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         limit:         int                  = 50,
         offset_cursor: int                  = 0,
     ) -> dict:
-        """
-        Return a filtered, paginated slice of a session's frames.
-
-        Replaces the "dump everything to disk and grep" workflow.  All filters
-        are ANDed.  ``byte_patterns`` is a list of ``{"offset": int,
-        "hex": "6d76"}`` dicts; every pattern must match its exact offset.
-
-        Returns ``{total_matching, returned, next_cursor, frames: [...]}``.
-        ``frames`` uses the same schema as ``get_frames``.
-        """
+        """Return a filtered, paginated slice of a session's frames. Standard scoping params plus limit/cursor; returns frames, total_matching, returned, next_cursor."""
         try:
             frames = _select_session_frames(
                 session_id, direction, size_bytes, min_size, max_size, byte_patterns
@@ -2584,22 +1837,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         include_timestamps: bool                = True,
         limit:             int                  = 500,
     ) -> dict:
-        """
-        Decode ``raw_bytes[offset:offset+size]`` as ``type`` in every selected
-        frame.
-
-        Use ``list_field_types`` for the full type list (e.g. ``uint16_le``,
-        ``float32_be``, ``int8``, ``ascii``, ``cstring``).
-
-        ``deduplicate=True`` only emits a row when the decoded value changes
-        — the single highest-leverage primitive for spotting state changes
-        in a long capture.  Combine with ``size_bytes`` and/or
-        ``byte_patterns`` to scope to one packet type.
-
-        Returns ``{total_returned, truncated, rows}``.  ``rows`` may be
-        truncated to ``limit``; the truncation flag tells you to refine the
-        filter rather than raise the limit.
-        """
+        """Decode raw_bytes[offset:offset+size] as type across selected frames. type: see list_field_types; standard scoping params; deduplicate: emit a row only when the value changes (surfaces state transitions cheaply); include_timestamps: add per-row timestamp. Returns rows, total_returned, truncated."""
         try:
             frames = _select_session_frames(
                 session_id, direction, size_bytes, None, None, byte_patterns
@@ -2630,13 +1868,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         frame_id_a:  str,
         frame_id_b:  str,
     ) -> dict:
-        """
-        Byte-level diff between two specific frames.
-
-        Returns a coalesced list of differing byte runs (with offsets and an
-        integer delta where it makes sense), the common prefix / suffix
-        length, and a 16-byte-row side-by-side hex view.
-        """
+        """Byte-level diff of two frames: coalesced differing ranges (with integer delta where applicable), common prefix/suffix lengths, and a 16-byte-row side-by-side hex view. frame_a_id, frame_b_id."""
         session = api.get_session(session_id)
         if session is None:
             return {"error": f"Session {session_id} not found"}
@@ -2656,14 +1888,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         byte_patterns: Optional[list[dict]] = None,
         max_offsets:   int                  = 64,
     ) -> dict:
-        """
-        Column-by-column diff matrix across all selected frames.
-
-        All selected frames must be the same size.  Returns the offsets whose
-        values vary at least once, sorted by most-varying first, each as a
-        single hex string of one byte per frame in capture order.  Cheap way
-        to find which offsets actually carry information in a packet type.
-        """
+        """Column-by-column diff matrix across same-size selected frames, most-varying offset first; each column is one byte per frame, hex-concatenated. Standard scoping params; max_offsets cap."""
         try:
             frames = _select_session_frames(
                 session_id, direction, size_bytes, None, None, byte_patterns
@@ -2679,20 +1904,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         size_bytes:    Optional[int]        = None,
         byte_patterns: Optional[list[dict]] = None,
     ) -> dict:
-        """
-        Per-offset + per-range heuristics across a bucket of same-size frames.
-
-        For each contiguous run of varying offsets, scores candidate types
-        (uint/int LE/BE at 1/2/4/8 bytes, plus float32 LE/BE for 4-byte
-        widths) and flags generic patterns:
-
-          - ``looks_like_length``: value == frame_size - C for all frames.
-          - ``looks_like_counter``: values are (mostly) monotonic.
-          - ``looks_like_ascii_run``: ≥80% printable ASCII bytes.
-
-        No domain-specific value-range checks.  All selected frames must be
-        the same size; use ``size_bytes`` and/or ``byte_patterns`` to scope.
-        """
+        """Per-offset and per-varying-range heuristics over a same-size bucket: candidate numeric types with min/max/distinct, and looks_like_length / looks_like_counter / looks_like_ascii_run flags. Standard scoping params."""
         try:
             frames = _select_session_frames(
                 session_id, direction, size_bytes, None, None, byte_patterns
@@ -2707,19 +1919,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         direction:     Optional[str]        = None,
         byte_patterns: Optional[list[dict]] = None,
     ) -> dict:
-        """
-        Find offsets whose integer value tracks frame length.
-
-        Works across MIXED-size frames in the bucket — most generic length-
-        prefix detection happens by correlating ``value`` with ``len(frame)``
-        across frames of different sizes.  Reports every offset/width/
-        byteorder combination where ``value == len(frame) - constant`` for
-        the SAME constant across every selected frame.
-
-        Heads up: a length field at offset 0 will produce both a "true"
-        candidate and several lower-confidence ones if the protocol packs a
-        type byte next to it — review the constants.
-        """
+        """Find (offset, width, byteorder) whose integer value equals len(frame) - C for a constant C across all frames. Works across mixed sizes — call on the whole session."""
         try:
             frames = _select_session_frames(
                 session_id, direction, None, None, None, byte_patterns
@@ -2739,14 +1939,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         size_bytes:    Optional[int]        = None,
         byte_patterns: Optional[list[dict]] = None,
     ) -> dict:
-        """
-        Pearson correlation between values at two offsets across the bucket.
-
-        Useful for detecting paired fields (paired counters, related flags)
-        without baking in domain assumptions.  Also returns ``change_pairing``:
-        the fraction of consecutive frames where A and B both changed (or both
-        stayed put).  High values → tightly coupled.
-        """
+        """Check whether two offsets co-vary (Pearson r and change_pairing). offset_a/offset_b, type_a/type_b; standard scoping params."""
         try:
             frames = _select_session_frames(
                 session_id, direction, size_bytes, None, None, byte_patterns
@@ -2775,19 +1968,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         min_coverage:  float                = 0.8,
         max_results:   int                  = 50,
     ) -> dict:
-        """
-        Find byte n-grams that appear in at least ``min_coverage`` of the
-        selected frames, regardless of offset.
-
-        Surfaces magic markers, version stamps, trailers, and recurring
-        substrings that constant-offset stats miss.  Strict substrings of a
-        longer hit with the same coverage are suppressed — the longest
-        distinct pattern wins.
-
-        Each result includes up to three sample frames with the offset(s) at
-        which the pattern occurs so the caller can pivot from "this exists"
-        to "here is where".
-        """
+        """Find byte n-grams present in >= min_coverage of selected frames regardless of offset (magic markers, version stamps, trailers). min_length/max_length, max_results."""
         try:
             frames = _select_session_frames(
                 session_id, direction, size_bytes, None, None, byte_patterns
@@ -2811,21 +1992,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         max_frames:     int                  = 20,
         max_frame_size: int                  = 512,
     ) -> dict:
-        """
-        Needleman-Wunsch global alignment of mixed-size frames against the
-        first selected frame.
-
-        Draws field boundaries even when prefixes shift — for clusters that
-        share structure but have different lengths (TLV chains, string
-        bodies, variable headers).  Returns the aligned rows as hex strings
-        with ``--`` for gaps, plus a consensus string (``xx`` where every
-        row agrees, ``??`` where rows differ, ``--`` where any gap is
-        present) and the list of variable regions for quick inspection.
-
-        Inputs are capped: at most ``max_frames`` frames, each truncated to
-        ``max_frame_size`` bytes for the alignment (cost is ``O(n*m)`` per
-        pair).
-        """
+        """Needleman-Wunsch alignment of mixed-size frames against the first selected frame. Returns aligned rows (hex, '--' for gaps), a consensus row, and variable regions. max_frames/max_frame_size caps."""
         try:
             frames = _select_session_frames(
                 session_id, direction, size_bytes, None, None, byte_patterns
@@ -2848,17 +2015,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         max_per_frame: int                  = 50,
         include_utf16_le: bool              = False,
     ) -> dict:
-        """
-        ``strings(1)`` for captured frames: report every printable-ASCII run
-        of length ≥ ``min_length``, with its frame ID and offset.
-
-        Stops a run at NUL or any non-printable byte.  If ``include_utf16_le``
-        is True, also reports Windows-style UTF-16-LE strings (printable
-        ASCII bytes interleaved with NUL bytes).
-
-        The fastest way to spot embedded usernames, hostnames, paths, error
-        messages, or any other human-readable content the protocol carries.
-        """
+        """Printable-ASCII runs (>= min_length) per frame, with frame_id and offset. include_utf16_le: also Windows-style UTF-16. max_per_frame cap."""
         try:
             frames = _select_session_frames(
                 session_id, direction, size_bytes, None, None, byte_patterns
@@ -2886,21 +2043,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         min_coverage:  float                = 0.6,
         max_results:   int                  = 10,
     ) -> dict:
-        """
-        Try Type-Length-Value layouts and score how well each one explains
-        the selected frames.
-
-        For every combination of ``(type_width in {1, 2}, length_width in
-        {1, 2, 4}, length_byteorder, length_includes_header)`` and every
-        starting offset in ``start_offsets`` (default ``[0]``), walk each
-        frame as a TLV chain.  A frame "matches" a shape if the walk
-        consumes the entire buffer (no leftover bytes) and produces at least
-        ``min_records`` records.
-
-        For each surviving candidate the response includes the most common
-        type values seen, which often directly map to opcode / tag names
-        in the spec.
-        """
+        """Try Type-Length-Value layouts (type_width 1/2, length_width 1/2/4, BE/LE, length-includes-header or value-only) at start_offsets; report shapes that consume whole frames as record chains, with common type values. min_records, min_coverage, max_results."""
         try:
             frames = _select_session_frames(
                 session_id, direction, size_bytes, None, None, byte_patterns
@@ -2925,24 +2068,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         min_coverage:  float                = 0.9,
         max_results:   int                  = 20,
     ) -> dict:
-        """
-        Try standard checksum / CRC / Adler / Fletcher algorithms over each
-        frame and report ``(offset, algorithm, byteorder, coverage)`` hits.
-
-        Algorithms tried: ``sum8``, ``xor8``, ``sum16``, ``fletcher16``,
-        ``crc16_ccitt`` (init 0xFFFF), ``crc16_xmodem`` (init 0),
-        ``crc32_ieee`` (zlib), ``adler32`` (zlib).
-
-        For each candidate offset+algorithm, the algorithm is computed over
-        the frame's bytes *excluding* the candidate field.  If the stored
-        value matches the computed value in at least ``min_coverage`` of
-        frames, the candidate is reported.  For multi-byte algorithms, both
-        little- and big-endian interpretations are tried.
-
-        Reports the algorithm name, offset, byteorder, and coverage —
-        enough to add the checksum as a field in the protocol definition
-        and tag it for `tamper` probes.
-        """
+        """Try sum8/xor8/sum16/fletcher16/crc16_ccitt/crc16_xmodem/crc32_ieee/adler32 (both endiannesses) at each plausible offset, computed over the frame excluding the candidate field. min_coverage, max_results."""
         try:
             frames = _select_session_frames(
                 session_id, direction, size_bytes, None, None, byte_patterns
@@ -2964,22 +2090,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         min_coverage:  float                = 0.8,
         max_results:   int                  = 20,
     ) -> dict:
-        """
-        Find offsets whose decoded unsigned integer value lies in a plausible
-        real-world timestamp range across most selected frames.
-
-        For each ``(offset, width in {4, 8}, byteorder in {little, big})``
-        candidate, check the fraction of frames where the value falls inside
-        each known epoch range — ``unix_seconds``, ``unix_milliseconds``,
-        ``ntp_seconds``, ``windows_filetime``.  Each surviving candidate also
-        reports the Pearson correlation between the decoded value and the
-        frame's capture timestamp — a value near 1.0 strongly confirms it's
-        a real timestamp rather than an integer that happens to be in range.
-
-        Use the correlation to break ties between LE/BE candidates: the
-        endianness with the higher ``pearson_r_with_capture_time`` is
-        almost always the right one.
-        """
+        """For each (offset, width 4/8, byteorder), count frames whose decoded value falls in a known epoch (unix_seconds/ms, ntp_seconds, windows_filetime) and report Pearson correlation with capture time (disambiguates LE vs BE). min_coverage, max_results."""
         try:
             frames = _select_session_frames(
                 session_id, direction, size_bytes, None, None, byte_patterns
@@ -3003,24 +2114,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         window_step:      int                  = 16,
         max_per_frame:    int                  = 6,
     ) -> dict:
-        """
-        Per-frame detection of compressed/encrypted regions and known
-        file/stream magic signatures.
-
-        Two passes per frame:
-
-        - **Signature scan** — every byte position is checked against a small
-          catalogue of well-known magic strings (gzip, zlib, lz4, zstd, png,
-          jpeg, zip, ELF, PE, ASN.1 SEQUENCE, TLS handshake records, SSH
-          banners, …).
-        - **Entropy windows** — a sliding ``window_size``-byte window
-          (stepping by ``window_step``) is scored for Shannon entropy;
-          windows at or above ``high_entropy_min`` bits are reported (capped
-          at ``max_per_frame`` per frame).
-
-        Useful for spotting embedded blobs (compressed payloads,
-        ciphertext, nested protocols) you'd otherwise miss in a hex dump.
-        """
+        """Per-frame: known magic signatures (gzip, zlib, zstd, ZIP, PNG, ELF, TLS, ...) and sliding-window high-entropy regions (>= high_entropy_min over window_size bytes). window_step, max_per_frame."""
         try:
             frames = _select_session_frames(
                 session_id, direction, size_bytes, None, None, byte_patterns
@@ -3045,23 +2139,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         min_coverage:  float                = 0.5,
         max_results:   int                  = 20,
     ) -> dict:
-        """
-        Find values sent in one direction that reappear in the opposite
-        direction shortly after — the classic transaction-ID / session-token /
-        echo pattern.
-
-        Walks the session's frames in capture order.  For every source
-        frame F and each width in ``widths`` (default ``[2, 4, 8]``),
-        slides a window over F; for each non-trivial value (rejects all-
-        zero and all-same-byte values), looks in the next ``max_distance``
-        frames in the OPPOSITE direction.  Triples
-        ``(src_offset, dst_offset, width)`` that hit in at least
-        ``min_coverage`` of opportunities are reported with a sample value
-        — strong evidence the same field is being echoed.
-
-        Note: both directions are needed, so this tool does not accept a
-        ``direction`` filter.
-        """
+        """Find values sent at src_offset that reappear at a fixed dst_offset in the opposite direction within max_distance frames (transaction-ID / token pattern). widths (default [2,4,8]), min_coverage, max_results."""
         # All frames, both directions
         try:
             frames = _select_session_frames(
@@ -3098,20 +2176,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         direction:   Optional[str] = None,
         size_bytes:  Optional[int] = None,
     ) -> dict:
-        """
-        Decode one field as a time series across a session's frames.
-
-        Pull ``raw_bytes[byte_offset:byte_offset+byte_length]`` from every
-        matching frame and decode it with ``encoding`` (one of ``u8``, ``i8``,
-        ``u16_le``, ``u16_be``, ``i16_le``, ``i16_be``, ``u32_le``, ``u32_be``,
-        ``i32_le``, ``i32_be``, ``f32_le``, ``f32_be``, ``f64_le``, ``f64_be``).
-        ``byte_length`` must equal the encoding width.
-
-        Saves writing a throwaway script to test a field-type hypothesis: one
-        row per frame with ``frame_id``, ``timestamp``, ``sequence_number`` and
-        the decoded ``value``, in capture order.  Use ``direction`` and
-        ``size_bytes`` to scope to one packet type.
-        """
+        """Time series for one (byte_offset, byte_length, encoding) field: one row per frame with frame_id, timestamp, sequence_number, value. encoding: compact name (u8, i16_le, f32_le, ...)."""
         try:
             frames = _select_session_frames(
                 session_id, direction, size_bytes, None, None, None
@@ -3135,25 +2200,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         max_sample: int           = 200,
         top_n:      int           = 20,
     ) -> dict:
-        """
-        Score every numeric encoding at every offset to guess field types.
-
-        Runs on a sample of frames from one packet-size bucket (the dominant
-        size by default, or ``size_bytes`` if given) and tries each encoding
-        (``u8`` … ``f64_be``) at every offset that fits.  Each ``(offset,
-        encoding)`` pair is scored on:
-
-        - **float validity** — float encodings with any NaN/Inf score 0;
-        - **high-byte stability** — low entropy in the most-significant byte
-          (real coordinates/counters don't span the full type range);
-        - **smoothness / monotonicity** — small successive deltas between
-          temporally adjacent frames.
-
-        Constant offsets are skipped.  Returns the top ``top_n`` candidates
-        sorted by score — the automated version of guessing field types by
-        hand.  This is usually the fastest first pass on a new fixed-size
-        packet type.
-        """
+        """Score every numeric encoding at every offset on a fixed-size bucket (float validity, high-byte stability, smoothness/monotonicity) — the fast first pass for finding numeric fields. size_bytes (default dominant size), max_sample, top_n, encodings. Returns ranked candidates."""
         try:
             frames = _select_session_frames(
                 session_id, direction, None, None, None, None
@@ -3175,18 +2222,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         size_bytes:         Optional[int] = None,
         max_ids_per_bucket: int           = 1000,
     ) -> dict:
-        """
-        Bucket frames by the concatenated value at one or more byte ranges.
-
-        ``ranges`` is a list of ``{"offset": int, "length": int}`` dicts; the
-        raw bytes at all ranges are concatenated to form each frame's bucket
-        key.  Surfaces flag fields and joint distributions across two offsets
-        (e.g. a pair of input-axis bytes) that per-offset entropy can't show.
-
-        Returns ``counts`` (``{key_hex: n}``) and ``groups``
-        (``{key_hex: [frame_ids]}``), ordered by descending count.  Frames too
-        short for a range are skipped.
-        """
+        """Bucket frames by the concatenated value across one or more (offset, length) ranges; returns per-bucket counts and {key_hex: [frame_ids]} (co-occurrence / join distribution). ranges, max_ids_per_bucket."""
         norm: list[tuple[int, int]] = []
         for r in ranges:
             try:
@@ -3216,16 +2252,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         field_decls:    Optional[list[dict]] = None,
         max_diff_bytes: int                  = 512,
     ) -> dict:
-        """
-        Per-byte diff of two frames, plus decoded deltas for declared fields.
-
-        Returns every differing byte (offset + both hex values).  Optionally
-        pass ``field_decls`` — a list of ``{"offset", "length", "encoding"}``
-        dicts — to also get the decoded value in each frame and the delta for
-        those fields (``encoding`` is one of ``u8`` … ``f64_be``).
-
-        Answers "what changed between this frame and the next?" directly.
-        """
+        """Per-byte diff of two frames plus, given field_decls of (offset, length, encoding), the decoded delta per field — 'what changed between these two frames?'. frame_a, frame_b, max_diff_bytes cap."""
         session = api.get_session(session_id)
         if session is None:
             return {"error": f"Session {session_id} not found"}
@@ -3256,24 +2283,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         value_range:      Optional[dict]        = None,
         receive_timeout:  Optional[float]       = None,
     ) -> dict:
-        """
-        Sweep a field across candidate values and capture the server response.
-
-        For each candidate, the field at ``byte_offset`` (``byte_length`` bytes,
-        decoded with ``encoding`` — ``u8`` … ``f64_be``) in ``base_frame_hex``
-        is overwritten and the resulting frame is sent over the persistent
-        forge session ``forge_session_id`` (open one with
-        ``open_forge_session``).  Confirms a field's meaning by observation
-        rather than inference — the natural counterpart to
-        ``replay_with_field_edits``.
-
-        Provide candidates either as ``candidate_values`` (a list of numbers)
-        or ``value_range`` (``{"start", "stop", "step"}``; ``step`` defaults to
-        1, ``stop`` exclusive).  Capped at 256 candidates.
-
-        Returns ``{ok, results: {candidate: response_bytes_hex}, errors:
-        {candidate: message}}``.
-        """
+        """Confirm a field by experiment: over a live forge session, sweep a (byte_offset, byte_length, encoding) field across values (a list or {start, stop, step}), replay the base frame for each, and return {candidate_value: response_hex}. Counterpart to replay_with_field_edits."""
         try:
             base = bytes.fromhex(base_frame_hex)
         except ValueError as exc:
@@ -3347,20 +2357,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         fields:     list[dict],
         direction:  Optional[str] = None,
     ) -> dict:
-        """
-        Flatten a session to CSV for external plotting / notebooks.
-
-        ``fields`` is a list of declared columns, each
-        ``{"name", "byte_offset", "byte_length", "encoding"}`` (encoding one of
-        ``u8`` … ``f64_be``) with an optional ``"message_filter"`` byte pattern
-        (``{"offset", "hex"}`` or a list of them) that restricts the column to
-        matching frames.
-
-        Returns ``{frame_count, rows, columns, csv}`` — one row per frame with
-        ``frame_id, timestamp, sequence_number, direction, size`` followed by
-        one column per declared field.  Cells are blank where a frame is too
-        short or fails its ``message_filter``.
-        """
+        """Flatten a session to CSV (one row per frame, one column per declared field plus frame_id/timestamp/sequence_number/direction/size) for external analysis. fields: list of {name, byte_offset, byte_length, encoding, optional message_filter}. Cells blank where a frame is too short or fails its filter. Returns columns and the csv string (large)."""
         try:
             frames = _select_session_frames(
                 session_id, direction, None, None, None, None
@@ -3380,18 +2377,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         cv_threshold:      float         = 0.2,
         min_count:         int           = 10,
     ) -> dict:
-        """
-        Flag packet-type buckets whose inter-arrival times look periodic.
-
-        Groups frames by ``(prefix_hex, size_bytes)`` (same key as
-        ``get_frame_stats``) and, for each bucket, reports the mean and
-        standard deviation of the inter-arrival intervals, their coefficient of
-        variation, and ``is_periodic`` (``cv < cv_threshold`` and
-        ``count > min_count``).
-
-        Surfaces heartbeats, position pings, and keepalives — usually the entry
-        point to reverse-engineering a new protocol.
-        """
+        """Group frames by (prefix, size) and report per-bucket mean/std/coefficient-of-variation of inter-arrival times and an is_periodic flag (heartbeats, pings, keepalives). bucket_prefix_len, cv_threshold, min_count."""
         try:
             frames = _select_session_frames(
                 session_id, direction, None, None, None, None
@@ -3418,17 +2404,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def get_protocol_definition() -> dict:
-        """
-        Return the active ProtocolDefinition as a YAML-compatible dict.
-
-        Returns the same dict shape the YAML loader accepts.  Useful for
-        the AI to inspect what the operator has currently loaded so it
-        can reason about it or extend it (in chat) without re-deriving
-        the structure from scratch.
-
-        Returns ``{"error": ...}`` if no definition-based protocol is
-        loaded (the active decoder is the passthrough).
-        """
+        """Return the active ProtocolDefinition as a YAML-compatible dict (the shape the loader accepts), or {"error": ...} if no definition is loaded."""
         from protopoke.protocol.definition import protocol_to_dict
         from protopoke.protocol.parser import DefinitionBasedDecoder
         if not isinstance(api._decoder, DefinitionBasedDecoder):
@@ -3437,21 +2413,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def get_protocol_definition_schema() -> dict:
-        """
-        Return the authoritative YAML schema for ProtocolDefinition files.
-
-        Use this when the operator asks you to "create a protocol
-        definition based on what you've learned".  The MCP layer does
-        NOT save definitions to disk — emit the YAML in chat instead so
-        the operator can review and load it themselves via the TUI.
-
-        Returns a dict with:
-            content:   the full markdown spec (field types, match rules,
-                       expressions, examples).
-            uri:       the MCP resource URI for the same content
-                       (``protopoke://guides/protocol-definitions``).
-            workflow:  one-line summary of the recommended hand-off flow.
-        """
+        """Return the authoritative YAML schema for ProtocolDefinition files (content: markdown spec, uri: resource URI, workflow: hand-off summary). The MCP layer cannot save definitions — emit YAML in chat for the operator to load."""
         return {
             "content":  load_guide("protocol-definitions"),
             "uri":      "protopoke://guides/protocol-definitions",
@@ -3516,32 +2478,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         forwarder_id:  Optional[str]       = None,
         tags:          Optional[list[str]] = None,
     ) -> list[dict]:
-        """
-        Return findings in the project's knowledge base, optionally filtered.
-
-        Findings are structured claims the AI (or user) has recorded about
-        the protocol under investigation — hypotheses, confirmed facts,
-        ruled-out theories.  Use this on session start to recover what
-        previous sessions discovered before re-running analysis.
-
-        Args:
-            query:         Case-insensitive substring match against title,
-                           description, and tags.
-            status:        ``hypothesis`` | ``confirmed`` | ``ruled_out`` |
-                           ``needs_review``.
-            author:        Filter by author (``"ai"`` or ``"user"``).
-            protocol_name: Scope to one protocol name.
-            message_name:  Scope to one message type.
-            field_name:    Scope to one field within a message.
-            forwarder_id:  Scope to one forwarder by its stable UUID
-                           (use ``list_forwarders`` to look up IDs).
-            tags:          AND match — all named tags must be present.
-
-        Returns:
-            List of finding dicts.  Each includes ``forwarder_name``
-            resolved against the current forwarder list, so renames are
-            transparent.
-        """
+        """Return knowledge-base findings, optionally filtered. Read on session start to recover prior work. query (title/description/tags substring), status (hypothesis/confirmed/ruled_out/needs_review), author ("ai"/"user"), protocol_name/message_name/field_name/forwarder_id scope, tags."""
         results = api.knowledge.list_findings(
             query=query, status=status, author=author,
             protocol_name=protocol_name, message_name=message_name,
@@ -3551,7 +2488,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def get_finding(finding_id: str) -> dict:
-        """Return one finding by ID, or ``{"error": ...}`` if not found."""
+        """Return one finding by id, or None."""
         finding = api.knowledge.get_finding(finding_id)
         if finding is None:
             return {"error": f"No finding with id {finding_id!r}"}
@@ -3574,45 +2511,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         counter_evidence_frame_ids: Optional[list[str]] = None,
         tags:                       Optional[list[str]] = None,
     ) -> dict:
-        """
-        Record a new finding in the knowledge base.
-
-        Use a **finding** (not a note) for a concrete, scoped claim about the
-        protocol — something that is true or false about the bytes on the
-        wire and that you can pin to a location and back with evidence.
-        Examples: "byte 0 is a message-type tag", "bytes 4-5 are a big-endian
-        length covering the payload", "the trailing 2 bytes are a CRC16 over
-        the header".  Give it a ``status`` (hypothesis until you have
-        evidence, then confirmed or ruled_out), a ``confidence``, the
-        tightest scope you can (protocol / message / field / byte range), and
-        the frame IDs that support or refute it.  For broad context that does
-        not belong to one field or message — open questions, test-setup
-        notes, overall protocol hypotheses — use ``add_note`` instead.
-
-        The finding is always attributed to the AI (``author="ai"``) and
-        starts unlocked.  Scope fields are optional — pin the finding at
-        whatever level makes sense (protocol-wide, message-level,
-        field-level, or a raw byte range when no field name exists yet).
-
-        Args:
-            title:        One-line summary (required).
-            description:  Markdown body — reasoning, references, examples.
-            status:       ``hypothesis`` (default) | ``confirmed`` |
-                          ``ruled_out`` | ``needs_review``.
-            confidence:   ``low`` | ``medium`` (default) | ``high``.
-            protocol_name, message_name, field_name: Optional scope hints.
-            byte_offset, byte_length: Pin to a raw byte range when no
-                          field exists yet (e.g. "bytes 4-5 look like
-                          a CRC16").
-            direction:    ``client_to_server`` | ``server_to_client``.
-            forwarder_id: Stable UUID of a forwarder (from
-                          ``list_forwarders``).  Survives renames.
-            evidence_frame_ids:         Supporting frame IDs.
-            counter_evidence_frame_ids: Frames that would refute it.
-            tags:         Free-form filtering tags.
-
-        Returns the created finding dict.
-        """
+        """Record a concrete, scoped, evidence-backed protocol claim (a field's meaning, a layout, a length/CRC relationship); use add_note for broad context. status: hypothesis until evidenced, then confirmed/ruled_out (or needs_review); confidence: low/medium/high; scope as tightly as you can (protocol_name/message_name/field_name/byte_offset/byte_length/direction/forwarder_id); evidence_frame_ids / counter_evidence_frame_ids; tags. Authored 'ai', unlocked."""
         try:
             finding = Finding.create(
                 title=title, description=description,
@@ -3649,16 +2548,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         counter_evidence_frame_ids: Optional[list[str]] = None,
         tags:                       Optional[list[str]] = None,
     ) -> dict:
-        """
-        Update one or more fields of an existing finding.
-
-        AI clients may only update findings they authored AND that the
-        user has not locked from the TUI.  When refused, the error
-        message explains why; add a counter-finding instead.
-
-        Only the kwargs that are not ``None`` are applied.  Validation
-        of ``status`` / ``confidence`` mirrors :meth:`add_finding`.
-        """
+        """Update fields of an AI-authored, unlocked finding (refused on user-authored or locked entries — add a counter-finding instead). finding_id plus any field from add_finding."""
         finding = api.knowledge.get_finding(finding_id)
         if finding is None:
             return {"ok": False, "error": f"No finding with id {finding_id!r}"}
@@ -3703,11 +2593,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def remove_finding(finding_id: str) -> dict:
-        """
-        Remove a finding by ID.
-
-        Same author / locked restrictions as :meth:`update_finding`.
-        """
+        """Remove an AI-authored, unlocked finding by id (refused on user-authored or locked)."""
         finding = api.knowledge.get_finding(finding_id)
         if finding is None:
             return {"ok": False, "error": f"No finding with id {finding_id!r}"}
@@ -3725,26 +2611,14 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         author: Optional[str]       = None,
         tags:   Optional[list[str]] = None,
     ) -> list[dict]:
-        """
-        Return free-form notes in the project's knowledge base.
-
-        Use notes for context that does not fit the structured Finding
-        shape — open questions, design hypotheses about the whole
-        protocol, test-setup reminders.
-
-        Args:
-            query:  Case-insensitive substring match against title,
-                    body, and tags.
-            author: Filter by author.
-            tags:   AND match — all named tags must be present.
-        """
+        """Return free-form knowledge-base notes, optionally filtered. query (title/body/tags substring), author, tags."""
         return [n.to_dict() for n in api.knowledge.list_notes(
             query=query, author=author, tags=tags,
         )]
 
     @mcp.tool()
     def get_note(note_id: str) -> dict:
-        """Return one note by ID, or ``{"error": ...}`` if not found."""
+        """Return one note by id, or None."""
         note = api.knowledge.get_note(note_id)
         if note is None:
             return {"error": f"No note with id {note_id!r}"}
@@ -3756,25 +2630,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         body_md: str                 = "",
         tags:    Optional[list[str]] = None,
     ) -> dict:
-        """
-        Record a new note in the knowledge base.
-
-        Use a **note** (not a finding) for cross-cutting context that does not
-        reduce to a single claim about a field, message, or byte range — open
-        questions to revisit, test-setup reminders, working hypotheses about
-        the protocol as a whole, or a narrative summary tying several findings
-        together.  When you have a concrete, locatable claim you can back with
-        evidence ("byte N means X", "this field is the length"), record it as
-        a structured ``add_finding`` instead so it can be scoped, statused,
-        and filtered.
-
-        Always attributed to the AI (``author="ai"``) and starts unlocked.
-
-        Args:
-            title:   One-line label (required).
-            body_md: Markdown body.
-            tags:    Free-form filtering tags.
-        """
+        """Record a free-form note for cross-cutting context that doesn't fit one field/message (open questions, test-setup, overall hypotheses); use add_finding for scoped claims. body_md: markdown; tags. Authored 'ai', unlocked."""
         note = Note.create(title=title, body_md=body_md,
                            author="ai", locked=False, tags=tags)
         api.knowledge.add_note(note)
@@ -3787,12 +2643,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
         body_md: Optional[str]       = None,
         tags:    Optional[list[str]] = None,
     ) -> dict:
-        """
-        Update a note's title, body, or tags.
-
-        Same author / locked restrictions as :meth:`update_finding`.
-        Only non-``None`` kwargs are applied.
-        """
+        """Update an AI-authored, unlocked note (refused on user-authored or locked). note_id; title/body_md/tags."""
         note = api.knowledge.get_note(note_id)
         if note is None:
             return {"ok": False, "error": f"No note with id {note_id!r}"}
@@ -3808,11 +2659,7 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
 
     @mcp.tool()
     def remove_note(note_id: str) -> dict:
-        """
-        Remove a note by ID.
-
-        Same author / locked restrictions as :meth:`update_note`.
-        """
+        """Remove an AI-authored, unlocked note by id (refused on user-authored or locked)."""
         note = api.knowledge.get_note(note_id)
         if note is None:
             return {"ok": False, "error": f"No note with id {note_id!r}"}
@@ -3821,6 +2668,10 @@ def build_mcp_server(api: "ProtoPokeAPI", name: str = "ProtoPoke") -> "FastMCP":
             return refusal
         api.knowledge.remove_note(note_id)
         return {"ok": True, "note_id": note_id}
+
+    # Apply the tool-surface profile and slim the advertised parameter
+    # schemas before serving (shrinks the per-turn tool-catalog token cost).
+    _finalize_tools(mcp, profile)
 
     # Expose the rebind hook so MCPHost can swap the bound API without
     # tearing down the server task.

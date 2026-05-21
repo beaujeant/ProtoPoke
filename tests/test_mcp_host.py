@@ -95,17 +95,29 @@ def test_mcp_settings_defaults_are_disabled():
     assert s.host == "127.0.0.1"
     assert s.port == 7878
     assert s.name == "ProtoPoke"
+    assert s.profile == "full"
     assert s.url() == "http://127.0.0.1:7878/mcp"
 
 
 def test_mcp_settings_round_trip():
-    s = MCPSettings(enabled=True, host="0.0.0.0", port=9000, name="Test")
+    s = MCPSettings(enabled=True, host="0.0.0.0", port=9000, name="Test",
+                    profile="analysis")
     assert MCPSettings.from_dict(s.to_dict()) == s
 
 
 def test_mcp_settings_from_dict_fills_defaults():
     s = MCPSettings.from_dict({})
     assert s == MCPSettings()
+
+
+def test_mcp_settings_profile_defaults_to_full_when_missing():
+    s = MCPSettings.from_dict({"enabled": True})
+    assert s.profile == "full"
+
+
+def test_mcp_settings_invalid_profile_falls_back_to_full():
+    s = MCPSettings.from_dict({"profile": "bogus"})
+    assert s.profile == "full"
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +238,21 @@ async def test_apply_noop_when_nothing_changed(api, patched_run_async):
         first_task = host._task
         await host.apply(MCPSettings(enabled=True, port=18002))
         assert host._task is first_task  # no restart
+    finally:
+        await host.stop()
+
+
+async def test_apply_restarts_when_profile_changes(api, patched_run_async):
+    # The tool profile is baked in at build time, so changing it must restart
+    # the server (rebuild the tool surface).
+    host = MCPHost(api, MCPSettings(enabled=True, port=18004, profile="full"))
+    await host.start()
+    try:
+        first_task = host._task
+        await host.apply(MCPSettings(enabled=True, port=18004, profile="analysis"))
+        assert host.is_running
+        assert host._task is not first_task
+        assert host.settings.profile == "analysis"
     finally:
         await host.stop()
 

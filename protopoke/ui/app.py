@@ -921,6 +921,9 @@ def main() -> None:
                                (overrides the project's persisted setting).
         --mcp-host HOST        Bind host for the MCP server (default 127.0.0.1).
         --mcp-port PORT        Bind port for the MCP server (default 7878).
+        --mcp-profile PROFILE  Tool surface: "full" (default) or "analysis"
+                               (reverse-engineering subset only — drops the
+                               operational tools to cut the AI's token cost).
 
     The server can also be toggled at runtime from the Config tab.
     """
@@ -942,17 +945,29 @@ def main() -> None:
         "--mcp-port", type=int, default=None, metavar="PORT",
         help="MCP server bind port (default: 7878).",
     )
+    parser.add_argument(
+        "--mcp-profile", default=None, choices=["full", "analysis"],
+        metavar="PROFILE",
+        help="MCP tool surface: 'full' (default) or 'analysis' "
+             "(reverse-engineering subset only).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
     logging.getLogger().setLevel(logging.INFO)
 
     mcp_override: Optional[MCPSettings] = None
-    if args.mcp or args.mcp_host is not None or args.mcp_port is not None:
+    if (
+        args.mcp
+        or args.mcp_host is not None
+        or args.mcp_port is not None
+        or args.mcp_profile is not None
+    ):
         mcp_override = MCPSettings(
             enabled=bool(args.mcp),
             host=args.mcp_host if args.mcp_host is not None else "127.0.0.1",
             port=args.mcp_port if args.mcp_port is not None else 7878,
+            profile=args.mcp_profile if args.mcp_profile is not None else "full",
         )
 
     app = ProtoPoke(mcp_settings=mcp_override)

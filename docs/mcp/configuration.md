@@ -15,10 +15,39 @@ everything else visible in the TUI.
 | `--mcp` | off | Enable the embedded MCP server on startup |
 | `--mcp-host HOST` | `127.0.0.1` | Bind host for the MCP HTTP endpoint |
 | `--mcp-port PORT` | `7878` | Bind port for the MCP HTTP endpoint |
+| `--mcp-profile PROFILE` | `full` | Tool surface: `full` or `analysis` (see below) |
 
 The same settings can be toggled at runtime from the Config tab (Enabled
 switch + Host / Port inputs). They are persisted per-project in the `.pp`
 file (see `mcp.json`).
+
+## Tool profiles
+
+Every MCP tool's description and parameter schema is re-sent to the AI on
+**every** turn, so the size of the exposed tool catalogue is a fixed,
+per-turn token cost. The `profile` setting controls how big that catalogue
+is:
+
+| Profile | Tools | Use when |
+|---------|-------|----------|
+| `full` (default) | all tools | You want the AI to drive everything: forwarders, rules, tamper, playbooks, fuzzing, replay, variables, TLS. |
+| `analysis` | reverse-engineering subset | The AI is reverse-engineering a protocol and only needs to inspect, analyse, probe, and record findings. Roughly halves the per-turn catalogue cost. |
+
+The `analysis` profile **keeps**: session/frame inspection, all analysis
+tools, the knowledge base (findings/notes), read-only protocol-definition
+tools, and the active-probe send/inject/forge-session tools (so
+`bisect_field_meaning` still works). It **drops** the operational surface:
+forwarder lifecycle/config, replace & intercept rules, the tamper queue,
+playbooks, replay, fuzzing, variables, and TLS CA. Those actions remain
+available to the operator in the TUI — they are just not exposed to the AI.
+
+```bash
+protopoke --mcp --mcp-profile analysis
+```
+
+The profile is persisted per-project in `mcp.json`. Changing it at runtime
+restarts the embedded server (the tool surface is fixed when the server is
+built).
 
 ## Launch
 
@@ -223,7 +252,8 @@ another ASGI app), call `build_mcp_server(api)` directly:
 ```python
 from protopoke.mcp.server import build_mcp_server
 
-mcp = build_mcp_server(api, name="ProtoPoke")
+mcp = build_mcp_server(api, name="ProtoPoke")          # full tool surface
+mcp = build_mcp_server(api, profile="analysis")        # RE subset only
 # mcp is a FastMCP instance; call mcp.run_async(transport="streamable-http")
 # or embed it via mcp.settings.host / mcp.settings.port.
 ```

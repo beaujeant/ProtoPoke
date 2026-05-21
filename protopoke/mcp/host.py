@@ -66,6 +66,7 @@ class MCPSettings:
     host:    str  = "127.0.0.1"
     port:    int  = 7878
     name:    str  = "ProtoPoke"
+    profile: str  = "full"
 
     def url(self) -> str:
         return f"http://{self.host}:{self.port}/mcp"
@@ -76,15 +77,20 @@ class MCPSettings:
             "host":    self.host,
             "port":    self.port,
             "name":    self.name,
+            "profile": self.profile,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "MCPSettings":
+        profile = str(data.get("profile", "full"))
+        if profile not in ("full", "analysis"):
+            profile = "full"
         return cls(
             enabled=bool(data.get("enabled", False)),
             host=str(data.get("host", "127.0.0.1")),
             port=int(data.get("port", 7878)),
             name=str(data.get("name", "ProtoPoke")),
+            profile=profile,
         )
 
 
@@ -162,7 +168,9 @@ class MCPHost:
         api = self._resolve_api()
         self._current_api = api
 
-        self._server = build_mcp_server(api, name=self._settings.name)
+        self._server = build_mcp_server(
+            api, name=self._settings.name, profile=self._settings.profile
+        )
 
         # FastMCP configures host/port via its settings object.
         self._server.settings.host = self._settings.host
@@ -202,7 +210,8 @@ class MCPHost:
     async def apply(self, new_settings: MCPSettings) -> None:
         """
         Replace the current settings. Restart the server if the transport-
-        visible settings (enabled / host / port) changed.
+        visible settings (enabled / host / port) or the tool ``profile``
+        changed (the profile is baked in at build time).
 
         If applying fails (e.g. the optional ``mcp`` package is not
         installed and :meth:`start` raises ``ImportError``), the stored
@@ -216,6 +225,7 @@ class MCPHost:
             old.enabled != new_settings.enabled
             or old.host  != new_settings.host
             or old.port  != new_settings.port
+            or old.profile != new_settings.profile
         )
         logger.debug(
             "MCPHost.apply: enabled=%s transport_changed=%s",
