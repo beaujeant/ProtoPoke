@@ -1,0 +1,900 @@
+name: Pwn Adventure 3 - Game Server
+version: "1.0"
+endianness: little
+
+# Ported from the Wireshark Lua dissector pwn3-gs.lua (by Antonin Beaujeant).
+#
+# Protocol runs on TCP ports 3000-3003. Each message starts with a 2-byte opcode
+# (the raw bytes are used for magic matching below). Numeric fields are
+# little-endian. Strings are prefixed by a 2-byte LE length.
+#
+# NOTE: Multiple messages can be concatenated in a single TCP segment. Set the
+# ProtoPoke framer to raw (one read = one frame) or implement a custom framer
+# that understands per-opcode message lengths to split them correctly.
+#
+# NOTE: The opcodes look like 2-character ASCII strings when printed:
+#   e.g. [0x72, 0x6e] = "rn" (Run), [0x6a, 0x70] = "jp" (Jump)
+
+messages:
+
+  # ─── Authentication [0x02 0x00] ──────────────────────────────────────────────
+  - name: Authentication
+    match:
+      type: magic
+      offset: 0
+      value: [0x02, 0x00]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: unknown_1
+        type: uint8
+        display: hex
+      - name: unknown_2
+        type: uint8
+        display: hex
+      - name: username_len
+        type: uint16
+      - name: username
+        type: string
+        length: "{username_len}"
+
+  # ─── Spawn Position [1] [0x16 0x00] ─────────────────────────────────────────
+  - name: Spawn Position [1]
+    match:
+      type: magic
+      offset: 0
+      value: [0x16, 0x00]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: unknown_1
+        type: uint8
+        display: hex
+      - name: unknown_2
+        type: uint8
+        display: hex
+      - name: pos_x
+        type: float32
+      - name: pos_y
+        type: float32
+      - name: pos_z
+        type: float32
+      - name: dir_roll
+        type: uint16
+      - name: dir_yaw
+        type: uint16
+      - name: dir_pitch
+        type: uint16
+
+  # ─── Spawn Position [2] [0x17 0x00] ─────────────────────────────────────────
+  - name: Spawn Position [2]
+    match:
+      type: magic
+      offset: 0
+      value: [0x17, 0x00]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: unknown_1
+        type: uint8
+        display: hex
+      - name: unknown_2
+        type: uint8
+        display: hex
+      - name: pos_x
+        type: float32
+      - name: pos_y
+        type: float32
+      - name: pos_z
+        type: float32
+      - name: dir_roll
+        type: uint16
+      - name: dir_yaw
+        type: uint16
+      - name: dir_pitch
+        type: uint16
+
+  # ─── Spawn Position [3] [0x23 0x00] ─────────────────────────────────────────
+  - name: Spawn Position [3]
+    match:
+      type: magic
+      offset: 0
+      value: [0x23, 0x00]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: unknown_1
+        type: uint8
+        display: hex
+      - name: unknown_2
+        type: uint8
+        display: hex
+      - name: pos_x
+        type: float32
+      - name: pos_y
+        type: float32
+      - name: pos_z
+        type: float32
+      - name: dir_roll
+        type: uint16
+      - name: dir_yaw
+        type: uint16
+      - name: dir_pitch
+        type: uint16
+
+  # ─── Send Message [0x23 0x2a] ────────────────────────────────────────────────
+  - name: Send Message
+    match:
+      type: magic
+      offset: 0
+      value: [0x23, 0x2a]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: message_len
+        type: uint16
+      - name: message
+        type: string
+        length: "{message_len}"
+
+  # ─── Send Answer [0x23 0x3e] ─────────────────────────────────────────────────
+  - name: Send Answer
+    match:
+      type: magic
+      offset: 0
+      value: [0x23, 0x3e]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: answer_len
+        type: uint16
+      - name: answer
+        type: string
+        length: "{answer_len}"
+
+  # ─── Finish Dialog [0x23 0x66] ───────────────────────────────────────────────
+  # The Lua computes a length field but does not consume it or advance offset,
+  # so this message appears to be opcode-only (2 bytes total).
+  - name: Finish Dialog
+    match:
+      type: magic
+      offset: 0
+      value: [0x23, 0x66]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+
+  # ─── Send Dialog [0x23 0x73] ─────────────────────────────────────────────────
+  - name: Send Dialog
+    match:
+      type: magic
+      offset: 0
+      value: [0x23, 0x73]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: actor_id
+        type: uint32
+      - name: text_len
+        type: uint16
+      - name: text
+        type: string
+        length: "{text_len}"
+
+  # ─── Purchase Item [0x24 0x62] ───────────────────────────────────────────────
+  - name: Purchase Item
+    match:
+      type: magic
+      offset: 0
+      value: [0x24, 0x62]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: unknown_1
+        type: uint8
+        display: hex
+      - name: unknown_2
+        type: uint8
+        display: hex
+      - name: unknown_3
+        type: uint8
+        display: hex
+      - name: unknown_4
+        type: uint8
+        display: hex
+      - name: item_len
+        type: uint16
+      - name: item
+        type: string
+        length: "{item_len}"
+      - name: quantity
+        type: uint32
+
+  # ─── Fire [0x2a 0x69] ────────────────────────────────────────────────────────
+  - name: Fire
+    match:
+      type: magic
+      offset: 0
+      value: [0x2a, 0x69]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: weapon_len
+        type: uint16
+      - name: weapon
+        type: string
+        length: "{weapon_len}"
+      - name: vector_x
+        type: uint32
+      - name: vector_y
+        type: uint32
+      - name: vector_z
+        type: uint32
+
+  # ─── Update Health [0x2b 0x2b] ───────────────────────────────────────────────
+  - name: Update Health
+    match:
+      type: magic
+      offset: 0
+      value: [0x2b, 0x2b]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: actor_id
+        type: uint32
+      - name: health
+        type: uint32
+
+  # ─── Spawn Position [4] [0x30 0x03] ─────────────────────────────────────────
+  - name: Spawn Position [4]
+    match:
+      type: magic
+      offset: 0
+      value: [0x30, 0x03]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: unknown_1
+        type: uint8
+        display: hex
+      - name: unknown_2
+        type: uint8
+        display: hex
+      - name: pos_x
+        type: float32
+      - name: pos_y
+        type: float32
+      - name: pos_z
+        type: float32
+      - name: dir_roll
+        type: uint16
+      - name: dir_yaw
+        type: uint16
+      - name: dir_pitch
+        type: uint16
+
+  # ─── Activate Logic Gate [0x30 0x31] ─────────────────────────────────────────
+  - name: Activate Logic Gate
+    match:
+      type: magic
+      offset: 0
+      value: [0x30, 0x31]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: gate_name_len
+        type: uint16
+      - name: gate_name
+        type: string
+        length: "{gate_name_len}"
+      - name: gate_id
+        type: uint32
+
+  # ─── Spawn Position [5] [0x32 0x06] ─────────────────────────────────────────
+  - name: Spawn Position [5]
+    match:
+      type: magic
+      offset: 0
+      value: [0x32, 0x06]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: unknown_1
+        type: uint8
+        display: hex
+      - name: unknown_2
+        type: uint8
+        display: hex
+      - name: pos_x
+        type: float32
+      - name: pos_y
+        type: float32
+      - name: pos_z
+        type: float32
+      - name: dir_roll
+        type: uint16
+      - name: dir_yaw
+        type: uint16
+      - name: dir_pitch
+        type: uint16
+
+  # ─── Spawn Position [6] [0x41 0x03] ─────────────────────────────────────────
+  - name: Spawn Position [6]
+    match:
+      type: magic
+      offset: 0
+      value: [0x41, 0x03]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: unknown_1
+        type: uint8
+        display: hex
+      - name: unknown_2
+        type: uint8
+        display: hex
+      - name: pos_x
+        type: float32
+      - name: pos_y
+        type: float32
+      - name: pos_z
+        type: float32
+      - name: dir_roll
+        type: uint16
+      - name: dir_yaw
+        type: uint16
+      - name: dir_pitch
+        type: uint16
+
+  # ─── Remove Quest [0x5e 0x64] ────────────────────────────────────────────────
+  - name: Remove Quest
+    match:
+      type: magic
+      offset: 0
+      value: [0x5e, 0x64]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: quest_len
+        type: uint16
+      - name: quest
+        type: string
+        length: "{quest_len}"
+
+  # ─── Change Location [0x63 0x68] ─────────────────────────────────────────────
+  - name: Change Location
+    match:
+      type: magic
+      offset: 0
+      value: [0x63, 0x68]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: location_len
+        type: uint16
+      - name: location
+        type: string
+        length: "{location_len}"
+
+  # ─── New Inventory Item [0x63 0x70] ──────────────────────────────────────────
+  - name: New Inventory Item
+    match:
+      type: magic
+      offset: 0
+      value: [0x63, 0x70]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: item_len
+        type: uint16
+      - name: item
+        type: string
+        length: "{item_len}"
+      - name: quantity
+        type: uint32
+
+  # ─── Pick Up Item [0x65 0x65] ────────────────────────────────────────────────
+  - name: Pick Up Item
+    match:
+      type: magic
+      offset: 0
+      value: [0x65, 0x65]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: element_id
+        type: uint32
+
+  # ─── Event [0x65 0x76] ───────────────────────────────────────────────────────
+  - name: Event
+    match:
+      type: magic
+      offset: 0
+      value: [0x65, 0x76]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: text_len
+        type: uint16
+      - name: text
+        type: string
+        length: "{text_len}"
+      - name: data_len
+        type: uint16
+      - name: data
+        type: string
+        length: "{data_len}"
+
+  # ─── Fast Travel [0x66 0x74] ─────────────────────────────────────────────────
+  - name: Fast Travel
+    match:
+      type: magic
+      offset: 0
+      value: [0x66, 0x74]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: from_len
+        type: uint16
+      - name: from
+        type: string
+        length: "{from_len}"
+      - name: to_len
+        type: uint16
+      - name: to
+        type: string
+        length: "{to_len}"
+
+  # ─── Jump [0x6a 0x70] ────────────────────────────────────────────────────────
+  - name: Jump
+    match:
+      type: magic
+      offset: 0
+      value: [0x6a, 0x70]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: unknown
+        type: uint8
+        display: hex
+
+  # ─── Update Mana [0x6d 0x61] ─────────────────────────────────────────────────
+  - name: Update Mana
+    match:
+      type: magic
+      offset: 0
+      value: [0x6d, 0x61]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: mana
+        type: uint32
+
+  # ─── New Element [0x6d 0x6b] ─────────────────────────────────────────────────
+  - name: New Element
+    match:
+      type: magic
+      offset: 0
+      value: [0x6d, 0x6b]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: element_id
+        type: uint32
+      - name: unknown_1
+        type: uint8
+        display: hex
+      - name: unknown_2
+        type: uint8
+        display: hex
+      - name: unknown_3
+        type: uint8
+        display: hex
+      - name: unknown_4
+        type: uint8
+        display: hex
+      - name: unknown_5
+        type: uint8
+        display: hex
+      - name: element_name_len
+        type: uint16
+      - name: element_name
+        type: string
+        length: "{element_name_len}"
+      - name: pos_x
+        type: float32
+      - name: pos_y
+        type: float32
+      - name: pos_z
+        type: float32
+      - name: dir_roll
+        type: uint16
+      - name: dir_yaw
+        type: uint16
+      - name: dir_pitch
+        type: uint16
+      - name: unknown_6
+        type: uint8
+        display: hex
+      - name: unknown_7
+        type: uint8
+        display: hex
+      - name: unknown_8
+        type: uint8
+        display: hex
+      - name: unknown_9
+        type: uint8
+        display: hex
+
+  # ─── Update Location [0x6d 0x76] ─────────────────────────────────────────────
+  # NOTE: The Lua conditionally adds 2 extra bytes when move == 0xc0. The YAML
+  # format cannot express conditional fields, so only the base 20-byte form is
+  # dissected here. Packets with the extra 2 bytes will appear to have trailing
+  # unparsed data.
+  - name: Update Location
+    match:
+      type: magic
+      offset: 0
+      value: [0x6d, 0x76]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: pos_x
+        type: float32
+      - name: pos_y
+        type: float32
+      - name: pos_z
+        type: float32
+      - name: dir_roll
+        type: uint16
+      - name: dir_yaw
+        type: uint16
+      - name: dir_pitch
+        type: uint16
+      - name: move
+        type: uint8
+        display: enum
+        enum:
+          0x00: Neutral
+          0x7f: Forward
+          0x81: Backward
+      - name: strafe
+        type: uint8
+        display: enum
+        enum:
+          0x00: Neutral
+          0x7f: Right
+          0x81: Left
+
+  # ─── New Quest [0x6e 0x71] ───────────────────────────────────────────────────
+  - name: New Quest
+    match:
+      type: magic
+      offset: 0
+      value: [0x6e, 0x71]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: quest_len
+        type: uint16
+      - name: quest
+        type: string
+        length: "{quest_len}"
+
+  # ─── Enemy Position [0x70 0x73] ──────────────────────────────────────────────
+  - name: Enemy Position
+    match:
+      type: magic
+      offset: 0
+      value: [0x70, 0x73]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: actor_id
+        type: uint32
+      - name: pos_x
+        type: float32
+      - name: pos_y
+        type: float32
+      - name: pos_z
+        type: float32
+      - name: dir_roll
+        type: uint16
+      - name: dir_yaw
+        type: uint16
+      - name: dir_pitch
+        type: uint16
+      - name: unknown_1
+        type: uint8
+        display: hex
+      - name: unknown_2
+        type: uint8
+        display: hex
+      - name: unknown_3
+        type: uint8
+        display: hex
+      - name: unknown_4
+        type: uint8
+        display: hex
+      - name: unknown_5
+        type: uint8
+        display: hex
+      - name: unknown_6
+        type: uint8
+        display: hex
+
+  # ─── New Achievement [0x70 0x75] ─────────────────────────────────────────────
+  - name: New Achievement
+    match:
+      type: magic
+      offset: 0
+      value: [0x70, 0x75]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: achievement_len
+        type: uint16
+      - name: achievement
+        type: string
+        length: "{achievement_len}"
+
+  # ─── Change PvP State [0x70 0x76] ────────────────────────────────────────────
+  # The Lua defines pvp as uint16 but reads 1 byte; actual size is 1 byte.
+  - name: Change PvP State
+    match:
+      type: magic
+      offset: 0
+      value: [0x70, 0x76]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: pvp_status
+        type: uint8
+        display: enum
+        enum:
+          0x00: Disable
+          0x01: Enable
+
+  # ─── Select Quest [0x71 0x3d] ────────────────────────────────────────────────
+  - name: Select Quest
+    match:
+      type: magic
+      offset: 0
+      value: [0x71, 0x3d]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: quest_len
+        type: uint16
+      - name: quest
+        type: string
+        length: "{quest_len}"
+
+  # ─── Quest Done [0x71 0x3e] ──────────────────────────────────────────────────
+  - name: Quest Done
+    match:
+      type: magic
+      offset: 0
+      value: [0x71, 0x3e]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: location_len
+        type: uint16
+      - name: location
+        type: string
+        length: "{location_len}"
+      - name: quest_len
+        type: uint16
+      - name: quest
+        type: string
+        length: "{quest_len}"
+
+  # ─── Remove Inventory Item [0x72 0x6d] ───────────────────────────────────────
+  - name: Remove Inventory Item
+    match:
+      type: magic
+      offset: 0
+      value: [0x72, 0x6d]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: item_len
+        type: uint16
+      - name: item
+        type: string
+        length: "{item_len}"
+      - name: quantity
+        type: uint32
+
+  # ─── Run [0x72 0x6e] ─────────────────────────────────────────────────────────
+  # The Lua defines run as uint16 but reads 1 byte; actual size is 1 byte.
+  - name: Run
+    match:
+      type: magic
+      offset: 0
+      value: [0x72, 0x6e]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: speed
+        type: uint8
+        display: enum
+        enum:
+          0x00: Walk
+          0x01: Run
+
+  # ─── Respawn [0x72 0x73] ─────────────────────────────────────────────────────
+  - name: Respawn
+    match:
+      type: magic
+      offset: 0
+      value: [0x72, 0x73]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: pos_x
+        type: float32
+      - name: pos_y
+        type: float32
+      - name: pos_z
+        type: float32
+      - name: dir_roll
+        type: uint16
+      - name: dir_yaw
+        type: uint16
+      - name: dir_pitch
+        type: uint16
+
+  # ─── Teleport [0x72 0x74] ────────────────────────────────────────────────────
+  # No field dissection in the Lua plugin; structure unknown.
+  - name: Teleport
+    match:
+      type: magic
+      offset: 0
+      value: [0x72, 0x74]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: payload
+        type: bytes
+        length: -1
+        display: hex
+
+  # ─── Change Player State [0x73 0x74] ─────────────────────────────────────────
+  - name: Change Player State
+    match:
+      type: magic
+      offset: 0
+      value: [0x73, 0x74]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: actor_id
+        type: uint32
+      - name: state_len
+        type: uint16
+      - name: state
+        type: string
+        length: "{state_len}"
+      - name: unknown
+        type: uint8
+        display: hex
+
+  # ─── Change Attack State [0x74 0x72] ─────────────────────────────────────────
+  - name: Change Attack State
+    match:
+      type: magic
+      offset: 0
+      value: [0x74, 0x72]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: actor_id
+        type: uint32
+      - name: state_len
+        type: uint16
+      - name: state
+        type: string
+        length: "{state_len}"
+      - name: target_id
+        type: uint32
+
+  # ─── Remove Element [0x78 0x78] ──────────────────────────────────────────────
+  # The Lua branch size (3) is a bug; the element_id is 4 bytes (offset advances by 4).
+  - name: Remove Element
+    match:
+      type: magic
+      offset: 0
+      value: [0x78, 0x78]
+    fields:
+      - name: opcode
+        type: bytes
+        length: 2
+        display: hex
+      - name: element_id
+        type: uint32
+
+  # ─── Unknown (catch-all) ─────────────────────────────────────────────────────
+  - name: Unknown
+    match:
+      type: always
+    fields:
+      - name: payload
+        type: bytes
+        length: -1
+        display: hex
