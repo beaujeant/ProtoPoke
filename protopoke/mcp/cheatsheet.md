@@ -135,14 +135,6 @@ Shared `{{VARIABLE}}` table consumed by playbooks and forge replays.
 
 - `get_ca_cert` — fetch the on-disk MITM CA so the user can trust it.
 
-## Fuzzing
-
-- `fuzz_start` — kick off a campaign against a session with one or more
-  mutators.
-- `fuzz_status` / `fuzz_results` / `fuzz_stop`
-- `list_campaigns` — every campaign ever run.
-- `list_mutators` — available built-in mutators.
-
 ## Analysis (protocol reverse engineering)
 
 Pure helpers over captured frames. Composable; see the

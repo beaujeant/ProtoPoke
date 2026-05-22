@@ -412,13 +412,6 @@ class TestIntrospectionTools:
         assert "raw" in result
         assert "length_prefix" in result
 
-    def test_list_mutators(self, mcp_server):
-        fn = get_tool(mcp_server, "list_mutators")
-        result = fn()
-        names = {m["name"] for m in result}
-        assert "bit_flip" in names
-        assert "field_boundary" in names
-
 
 # ---------------------------------------------------------------------------
 # send_frame (async tool)
@@ -539,7 +532,6 @@ class TestAuthoringGuides:
 class TestWorkflowRecipes:
     RECIPE_SLUGS = {
         "reverse-engineer-unknown-protocol",
-        "replay-with-mutation",
         "intercept-and-rewrite",
         "validate-with-tamper",
         "map-state-machine",
@@ -569,12 +561,6 @@ class TestWorkflowRecipes:
         result = fn("does-not-exist")
         assert "error" in result
         assert "reverse-engineer-unknown-protocol" in result["available"]
-
-    def test_replay_recipe_loads(self, mcp_server):
-        fn = get_tool(mcp_server, "get_workflow_recipe")
-        body = fn("replay-with-mutation")["content"]
-        assert "Playbook" in body or "playbook" in body
-        assert "fuzz_start" in body
 
     def test_intercept_recipe_loads(self, mcp_server):
         fn = get_tool(mcp_server, "get_workflow_recipe")
@@ -611,7 +597,7 @@ class TestToolIndex:
         for tool_name in (
             "proxy_status", "list_forwarders", "list_sessions",
             "tamper_toggle", "add_replace_rule", "add_intercept_rule",
-            "send_frame", "run_playbook", "fuzz_start",
+            "send_frame", "run_playbook", "get_variables",
             "cluster_frames", "find_length_fields",
         ):
             assert tool_name in body, f"{tool_name} missing from tool index"
@@ -714,7 +700,7 @@ OPERATIONAL_SAMPLE = [
     "tamper_toggle", "tamper_modify_field_and_forward", "list_intercepted",
     "add_replace_rule", "add_intercept_rule", "create_playbook", "run_playbook",
     "forge_session", "replay_with_field_edits", "get_ca_cert",
-    "fuzz_start", "list_mutators", "set_variable", "get_variables",
+    "set_variable", "get_variables",
     "get_script_load_instructions",
 ]
 

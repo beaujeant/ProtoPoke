@@ -2,8 +2,8 @@
 
 Each recipe is a self-contained Markdown document that chains several
 ProtoPoke MCP tools together to accomplish an end-to-end task (reverse-
-engineering an unknown protocol, replaying with mutation, intercepting
-and rewriting frames). They complement the per-extension-point guides
+engineering an unknown protocol, intercepting and rewriting frames,
+mapping a protocol's state machine). They complement the per-extension-point guides
 in :mod:`protopoke.mcp.guides` by documenting **composition** rather
 than individual tool semantics.
 
@@ -33,12 +33,6 @@ RECIPES: Dict[str, tuple[str, str, str]] = {
         "protocol, then iteratively build a protocol definition that "
         "decodes it.",
     ),
-    "replay-with-mutation": (
-        "replay_with_mutation.md",
-        "Replay a Session with Mutation",
-        "Turn a captured session into a reusable playbook, parameterise "
-        "it with variables, and run a fuzz campaign with mutators.",
-    ),
     "intercept-and-rewrite": (
         "intercept_and_rewrite.md",
         "Intercept and Rewrite Frames",
@@ -57,7 +51,7 @@ RECIPES: Dict[str, tuple[str, str, str]] = {
         "Map the Protocol's State Machine",
         "Combine clustering with direction-aware sequence inspection "
         "to discover which message types follow which, and turn the "
-        "result into a conversation graph you can replay and fuzz.",
+        "result into a conversation graph you can replay and probe.",
     ),
 }
 

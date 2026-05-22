@@ -270,28 +270,3 @@ accepted by `decode_field`:
 | `ascii` | Bytes rendered as printable ASCII with `.` for non-printables |
 | `bytes` | Raw bytes as a hex string |
 | `cstring` | Bytes up to the first NUL, decoded as UTF-8 |
-
-## Fuzzing
-
-| Tool | Description |
-|------|-------------|
-| `list_mutators` | List the available mutators and their parameters |
-| `fuzz_start` | Start a fuzzing campaign (runs in background) |
-| `fuzz_status` | Poll campaign progress |
-| `fuzz_results` | Fetch results (optionally only interesting ones) |
-| `fuzz_stop` | Stop a running campaign |
-| `list_campaigns` | List all campaigns |
-
-### Mutator Names for `fuzz_start`
-
-| Name | Parameters | Requires protocol definition |
-|------|------------|------------------------------|
-| `bit_flip` | `count` (default: 1) | No |
-| `byte_insert` | `count` (default: 4) | No |
-| `byte_delete` | `max_count` (default: 4) | No |
-| `known_bad` | — | No |
-| `radamsa` | `radamsa_path`, `timeout` (default: 5.0) | No |
-| `field_boundary` | — | Yes |
-| `field_overflow` | `lengths` (default: [256, 1024, 4096]) | Yes |
-| `null_byte` | — | Yes |
-| `length_mangle` | — | Yes |

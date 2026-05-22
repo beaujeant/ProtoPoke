@@ -2,7 +2,7 @@
 
 A **framer** cuts a raw TCP byte stream into discrete **frames**, where one
 frame is one complete application-level message. Everything downstream
-(tamper, protocol parsing, forge, replay, fuzzing) operates on frames, so
+(tamper, protocol parsing, forge, replay) operates on frames, so
 choosing or writing the right framer is the very first reverse-engineering
 step.
 

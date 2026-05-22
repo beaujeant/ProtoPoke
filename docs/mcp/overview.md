@@ -2,7 +2,7 @@
 title: "MCP Server"
 ---
 
-ProtoPoke exposes all proxy operations as [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) tools. Once connected, an AI assistant can fully control the proxy — inspect sessions, tamper and modify frames, forge/replay traffic, manage rules, run fuzzing campaigns, and more — all through natural language.
+ProtoPoke exposes all proxy operations as [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) tools. Once connected, an AI assistant can fully control the proxy — inspect sessions, tamper and modify frames, forge/replay traffic, manage rules, and more — all through natural language.
 
 The server also returns **instructions** at `initialize` time — server-level guidance surfaced to the AI client describing what ProtoPoke is and how to use it well. The instructions tell the assistant to recover prior state on session start by calling `list_findings` (scoped by `protocol_name` or `forwarder_id`) and `list_notes` before re-running analysis, and to record what it learns as **findings** (concrete, scoped, evidence-backed protocol claims) versus **notes** (cross-cutting context).
 
@@ -19,7 +19,6 @@ The server also returns **instructions** at `initialize` time — server-level g
 | **Forge** | "Send hex 01 02 03 to 10.0.0.1:9090", "Create a forge session and send a login packet" |
 | **Protocol** | "Show me the active protocol definition", "Decode frame Y and explain each field" (loading and saving definitions is operator-only — the AI proposes YAML in chat) |
 | **Knowledge** | "What did I learn last session about LoginRequest?", "Record that bytes 4–5 of LoginRequest are a CRC16 — confirmed by tampering tests on frames F1, F2", "Add a note that the server seems to echo the sequence number" |
-| **Fuzzing** | "Start a fuzzing campaign with bit_flip and known_bad mutators", "Show results with anomalies only" |
 | **Forwarders** | "Start the game-server forwarder", "Switch the active framer to length-prefix with a 4-byte header", "Load the auth.yaml protocol on the login forwarder without restarting" |
 | **TLS** | "Give me the CA certificate" |
 | **Config** | "What port is the proxy listening on?", "Enable TLS on the upstream side" |
@@ -54,9 +53,6 @@ Available recipes:
   iteratively build a protocol definition that decodes it.  Includes
   the operator hand-off flow (the AI emits YAML in chat; the user
   loads it) and how to capture progress in the knowledge base.
-- `protopoke://recipes/replay-with-mutation` — turn a captured session
-  into a reusable playbook, parameterise it with variables, and run a
-  fuzz campaign with mutators.
 - `protopoke://recipes/intercept-and-rewrite` — choose between global
   replace rules, intercept rules, and script rules, and wire each one
   up end to end.

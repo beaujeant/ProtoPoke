@@ -130,4 +130,3 @@ runs and confirm what actually went over the wire.
 
 - [Custom Replace Scripts](/reference/replace-scripts) — populate `{{VARIABLE}}` values
 - [Core Library — Forge](/core/forge) — playbooks and replay via the API
-- [Fuzzing (experimental)](/reference/fuzzing)

@@ -4,7 +4,7 @@ title: "Framing"
 
 TCP is a byte stream — the OS delivers bytes in arbitrary chunks that bear no relation to application message boundaries. A single `read()` may return half a message, exactly one message, or three messages fused together.
 
-The framer is the **first processing phase** for every byte that arrives on a proxied connection. Its job is to cut the raw stream into discrete, atomic units called **frames** — one frame = one complete application-level message. Everything downstream (tamper, protocol parsing, forge, replay, fuzzing) operates on frames.
+The framer is the **first processing phase** for every byte that arrives on a proxied connection. Its job is to cut the raw stream into discrete, atomic units called **frames** — one frame = one complete application-level message. Everything downstream (tamper, protocol parsing, forge, replay) operates on frames.
 
 ProtoPoke runs one framer instance per direction per session:
 

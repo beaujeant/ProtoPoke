@@ -15,7 +15,7 @@ direction-aware sequence inspection.
 
 - **Replay** that respects sequence order is far more likely to be
   accepted than a flat firehose.
-- **Fuzzing** is much more effective if you mutate the *last*
+- **Active probing** is much more effective if you tamper with the *last*
   message in a multi-step handshake — earlier frames are usually
   protocol prologue and only the later ones reach the real parser.
 - **Field semantics** often depend on state: a `payload` field can be
@@ -194,14 +194,10 @@ The map pays for itself in three workflows:
   from there.
 - **Playbook**: capture the prologue once into a playbook, leave the
   later frames `{{VARIABLE}}`-templated, and run that prologue before
-  every fuzz iteration via the variable-store / playbook combo.
-- **Fuzzing**: with `fuzz_start`, use `frame_selector` to keep the
-  prologue frames untouched and only mutate the later "real" messages —
-  this is what gets you past the protocol's front gate.
+  each probe via the variable-store / playbook combo.
 
 ## Cross-references
 
 - Recipe: `protopoke://recipes/reverse-engineer-unknown-protocol`
-- Recipe: `protopoke://recipes/replay-with-mutation`
 - Recipe: `protopoke://recipes/validate-with-tamper`
 - Tool index: `protopoke://tools`

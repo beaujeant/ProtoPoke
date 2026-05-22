@@ -118,5 +118,4 @@ or you call `terminate_session()`.
 ## Next
 
 - [Custom Replace Scripts](/reference/replace-scripts) — populate `{{VARIABLE}}` values
-- [Fuzzing (experimental)](/reference/fuzzing)
 - [User Interface — Forge](/ui/forge) — the same, in the TUI

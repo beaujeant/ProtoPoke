@@ -43,8 +43,7 @@
         "pages": [
           "reference/framers",
           "reference/protocol-definitions",
-          "reference/replace-scripts",
-          "reference/fuzzing"
+          "reference/replace-scripts"
         ]
       },
       {

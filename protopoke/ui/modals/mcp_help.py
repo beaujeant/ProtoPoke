@@ -26,17 +26,17 @@ AI on every turn, so the exposed tool catalogue is a fixed
 per-turn token cost. The Profile setting controls how big that 
 catalogue is:
 
-Full: Exposes every tool. The AI can drive everything: 
-forwarders, rules, tamper/intercept, playbooks, fuzzing, replay,
-variables, and TLS, on top of all the inspection and analysis 
+Full: Exposes every tool. The AI can drive everything:
+forwarders, rules, tamper/intercept, playbooks, replay,
+variables, and TLS, on top of all the inspection and analysis
 tools.
 
 Analysis: A reverse-engineering subset, roughly half the 
 per-turn cost. Keeps session/frame inspection, all analysis tools,
 the knowledge base (findings/notes), read-only protocol-definition
 tools, and the active-probe send/inject/forge tools. Drops the 
-operational surface: forwarder lifecycle/config, replace & 
-intercept rules, the tamper queue, playbooks, replay, fuzzing, 
+operational surface: forwarder lifecycle/config, replace &
+intercept rules, the tamper queue, playbooks, replay,
 variables, and TLS CA.
 
 Tools dropped by the Analysis profile remain available to you in 
