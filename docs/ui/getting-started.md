@@ -30,7 +30,7 @@ at once.
 | **Traffic** | `F2` | Live sessions, frames, hex dump, and parsed field view. |
 | **Intercept** | `F3` | Hold frames in a queue: forward, drop, modify. Intercept & replace rules. |
 | **Forge** | `F4` | Build and replay frames as playbooks. Send history. |
-| **Fuzzer** | `F5` | Mutation fuzzing (experimental). |
+| **Notes** | `F5` | Findings and notes — the cross-session knowledge base. |
 | **Logs** | `F6` | Application log output. |
 
 <!-- screenshot: ProtoPoke TUI on the Config tab, six tabs visible -->

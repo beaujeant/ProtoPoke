@@ -157,8 +157,8 @@ final form. Keep this ordering in mind when designing the rule set.
 The most useful AI workflow combines all of this with a captured
 session: load a protocol definition, intercept the next message of
 interest, change one field, observe the response, drop the rule.
-This is the fastest way to confirm field semantics without writing a
-fuzzer — see `protopoke://recipes/validate-with-tamper`.
+This is the fastest way to confirm field semantics — see
+`protopoke://recipes/validate-with-tamper`.
 
 ## Cross-references
 

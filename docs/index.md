@@ -31,8 +31,8 @@ a custom binary game protocol" — that is ProtoPoke.
 - **AI-controllable** — an embedded MCP server exposes every proxy operation
   as a tool, so an AI assistant can drive the same session you see on screen.
 
-Fuzzing is also available but **experimental** — see
-[Fuzzing](/reference/fuzzing).
+Mutation fuzzing exists in the codebase but is **experimental** and
+intentionally undocumented.
 
 ---
 
@@ -42,7 +42,7 @@ ProtoPoke has one engine and two front ends. Pick whichever fits the task.
 
 | | **User Interface** | **Core Library** |
 |---|---|---|
-| What | A full terminal UI (Textual) with Config, Traffic, Intercept, Forge, Fuzzer, and Logs tabs. | The `ProtoPokeAPI` Python class — the single façade for scripting and automation. |
+| What | A full terminal UI (Textual) with Config, Traffic, Intercept, Forge, Notes, and Logs tabs. | The `ProtoPokeAPI` Python class — the single façade for scripting and automation. |
 | Best for | Interactive exploration, manual reverse engineering. | Automated tests, repeatable workflows, integration into other tools. |
 | Start here | [User Interface](/ui/getting-started) | [Core Library](/core/getting-started) |
 

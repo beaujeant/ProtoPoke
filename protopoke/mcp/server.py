@@ -48,8 +48,6 @@ Tools are grouped by concern:
     Variables               : get_variables, set_variable, delete_variable,
                               clear_variables
     TLS / CA                : get_ca_cert
-    Fuzzing                 : fuzz_start, fuzz_status, fuzz_results,
-                              fuzz_stop, list_campaigns, list_mutators
     Analysis                : list_field_types, get_frame_stats, entropy_map,
                               cluster_frames, filter_frames, decode_field,
                               compare_frames, diff_frames_in_bucket,
@@ -114,9 +112,6 @@ _ANALYSIS_PROFILE_EXCLUDE: frozenset[str] = frozenset({
     "forge_session", "replay_with_field_edits",
     # TLS
     "get_ca_cert",
-    # fuzzing
-    "fuzz_start", "fuzz_status", "fuzz_results", "fuzz_stop",
-    "list_campaigns", "list_mutators",
     # variables
     "get_variables", "set_variable", "delete_variable", "clear_variables",
     # script-rule hand-off (operational)
@@ -495,7 +490,7 @@ def build_mcp_server(
 
     @mcp.tool()
     def get_workflow_recipe(slug: str) -> dict:
-        """Return the markdown body of one workflow recipe. Valid slugs from list_workflow_recipes() (e.g. "reverse-engineer-unknown-protocol", "replay-with-mutation", "intercept-and-rewrite")."""
+        """Return the markdown body of one workflow recipe. Valid slugs from list_workflow_recipes() (e.g. "reverse-engineer-unknown-protocol", "intercept-and-rewrite", "validate-with-tamper")."""
         if slug not in RECIPES:
             return {"error": f"Unknown recipe {slug!r}",
                     "available": list(RECIPES.keys())}
@@ -1470,188 +1465,6 @@ def build_mcp_server(
             return {"ok": False, "error": str(exc)}
 
     # ------------------------------------------------------------------ #
-    # Fuzzing                                                               #
-    # ------------------------------------------------------------------ #
-
-    # In-process campaign registry: campaign_id -> (FuzzCampaign, asyncio.Task | None)
-    _campaigns: dict[str, tuple] = {}
-
-    def _build_mutators(mutator_specs: list[dict]) -> tuple[list, Optional[str]]:
-        """
-        Instantiate FrameMutator objects from JSON-friendly spec dicts.
-
-        Each spec must have a ``"name"`` key.  Additional keys are optional
-        per-mutator parameters (see fuzz_start docstring for the full list).
-
-        Returns ``(mutators, None)`` on success or ``([], error_message)`` on failure.
-        """
-        from protopoke.fuzzing.mutators import (
-            BitFlipMutator,
-            ByteDeleteMutator,
-            ByteInsertMutator,
-            FieldBoundaryMutator,
-            FieldOverflowMutator,
-            KnownBadMutator,
-            LengthMangleMutator,
-            NullByteMutator,
-            RadamsaMutator,
-        )
-
-        encoder = api._encoder
-        mutators = []
-
-        for spec in mutator_specs:
-            name = spec.get("name", "")
-            if name == "bit_flip":
-                mutators.append(BitFlipMutator(count=spec.get("count", 1)))
-            elif name == "byte_insert":
-                mutators.append(ByteInsertMutator(count=spec.get("count", 4)))
-            elif name == "byte_delete":
-                mutators.append(ByteDeleteMutator(max_count=spec.get("max_count", 4)))
-            elif name == "known_bad":
-                mutators.append(KnownBadMutator())
-            elif name == "radamsa":
-                mutators.append(
-                    RadamsaMutator(
-                        radamsa_path=spec.get("radamsa_path", "radamsa"),
-                        timeout=spec.get("timeout", 5.0),
-                    )
-                )
-            elif name == "field_boundary":
-                if encoder is None:
-                    return [], "field_boundary requires a protocol definition to be loaded (set protocol_definition_path in config)"
-                mutators.append(FieldBoundaryMutator(encoder))
-            elif name == "field_overflow":
-                if encoder is None:
-                    return [], "field_overflow requires a protocol definition to be loaded"
-                mutators.append(FieldOverflowMutator(encoder, lengths=spec.get("lengths", [256, 1024, 4096])))
-            elif name == "null_byte":
-                if encoder is None:
-                    return [], "null_byte requires a protocol definition to be loaded"
-                mutators.append(NullByteMutator(encoder))
-            elif name == "length_mangle":
-                if encoder is None:
-                    return [], "length_mangle requires a protocol definition to be loaded"
-                mutators.append(LengthMangleMutator(encoder))
-            else:
-                valid = "bit_flip, byte_insert, byte_delete, known_bad, radamsa, field_boundary, field_overflow, null_byte, length_mangle"
-                return [], f"Unknown mutator '{name}'. Valid names: {valid}"
-
-        return mutators, None
-
-    @mcp.tool()
-    async def fuzz_start(
-        session_id:       str,
-        mutators:         list[dict],
-        iterations:       int           = 50,
-        frame_selector:   Optional[str] = None,
-        stop_on_crash:    bool          = True,
-        server_host:      Optional[str] = None,
-        server_port:      Optional[int] = None,
-        response_timeout: float         = 10.0,
-    ) -> dict:
-        """Start a background fuzzing campaign and return immediately. mutators: list of {"name": ..., ...params} — see list_mutators for names and parameters (protocol-aware mutators need a loaded definition). iterations (default 50); frame_selector; stop_on_crash; server_host/server_port overrides; response_timeout. Returns campaign_id and status. Poll with fuzz_status; details via fuzz_results."""
-        from protopoke.fuzzing.models import FuzzCampaign
-
-        built, err = _build_mutators(mutators)
-        if err:
-            return {"ok": False, "error": err}
-        if not built:
-            return {"ok": False, "error": "No mutators specified."}
-
-        campaign = FuzzCampaign.create(
-            session_id=session_id,
-            mutators=built,
-            iterations=iterations,
-            frame_selector=frame_selector,
-            stop_on_crash=stop_on_crash,
-        )
-
-        engine = api._get_fuzzer_engine()
-        engine._decoder = api._decoder
-
-        task = asyncio.get_event_loop().create_task(
-            engine.run_campaign(
-                campaign=campaign,
-                mutators=built,
-                server_host=server_host,
-                server_port=server_port,
-                response_timeout=response_timeout,
-            )
-        )
-        _campaigns[campaign.id] = (campaign, task)
-        return {"ok": True, "campaign_id": campaign.id, "status": campaign.status.value}
-
-    @mcp.tool()
-    def fuzz_status(campaign_id: str) -> dict:
-        """Return a fuzzing campaign's status summary (no per-iteration detail; use fuzz_results). campaign_id: from fuzz_start."""
-        entry = _campaigns.get(campaign_id)
-        if entry is None:
-            return {"ok": False, "error": f"Campaign '{campaign_id}' not found."}
-        campaign, task = entry
-        return {
-            "ok":                     True,
-            "id":                     campaign.id,
-            "session_id":             campaign.session_id,
-            "status":                 campaign.status.value,
-            "mutator_names":          campaign.mutator_names,
-            "iterations":             campaign.iterations,
-            "completed_iterations":   campaign.completed_iterations,
-            "interesting_count":      len(campaign.interesting_results),
-            "crash_count":            len(campaign.crash_results),
-            "baseline_response_size": campaign.baseline_response_size,
-            "started_at":             campaign.started_at,
-            "completed_at":           campaign.completed_at,
-            "task_done":              task.done() if task else None,
-        }
-
-    @mcp.tool()
-    def fuzz_results(campaign_id: str, interesting_only: bool = False) -> dict:
-        """Return per-iteration results for a campaign (each: mutated_bytes hex, response_bytes hex, response time, reset/timeout flags, 'interesting' flag). interesting_only: only flagged results."""
-        entry = _campaigns.get(campaign_id)
-        if entry is None:
-            return {"ok": False, "error": f"Campaign '{campaign_id}' not found."}
-        campaign, _ = entry
-        results = campaign.interesting_results if interesting_only else campaign.results
-        return {
-            "ok":     True,
-            "id":     campaign.id,
-            "status": campaign.status.value,
-            "results": [r.to_dict() for r in results],
-        }
-
-    @mcp.tool()
-    def fuzz_stop(campaign_id: str) -> dict:
-        """Request early stop of a running campaign (finishes the current iteration). campaign_id: from fuzz_start."""
-        entry = _campaigns.get(campaign_id)
-        if entry is None:
-            return {"ok": False, "error": f"Campaign '{campaign_id}' not found."}
-        campaign, _ = entry
-        from protopoke.fuzzing.models import CampaignStatus
-        if campaign.status is CampaignStatus.RUNNING:
-            campaign.status = CampaignStatus.STOPPED
-        return {"ok": True, "status": campaign.status.value}
-
-    @mcp.tool()
-    def list_campaigns() -> list[dict]:
-        """List all fuzzing campaigns with summary info (oldest first). Per-iteration detail via fuzz_results."""
-        return [
-            {
-                "id":                   c.id,
-                "session_id":           c.session_id,
-                "status":               c.status.value,
-                "mutator_names":        c.mutator_names,
-                "iterations":           c.iterations,
-                "completed_iterations": c.completed_iterations,
-                "interesting_count":    len(c.interesting_results),
-                "crash_count":          len(c.crash_results),
-                "started_at":           c.started_at,
-                "completed_at":         c.completed_at,
-            }
-            for c, _ in _campaigns.values()
-        ]
-
-    # ------------------------------------------------------------------ #
     # Framing                                                               #
     # ------------------------------------------------------------------ #
 
@@ -1756,7 +1569,7 @@ def build_mcp_server(
         return {"ok": True, "cleared": count}
 
     # ------------------------------------------------------------------ #
-    # Framers / mutators introspection                                      #
+    # Framers introspection                                                 #
     # ------------------------------------------------------------------ #
 
     @mcp.tool()
@@ -1771,21 +1584,6 @@ def build_mcp_server(
         """
         from protopoke.framing import FRAMER_REGISTRY
         return sorted(FRAMER_REGISTRY)
-
-    @mcp.tool()
-    def list_mutators() -> list[dict]:
-        """List fuzzing mutators for fuzz_start. Each: name (spec key), parameters (kwargs + defaults), requires_protocol."""
-        return [
-            {"name": "bit_flip",       "parameters": {"count": 1},                       "requires_protocol": False},
-            {"name": "byte_insert",    "parameters": {"count": 4},                       "requires_protocol": False},
-            {"name": "byte_delete",    "parameters": {"max_count": 4},                   "requires_protocol": False},
-            {"name": "known_bad",      "parameters": {},                                 "requires_protocol": False},
-            {"name": "radamsa",        "parameters": {"radamsa_path": "radamsa", "timeout": 5.0}, "requires_protocol": False},
-            {"name": "field_boundary", "parameters": {},                                 "requires_protocol": True},
-            {"name": "field_overflow", "parameters": {"lengths": [256, 1024, 4096]},     "requires_protocol": True},
-            {"name": "null_byte",      "parameters": {},                                 "requires_protocol": True},
-            {"name": "length_mangle",  "parameters": {},                                 "requires_protocol": True},
-        ]
 
     # ------------------------------------------------------------------ #
     # Analytical helpers (binary protocol reversing)                        #

@@ -30,7 +30,7 @@ is:
 
 | Profile | Tools | Use when |
 |---------|-------|----------|
-| `full` (default) | all tools | You want the AI to drive everything: forwarders, rules, tamper, playbooks, fuzzing, replay, variables, TLS. |
+| `full` (default) | all tools | You want the AI to drive everything: forwarders, rules, tamper, playbooks, replay, variables, TLS. |
 | `analysis` | reverse-engineering subset | The AI is reverse-engineering a protocol and only needs to inspect, analyse, probe, and record findings. Roughly halves the per-turn catalogue cost. |
 
 The `analysis` profile **keeps**: session/frame inspection, all analysis
@@ -38,7 +38,7 @@ tools, the knowledge base (findings/notes), read-only protocol-definition
 tools, and the active-probe send/inject/forge-session tools (so
 `bisect_field_meaning` still works). It **drops** the operational surface:
 forwarder lifecycle/config, replace & intercept rules, the tamper queue,
-playbooks, replay, fuzzing, variables, and TLS CA. Those actions remain
+playbooks, replay, variables, and TLS CA. Those actions remain
 available to the operator in the TUI — they are just not exposed to the AI.
 
 ```bash
