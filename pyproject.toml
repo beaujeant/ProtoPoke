@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "protopoke"
+version = "0.1.0"
+description = "A personal TCP proxy / tamper tool (Burp Suite for arbitrary protocols)"
+requires-python = ">=3.11"
+dependencies = [
+    "cryptography>=41",  # TLS MITM: CA generation, cert signing
+    "textual>=0.80",     # TUI framework
+    "pyyaml>=6.0",       # YAML parsing in protocol parser
+]
+
+[project.scripts]
+protopoke = "protopoke.ui.app:main"
+protopoke-mcp = "protopoke.mcp.stdio_bridge:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.1",
+]
+mcp = [
+    "mcp>=1.0",
+]
+docs = [
+    "mkdocs-material>=9.5",
+]
+all = [
+    "mcp>=1.0",
+    "mkdocs-material>=9.5",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["protopoke*"]
+
+[tool.setuptools.package-data]
+"protopoke.mcp" = ["*.md"]
+"protopoke.mcp.guides" = ["*.md"]
+"protopoke.mcp.recipes" = ["*.md"]

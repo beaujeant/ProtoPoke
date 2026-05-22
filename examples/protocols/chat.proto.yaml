@@ -1,0 +1,188 @@
+# Example protocol definition: a fictional binary chat protocol.
+#
+# Packet format overview:
+#
+#   [opcode: 1B] [payload...]
+#
+#   0x01  LoginRequest     C→S   opcode(1) + username_len(2) + username(N) + password_len(2) + password(N)
+#   0x02  LoginResponse    S→C   opcode(1) + status(1) + session_token(16)
+#   0x10  Message          both  opcode(1) + total_length(4) + attributes (TLV block)
+#   0x20  UserList         S→C   opcode(1) + user_count(2) + users[] (array)
+#   0xFF  Disconnect       both  opcode(1) + reason_len(1) + reason(N)
+#
+# Sequence-based packets (no opcode, identified by stream position):
+#   Banner               first packet from server, raw ASCII string
+
+protocol:
+  name: "ChatProtocol"
+  version: "1.0"
+  endianness: big
+
+  messages:
+
+    # ── Sequence-based ──────────────────────────────────────────────
+    # The server sends a banner as its very first packet.
+    - name: "ServerBanner"
+      description: "ASCII banner sent by the server immediately on connect"
+      direction: server_to_client
+      match:
+        type: sequence
+        direction: server_to_client
+        index: 0
+      fields:
+        - name: banner
+          type: string
+          length: -1          # consume the rest of the frame
+          encoding: ascii
+          display: ascii
+
+    # ── Magic-byte packets ──────────────────────────────────────────
+    - name: "LoginRequest"
+      description: "Client authentication request"
+      direction: client_to_server
+      match:
+        type: magic
+        offset: 0
+        value: "0x01"
+      fields:
+        - name: opcode
+          type: uint8
+          display: hex
+        - name: username_len
+          type: uint16
+        - name: username
+          type: string
+          length: "{username_len}"
+          encoding: utf8
+          display: ascii
+        - name: password_len
+          type: uint16
+        - name: password
+          type: bytes
+          length: "{password_len}"
+          display: hex     # don't leak password as ASCII in logs
+
+    - name: "LoginResponse"
+      description: "Server response to LoginRequest"
+      direction: server_to_client
+      match:
+        type: magic
+        offset: 0
+        value: "0x02"
+      fields:
+        - name: opcode
+          type: uint8
+          display: hex
+        - name: status
+          type: uint8
+          enum:
+            0x00: "Success"
+            0x01: "Invalid credentials"
+            0x02: "Account locked"
+            0x03: "Server error"
+          display: enum
+        - name: session_token
+          type: bytes
+          length: 16
+          display: hex
+
+    - name: "Message"
+      description: "TLV-structured data message (C↔S)"
+      match:
+        type: magic
+        offset: 0
+        value: "0x10"
+      fields:
+        - name: opcode
+          type: uint8
+          display: hex
+        - name: total_length
+          type: uint32
+        - name: attributes
+          type: tlv_sequence
+          length: "{total_length - 5}"   # opcode(1) + total_length(4) = 5 bytes of header
+          tlv:
+            type_size: 2
+            length_size: 2
+            endianness: big
+            tags:
+              0x0001:
+                name: "ChannelID"
+                value_type: uint32
+              0x0002:
+                name: "ChannelName"
+                value_type: string
+                encoding: utf8
+              0x0003:
+                name: "MessageText"
+                value_type: string
+                encoding: utf8
+              0x0004:
+                name: "Timestamp"
+                value_type: uint64
+              0x0005:
+                name: "Attachment"
+                value_type: bytes
+                display: hex
+
+    - name: "UserList"
+      description: "List of online users"
+      direction: server_to_client
+      match:
+        type: magic
+        offset: 0
+        value: "0x20"
+      fields:
+        - name: opcode
+          type: uint8
+          display: hex
+        - name: user_count
+          type: uint16
+        - name: users
+          type: array
+          array:
+            count: "{user_count}"
+            item:
+              - name: user_id
+                type: uint32
+              - name: name_len
+                type: uint8
+              - name: name
+                type: string
+                length: "{name_len}"
+                encoding: utf8
+                display: ascii
+              - name: flags
+                type: bitfield
+                bits:
+                  0: online
+                  1: away
+                  2: admin
+
+    - name: "Disconnect"
+      description: "Disconnect with optional reason"
+      match:
+        type: magic
+        offset: 0
+        value: "0xFF"
+      fields:
+        - name: opcode
+          type: uint8
+          display: hex
+        - name: reason_len
+          type: uint8
+        - name: reason
+          type: string
+          length: "{reason_len}"
+          encoding: utf8
+          display: ascii
+
+    # Catch-all — displayed when no other definition matches
+    - name: "Unknown"
+      match:
+        type: always
+      fields:
+        - name: raw
+          type: bytes
+          length: -1
+          display: hex

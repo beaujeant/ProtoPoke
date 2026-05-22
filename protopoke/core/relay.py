@@ -1,0 +1,575 @@
+"""
+Bidirectional relay.
+
+The relay is the moving part of the proxy. It reads bytes from one side,
+pushes them through the framer and tamper controller, and writes the
+result (possibly modified) to the other side.
+
+Architecture:
+
+    DirectionalRelay:
+        Handles ONE direction (client→server OR server→client).
+        Runs as an asyncio Task. The main loop:
+
+            while connected:
+                data = await reader.read(N)
+                for frame in framer.feed(data):
+                    unit = await controller.process(frame)   ← may block
+                    if forward: writer.write(unit.effective_bytes())
+
+        The `await controller.process(frame)` is where tampering pauses.
+        Only THIS relay task is suspended — the event loop stays alive and
+        serves other sessions, new connections, and the API.
+
+    BidirectionalRelay:
+        Wraps two DirectionalRelays (one per direction) and runs them as
+        concurrent asyncio Tasks.
+
+        IMPORTANT — TCP half-close handling:
+            When one side sends EOF the default behaviour is a TCP half-close:
+            signal EOF to the destination (so the remote peer knows we're done
+            writing) but keep reading from it so any remaining in-flight data
+            can still reach the original sender.
+
+            For the upstream direction (client → server) this is suppressed by
+            default via ``keep_upstream_on_client_disconnect=True``: a client
+            disconnect should NOT tear down the upstream server connection,
+            because the operator may still want to drive that connection from
+            the Forge tab.  In that mode the upstream relay simply exits, the
+            session transitions to ONLY_SERVER, and the server connection
+            stays fully open until the server closes it or the session is
+            terminated manually.
+
+            Example (default — keep upstream alive):
+                1. Client sends data + FIN → proxy
+                2. Upstream relay reads EOF and exits silently (no write_eof)
+                3. Session transitions to ONLY_SERVER
+                4. Operator uses Forge to inject more frames → server still
+                   answers; downstream relay keeps capturing them
+                5. Server eventually closes (or operator terminates) → both
+                   relays finish, BidirectionalRelay closes the writers
+
+            Legacy mode (``keep_upstream_on_client_disconnect=False``):
+                1. Client sends data + FIN → proxy
+                2. Upstream relay receives EOF, writes_eof() to server
+                3. Server echoes data + FIN → proxy  (response in flight)
+                4. Downstream relay reads echo, forwards to client, reads FIN
+                5. BidirectionalRelay fully closes both writers on exit
+
+            If instead of write_eof we called writer.close() in step 2,
+            the server connection would be abruptly terminated and the
+            echo response in step 3 would be lost.
+
+        BidirectionalRelay owns all four stream objects and is responsible
+        for closing all writers after both relay tasks finish.
+
+Error handling:
+    - ConnectionResetError, BrokenPipeError: peer closed ungracefully.
+    - asyncio.CancelledError: propagated (proxy shutdown).
+    - Other exceptions: logged, relay stops.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Awaitable, Callable, Optional, TYPE_CHECKING
+
+from ..models import Direction, Frame, InterceptAction
+from ..framing.base import Framer
+from ..tamper.controller import TamperController
+from ..events.bus import (
+    EventBus,
+    FrameCapturedEvent,
+    InterceptCompletedEvent,
+)
+from .session import Session
+
+if TYPE_CHECKING:
+    from ..rules.engine import RulesEngine
+
+logger = logging.getLogger(__name__)
+
+
+class _HalfOpenIdleTimeout(Exception):
+    """Internal signal: a half-open session's surviving side went idle."""
+
+
+class DirectionalRelay:
+    """
+    One-way relay: source reader → framer → tamper controller → dest writer.
+
+    Runs as a single asyncio Task (via BidirectionalRelay.run()).
+    Does NOT own or close the dest_writer — that's BidirectionalRelay's job.
+    """
+
+    def __init__(
+        self,
+        session:              Session,
+        direction:            Direction,
+        source_reader:        asyncio.StreamReader,
+        dest_writer:          asyncio.StreamWriter,
+        framer:               Framer,
+        tamper_controller: TamperController,
+        event_bus:            EventBus,
+        read_buffer_size:     int = 4096,
+        rules_engine:         "Optional[RulesEngine]" = None,
+        propagate_eof:        bool = True,
+        half_open_idle_timeout: float = 0.0,
+    ) -> None:
+        """
+        Args:
+            session:           The owning session (used to append captured frames).
+            direction:         Direction this relay handles (client→server or
+                               server→client).
+            source_reader:     Bytes are read from here.
+            dest_writer:       Bytes (possibly modified) are written here.
+            framer:            Splits the byte stream into logical frames.
+            tamper_controller: May block at await while an operator inspects the frame.
+            event_bus:         Used to publish FrameCapturedEvent and
+                               InterceptCompletedEvent.
+            read_buffer_size:  Bytes per asyncio read() call.
+            rules_engine:      Replace rules applied before tampering (None = no rules).
+            propagate_eof:     When True (default), send write_eof() to the destination
+                               on source-side EOF. Set to False to leave the destination
+                               connection fully open — used for the upstream direction
+                               so a client disconnect does not tear down the server
+                               connection (Forge can still inject into it).
+            half_open_idle_timeout:
+                               When > 0 and the peer relay direction has finished
+                               (the session is half-open), this relay is reaped if
+                               its source stays idle for this many seconds.  Stops
+                               half-open sessions from leaking sockets forever when
+                               the surviving peer uses keep-alive and never closes.
+        """
+        self._session              = session
+        self._direction            = direction
+        self._source_reader        = source_reader
+        self._dest_writer          = dest_writer
+        self._framer               = framer
+        self._tamper_controller = tamper_controller
+        self._event_bus            = event_bus
+        self._read_buffer_size     = read_buffer_size
+        self._rules_engine         = rules_engine
+        self._propagate_eof        = propagate_eof
+        self._half_open_idle_timeout = half_open_idle_timeout
+        self._peer_gone            = False
+        self._running              = False
+
+    def mark_peer_gone(self) -> None:
+        """
+        Signal that the opposite relay direction has finished.
+
+        After this, an idle read timeout means the surviving half-open
+        connection should be reaped instead of waited on indefinitely.
+        """
+        self._peer_gone = True
+
+    async def run(self) -> None:
+        """
+        Main relay loop. Intended to run as an asyncio Task.
+
+        On source EOF: sends a TCP half-close (write_eof) to the destination,
+        then exits. BidirectionalRelay fully closes the writers after both
+        directions have finished.
+        """
+        self._running = True
+        label = f"{self._session.id[:8]}|{self._direction.value}"
+
+        try:
+            while self._running:
+                try:
+                    data = await self._read_with_idle_timeout()
+                except asyncio.IncompleteReadError:
+                    logger.info("Source closed unexpectedly [%s]", label)
+                    break
+                except _HalfOpenIdleTimeout:
+                    logger.info(
+                        "Half-open session idle for %.0fs; reaping surviving side [%s]",
+                        self._half_open_idle_timeout, label,
+                    )
+                    break
+
+                if not data:
+                    logger.info("Source disconnected (EOF) [%s]", label)
+                    break
+
+                for frame in self._framer.feed(data):
+                    await self._process_frame(frame)
+
+        except asyncio.CancelledError:
+            logger.debug("Relay cancelled [%s]", label)
+            raise
+
+        except (ConnectionResetError, BrokenPipeError, OSError) as exc:
+            logger.info("Connection error [%s]: %s", label, exc)
+
+        except Exception as exc:
+            logger.error("Relay error [%s]: %s", label, exc, exc_info=True)
+
+        finally:
+            # Flush framer buffer (best effort)
+            for frame in self._framer.flush():
+                try:
+                    await self._process_frame(frame)
+                except Exception:
+                    pass
+
+            # TCP half-close: tell the remote peer we're done writing.
+            # We do NOT call writer.close() here — that would terminate the
+            # TCP connection immediately, losing any in-flight response data.
+            # BidirectionalRelay.run() closes the writers after both tasks end.
+            #
+            # When `propagate_eof` is False, we skip the half-close entirely:
+            # this is what keeps the upstream server connection alive after a
+            # client disconnect so Forge can keep injecting frames.
+            self._running = False
+            if self._propagate_eof:
+                await self._send_eof_to_dest()
+
+    async def _read_with_idle_timeout(self) -> bytes:
+        """
+        Read from the source, applying the half-open idle timeout.
+
+        While both sides are still connected the timeout is just a periodic
+        wakeup — the loop retries transparently.  Once the peer direction has
+        finished (``_peer_gone``), a timeout means the surviving half-open
+        connection has been idle long enough to reap: raise
+        ``_HalfOpenIdleTimeout``.
+
+        Cancelling a pending ``StreamReader.read()`` via ``wait_for`` is safe:
+        buffered bytes and EOF state live on the StreamReader, not the
+        coroutine, so a subsequent read picks up exactly where this one left off.
+        """
+        idle = self._half_open_idle_timeout
+        if idle <= 0:
+            return await self._source_reader.read(self._read_buffer_size)
+        while True:
+            try:
+                return await asyncio.wait_for(
+                    self._source_reader.read(self._read_buffer_size),
+                    timeout=idle,
+                )
+            except asyncio.TimeoutError:
+                if self._peer_gone:
+                    raise _HalfOpenIdleTimeout from None
+                # Both sides still connected — just a wakeup; keep waiting.
+
+    async def _process_frame(self, frame: Frame) -> None:
+        """
+        Run one frame through replace rules, tampering, then write.
+
+        Pipeline:
+          1. Add *frame* (original capture) to session and emit FrameCapturedEvent.
+          2. Apply replace rules to get effective bytes (may equal original).
+          3. If bytes changed, create a synthetic frame carrying the modified bytes.
+          4. Pass the effective frame to the tamper controller.
+          5. Write to destination unless the verdict is DROP.
+        """
+        # Always store the raw-capture frame so the session log shows what
+        # was actually on the wire.
+        self._session.add_frame(frame)
+
+        await self._event_bus.publish(
+            FrameCapturedEvent(frame=frame, session=self._session.info)
+        )
+
+        # Apply replace rules (no-op when no engine is set)
+        effective_frame = frame
+        if self._rules_engine is not None:
+            modified_bytes = self._rules_engine.apply(frame, scope="traffic")
+            if modified_bytes != frame.raw_bytes:
+                # Create a new Frame for tampering/forwarding so the
+                # original capture is preserved in the session unchanged.
+                effective_frame = Frame.create(
+                    session_id=frame.session_id,
+                    direction=frame.direction,
+                    raw_bytes=modified_bytes,
+                    sequence_number=frame.sequence_number,
+                    framer_name=frame.framer_name,
+                )
+
+        unit = await self._tamper_controller.process(effective_frame)
+
+        await self._event_bus.publish(
+            InterceptCompletedEvent(unit=unit, session=self._session.info)
+        )
+
+        if unit.action is InterceptAction.DROP:
+            logger.debug(
+                "Frame dropped: session=%s frame=%s",
+                frame.session_id[:8], frame.id[:8],
+            )
+            return
+
+        data_to_send = unit.effective_bytes()
+
+        # If the operator modified the frame in the Tamper tab, run the
+        # operator-edited bytes back through the rules engine under the
+        # "tamper" scope so rules that target post-edit bytes fire.
+        if unit.action is InterceptAction.MODIFIED and self._rules_engine is not None:
+            data_to_send = self._rules_engine.apply_bytes(
+                data_to_send, frame.direction, scope="tamper"
+            )
+
+        # If the operator modified the frame in the Tamper tab, log the
+        # modified bytes as a separate frame so the Traffic tab shows what was
+        # actually sent alongside the original capture.
+        if unit.action is InterceptAction.MODIFIED:
+            modified_frame = Frame.create(
+                session_id=frame.session_id,
+                direction=frame.direction,
+                raw_bytes=data_to_send,
+                sequence_number=self._framer.next_sequence(),
+                framer_name="tamper",
+            )
+            self._session.add_frame(modified_frame)
+            await self._event_bus.publish(
+                FrameCapturedEvent(frame=modified_frame, session=self._session.info)
+            )
+
+        try:
+            self._dest_writer.write(data_to_send)
+            await self._dest_writer.drain()
+        except (ConnectionResetError, BrokenPipeError, OSError) as exc:
+            logger.debug("Write error [%s]: %s", self._direction.value, exc)
+
+    async def _send_eof_to_dest(self) -> None:
+        """
+        Signal to the destination that we're done writing (TCP half-close).
+
+        Uses write_eof() if the transport supports it. This sends a FIN packet
+        so the remote peer knows no more data is coming, while keeping the
+        connection open so the remote peer can still send back data.
+        """
+        try:
+            if self._dest_writer.can_write_eof():
+                self._dest_writer.write_eof()
+                await self._dest_writer.drain()
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            pass  # Destination already closed — that's fine
+        except Exception as exc:
+            logger.debug("EOF send error: %s", exc)
+
+    def swap_framer(self, new_framer: Framer) -> None:
+        """
+        Replace the active framer with *new_framer*.
+
+        Safe to call at any await point (asyncio is single-threaded).
+        Any data buffered in the old framer is discarded — the new framer
+        starts fresh.  This is intentional: a framer change implies a
+        protocol-boundary reset.
+        """
+        self._framer = new_framer
+        logger.debug(
+            "Framer swapped → %s [%s|%s]",
+            type(new_framer).__name__,
+            self._session.id[:8],
+            self._direction.value,
+        )
+
+    def stop(self) -> None:
+        """Request the relay to stop after its current read."""
+        self._running = False
+
+
+class BidirectionalRelay:
+    """
+    Two-way relay managing both directions of a proxied TCP session.
+
+    Owns all four stream objects (two readers, two writers).
+    Responsible for the final close of all writers after both tasks finish.
+
+    After ``run()`` returns, ``first_disconnect_direction`` indicates which
+    side disconnected first (CLIENT_TO_SERVER → client disconnected,
+    SERVER_TO_CLIENT → server disconnected, None → cancelled / unknown).
+    """
+
+    def __init__(
+        self,
+        session:              Session,
+        client_reader:        asyncio.StreamReader,
+        client_writer:        asyncio.StreamWriter,
+        server_reader:        asyncio.StreamReader,
+        server_writer:        asyncio.StreamWriter,
+        client_framer:        Framer,
+        server_framer:        Framer,
+        tamper_controller: TamperController,
+        event_bus:            EventBus,
+        read_buffer_size:     int = 4096,
+        rules_engine:         "Optional[RulesEngine]" = None,
+        on_first_disconnect:  "Optional[Callable[[Direction], Awaitable[None]]]" = None,
+        keep_upstream_on_client_disconnect: bool = True,
+        keep_client_on_server_disconnect:   bool = True,
+        half_open_idle_timeout: float = 0.0,
+    ) -> None:
+        """
+        Args:
+            session:             The owning session.
+            client_reader:       Reads bytes coming from the client.
+            client_writer:       Writes bytes going to the client.
+            server_reader:       Reads bytes coming from the upstream server.
+            server_writer:       Writes bytes going to the upstream server.
+            client_framer:       Frames the client→server byte stream.
+            server_framer:       Frames the server→client byte stream.
+            tamper_controller:   Shared intercept controller (may block a
+                                 direction while the operator reviews a frame).
+            event_bus:           Shared event bus.
+            read_buffer_size:    Bytes per asyncio read() call.
+            rules_engine:        Replace rules applied before tampering.
+            on_first_disconnect: Async callback fired when the first side closes
+                                 its connection (before the other side closes).
+                                 Receives the Direction of the side that closed.
+                                 Used by the engine to transition the session to
+                                 ONLY_SERVER or ONLY_CLIENT state.
+            keep_upstream_on_client_disconnect:
+                                 When True (default), a client disconnect does NOT
+                                 propagate EOF to the upstream server — the server
+                                 connection stays fully open until the server itself
+                                 closes or the session is terminated manually.  This
+                                 lets Forge continue to inject frames into the live
+                                 server connection after the original client is gone.
+                                 Set to False to restore the legacy behaviour where
+                                 a client EOF is forwarded as a TCP half-close to the
+                                 upstream server.
+            keep_client_on_server_disconnect:
+                                 Symmetric counterpart of the above: when True
+                                 (default), a server disconnect does NOT propagate
+                                 EOF to the client — the proxy keeps its write side
+                                 toward the client open so Forge can keep injecting
+                                 server→client frames.  Set to False for the legacy
+                                 behaviour where a server EOF is forwarded as a TCP
+                                 half-close to the client.
+            half_open_idle_timeout:
+                                 When > 0, a half-open session (one side gone, the
+                                 other kept alive by the keep_* flags) whose
+                                 surviving side stays idle for this many seconds is
+                                 reaped.  Prevents half-open sessions from leaking
+                                 sockets forever when the surviving peer uses
+                                 keep-alive and never closes.
+        """
+        self._session              = session
+        self._client_writer        = client_writer
+        self._server_writer        = server_writer
+        self._on_first_disconnect  = on_first_disconnect
+
+        self._upstream = DirectionalRelay(
+            session=session,
+            direction=Direction.CLIENT_TO_SERVER,
+            source_reader=client_reader,
+            dest_writer=server_writer,
+            framer=client_framer,
+            tamper_controller=tamper_controller,
+            event_bus=event_bus,
+            read_buffer_size=read_buffer_size,
+            rules_engine=rules_engine,
+            # When the client disconnects we do NOT forward EOF to the upstream
+            # server — keep the server connection alive so Forge can keep using
+            # it.  The session ends when the server closes or the user terminates.
+            propagate_eof=not keep_upstream_on_client_disconnect,
+            half_open_idle_timeout=half_open_idle_timeout,
+        )
+
+        self._downstream = DirectionalRelay(
+            session=session,
+            direction=Direction.SERVER_TO_CLIENT,
+            source_reader=server_reader,
+            dest_writer=client_writer,
+            framer=server_framer,
+            tamper_controller=tamper_controller,
+            event_bus=event_bus,
+            read_buffer_size=read_buffer_size,
+            rules_engine=rules_engine,
+            # When the server disconnects we do NOT forward EOF to the client —
+            # keep the client connection writable so Forge can keep injecting
+            # server→client frames.  The session ends when the client closes or
+            # the user terminates.
+            propagate_eof=not keep_client_on_server_disconnect,
+            half_open_idle_timeout=half_open_idle_timeout,
+        )
+
+    def framer_for(self, direction: Direction) -> Framer:
+        """Return the Framer for the given direction."""
+        if direction is Direction.CLIENT_TO_SERVER:
+            return self._upstream._framer
+        return self._downstream._framer
+
+    async def run(self) -> None:
+        """
+        Run both directions concurrently.
+
+        Returns when both relay directions have finished.
+        After both exit, closes all writers cleanly.
+
+        Sets ``self.first_disconnect_direction`` to whichever relay task
+        exited first (indicating which peer disconnected first).
+        """
+        session_label = self._session.id[:8]
+
+        # Track which direction finishes first.  Using a list as a mutable
+        # one-element container so the inner closures can write to it.
+        # asyncio is single-threaded so no locking is needed.
+        first_done: list[Direction] = []
+
+        async def _run_upstream() -> None:
+            await self._upstream.run()
+            # Only reached on normal completion (CancelledError is re-raised
+            # by DirectionalRelay.run(), so this line is skipped on cancel).
+            # Tell the surviving direction its peer is gone so it can apply
+            # the half-open idle timeout instead of blocking on read() forever.
+            self._downstream.mark_peer_gone()
+            if not first_done:
+                first_done.append(Direction.CLIENT_TO_SERVER)
+                if self._on_first_disconnect:
+                    await self._on_first_disconnect(Direction.CLIENT_TO_SERVER)
+
+        async def _run_downstream() -> None:
+            await self._downstream.run()
+            self._upstream.mark_peer_gone()
+            if not first_done:
+                first_done.append(Direction.SERVER_TO_CLIENT)
+                if self._on_first_disconnect:
+                    await self._on_first_disconnect(Direction.SERVER_TO_CLIENT)
+
+        upstream_task = asyncio.create_task(
+            _run_upstream(),
+            name=f"relay-up-{session_label}",
+        )
+        downstream_task = asyncio.create_task(
+            _run_downstream(),
+            name=f"relay-down-{session_label}",
+        )
+
+        try:
+            await asyncio.gather(upstream_task, downstream_task, return_exceptions=True)
+        except asyncio.CancelledError:
+            upstream_task.cancel()
+            downstream_task.cancel()
+            await asyncio.gather(
+                upstream_task, downstream_task,
+                return_exceptions=True,
+            )
+            raise
+        finally:
+            # Both relay directions have finished. Now do the final close
+            # of all writers to release socket resources.
+            await self._close_all_writers()
+
+    def swap_framers(self, client_framer: Framer, server_framer: Framer) -> None:
+        """
+        Hot-swap the framers on both directions of this session.
+
+        Called while the relay is running to change the framing strategy
+        without interrupting the TCP connection.
+        """
+        self._upstream.swap_framer(client_framer)
+        self._downstream.swap_framer(server_framer)
+
+    async def _close_all_writers(self) -> None:
+        """Close all writers (best effort, ignore errors)."""
+        for writer in (self._client_writer, self._server_writer):
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
