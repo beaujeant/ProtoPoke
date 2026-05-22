@@ -67,7 +67,7 @@ scope field).
 ## Persistence
 
 Knowledge-base entries are saved alongside the rest of the project
-state when you save the `.pp` file (`Ctrl+S` / `Ctrl+Shift+S`).  Two
+state when you save the `.pp` file (`Ctrl+S` / `Alt+S`).  Two
 new JSON members appear in the ZIP:
 
 - `findings.json`

@@ -95,7 +95,7 @@ class ProtoPoke(App):
         F7 → Logs tab
         ctrl+o → Open project
         ctrl+s → Save project
-        ctrl+shift+s → Save As
+        alt+s → Save As
         ctrl+q → Quit
     """
 
@@ -113,7 +113,7 @@ class ProtoPoke(App):
         Binding("ctrl+f",       "send_to_forge",           "→Forge",    show=False, priority=True),
         Binding("ctrl+o",       "open_project",            "Open",      show=False, priority=True),
         Binding("ctrl+s",       "save_project",            "Save",      show=False, priority=True),
-        Binding("ctrl+shift+s", "save_project_as",         "Save As",   show=False, priority=True),
+        Binding("alt+s",        "save_project_as",         "Save As",   show=False, priority=True),
         Binding("ctrl+q",       "quit",                    "Quit",      show=True),
     ]
 
