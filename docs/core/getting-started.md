@@ -5,8 +5,8 @@ title: "Getting Started — Core Library"
 ProtoPoke's entire functionality is reachable from Python through one class:
 `ProtoPokeAPI`. It is the same engine the terminal UI drives — the UI is just
 one front end. This page is a high-level tour; the later pages
-([Config](/core/config), [Traffic](/core/traffic), [Intercept](/core/intercept),
-[Forge](/core/forge)) go deeper with more examples.
+([Config](config.md), [Traffic](traffic.md), [Intercept](intercept.md),
+[Forge](forge.md)) go deeper with more examples.
 
 Everything is `asyncio`-based, so API calls happen inside an event loop.
 
@@ -38,7 +38,7 @@ asyncio.run(main())
 ```
 
 Use `await api.serve_forever()` instead of `start()` to start everything and
-block until `stop()` is called. See [Config](/core/config) for every
+block until `stop()` is called. See [Config](config.md) for every
 `ForwarderConfig` field, transports, TLS, and projects.
 
 ## Watch the traffic
@@ -59,9 +59,9 @@ for session in api.list_sessions():
 ```
 
 How bytes are cut into frames (the **framer**) and decoded into named fields
-(the **protocol definition**) is covered in [Traffic](/core/traffic),
-[Framers](/reference/framers), and
-[Protocol Definitions](/reference/protocol-definitions).
+(the **protocol definition**) is covered in [Traffic](traffic.md),
+[Framers](../reference/framers.md), and
+[Protocol Definitions](../reference/protocol-definitions.md).
 
 ## Intercept and rewrite
 
@@ -90,8 +90,8 @@ api.add_replace_rule(ReplaceRule.create(
 ))
 ```
 
-See [Intercept](/core/intercept) for intercept rules, replace-rule types, and
-[Custom Replace Scripts](/reference/replace-scripts).
+See [Intercept](intercept.md) for intercept rules, replace-rule types, and
+[Custom Replace Scripts](../reference/replace-scripts.md).
 
 ## Forge traffic
 
@@ -116,13 +116,13 @@ pb.frames = [
 run = await api.run_playbook(pb)
 ```
 
-See [Forge](/core/forge) for persistent sessions, field-level replay edits,
+See [Forge](forge.md) for persistent sessions, field-level replay edits,
 playbook variables, and injecting into live sessions.
 
 ## Where next
 
-- [Config](/core/config) — `ForwarderConfig`, transports, TLS, `ProjectManager`
-- [Traffic](/core/traffic) — sessions, events, decoding frames
-- [Intercept](/core/intercept) — tamper queue and rules
-- [Forge](/core/forge) — send, replay, playbooks
-- Prefer the TUI? → [User Interface — Getting Started](/ui/getting-started)
+- [Config](config.md) — `ForwarderConfig`, transports, TLS, `ProjectManager`
+- [Traffic](traffic.md) — sessions, events, decoding frames
+- [Intercept](intercept.md) — tamper queue and rules
+- [Forge](forge.md) — send, replay, playbooks
+- Prefer the TUI? → [User Interface — Getting Started](../ui/getting-started.md)

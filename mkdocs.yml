@@ -1,0 +1,97 @@
+site_name: ProtoPoke
+site_description: >-
+  A TCP / UDP / SOCKS5 proxy and protocol-analysis tool — Burp Suite for
+  arbitrary binary protocols
+site_url: https://protopoke.net
+repo_url: https://github.com/beaujeant/protopoke
+repo_name: beaujeant/protopoke
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - navigation.instant
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+plugins:
+  - search
+
+nav:
+  - Get Started:
+      - ProtoPoke: index.md
+      - Installation: installation.md
+  - User Interface:
+      - Getting Started: ui/getting-started.md
+      - Config: ui/config.md
+      - Traffic: ui/traffic.md
+      - Intercept: ui/intercept.md
+      - Forge: ui/forge.md
+      - Notes: ui/notes.md
+  - Core Library:
+      - Getting Started: core/getting-started.md
+      - Config: core/config.md
+      - Traffic: core/traffic.md
+      - Intercept: core/intercept.md
+      - Forge: core/forge.md
+  - Reference:
+      - Framing: reference/framers.md
+      - Protocol Definitions: reference/protocol-definitions.md
+      - Custom Replace Scripts: reference/replace-scripts.md
+  - Guides:
+      - DNS: guides/dns.md
+      - SSH Binary Packet Protocol: guides/ssh-bpp.md
+  - MCP Server:
+      - Overview: mcp/overview.md
+      - Configuration: mcp/configuration.md
+      - Tool Reference: mcp/tools.md
+      - Protocol Reversing: mcp/analysis.md
+      - Knowledge Base: mcp/knowledge.md
+  - Development:
+      - Architecture: development/architecture.md
+      - Contributing: development/contributing.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/beaujeant/protopoke

@@ -45,11 +45,12 @@ protocol:
 
 ## Loading a Definition
 
-<Tabs>
-  <Tab title="TUI">
+=== "TUI"
+
     Config tab → set **Protocol Definition File** to the path of your `.yaml` file → click **Apply**.
-  </Tab>
-  <Tab title="Python API">
+
+=== "Python API"
+
     ```python
     # Via config (loaded on start)
     fwd = ForwarderConfig(
@@ -67,8 +68,9 @@ protocol:
         "messages": [...],
     })
     ```
-  </Tab>
-  <Tab title="MCP">
+
+=== "MCP"
+
     ```
     # Read-only — loading is an operator action
     get_protocol_definition          # inspect what is loaded
@@ -78,8 +80,6 @@ protocol:
     The MCP server exposes only read-only protocol-definition tools.
     When an AI client wants to propose or update a definition, it
     emits the YAML in chat for the operator to save and load.
-  </Tab>
-</Tabs>
 
 ## Match Strategies
 

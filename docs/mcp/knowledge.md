@@ -149,5 +149,5 @@ findings.json
 notes.json
 ```
 
-See the [Project File reference](/core/getting-started) for the full
+See the [Project File reference](../core/getting-started.md) for the full
 archive layout.

@@ -103,7 +103,7 @@ Persistent findings and notes stored in the `.pp` project file.  Use
 this to record reasoning that should survive across AI sessions
 instead of re-deriving everything every time.  Findings are
 structured (status, confidence, scope, evidence frame IDs); notes are
-free-form markdown.  See the [Knowledge Base guide](/mcp/knowledge)
+free-form markdown.  See the [Knowledge Base guide](knowledge.md)
 for the schema and a worked example.
 
 The AI may only update or remove entries it authored AND that the
@@ -218,7 +218,7 @@ Protocol-agnostic analytical helpers for reverse engineering. Every tool
 operates on the frames already captured in a session — no I/O, no
 configuration changes. Most analysis tools accept the same scoping
 parameters (`direction`, `size_bytes`, `byte_patterns`) so you can focus on
-one packet type at a time. See the [Protocol Reversing guide](/mcp/analysis)
+one packet type at a time. See the [Protocol Reversing guide](analysis.md)
 for the typical workflow.
 
 | Tool | Description |

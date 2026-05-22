@@ -92,7 +92,7 @@ toward the server) or `"server_to_client"` (inject toward the client).
 Playbook frames support `{{VARIABLE}}` placeholders resolved at runtime from
 the shared variable store. The store is shared across every pipeline
 (intercept, forge, playbooks), so a value captured by a
-[script replace rule](/reference/replace-scripts) flows straight into a
+[script replace rule](../reference/replace-scripts.md) flows straight into a
 playbook frame.
 
 ```python
@@ -117,5 +117,5 @@ or you call `terminate_session()`.
 
 ## Next
 
-- [Custom Replace Scripts](/reference/replace-scripts) — populate `{{VARIABLE}}` values
-- [User Interface — Forge](/ui/forge) — the same, in the TUI
+- [Custom Replace Scripts](../reference/replace-scripts.md) — populate `{{VARIABLE}}` values
+- [User Interface — Forge](../ui/forge.md) — the same, in the TUI

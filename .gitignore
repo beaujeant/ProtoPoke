@@ -88,3 +88,6 @@ $RECYCLE.BIN/
 # Logs
 *.log
 logs/
+
+# MkDocs build output
+site/

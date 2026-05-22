@@ -26,8 +26,12 @@ dev = [
 mcp = [
     "mcp>=1.0",
 ]
+docs = [
+    "mkdocs-material>=9.5",
+]
 all = [
     "mcp>=1.0",
+    "mkdocs-material>=9.5",
 ]
 
 [tool.pytest.ini_options]

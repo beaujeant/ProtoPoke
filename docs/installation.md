@@ -17,8 +17,8 @@ cd protopoke
 [uv](https://docs.astral.sh/uv/) is the fastest way to get a working
 environment — it creates the virtualenv and installs dependencies in one go.
 
-<Tabs>
-  <Tab title="Linux">
+=== "Linux"
+
     ```bash
     # Install uv if you don't have it
     curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -26,8 +26,9 @@ environment — it creates the virtualenv and installs dependencies in one go.
     uv venv
     uv pip install -e .
     ```
-  </Tab>
-  <Tab title="macOS">
+
+=== "macOS"
+
     ```bash
     # Install uv if you don't have it (or: brew install uv)
     curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -35,8 +36,9 @@ environment — it creates the virtualenv and installs dependencies in one go.
     uv venv
     uv pip install -e .
     ```
-  </Tab>
-  <Tab title="Windows">
+
+=== "Windows"
+
     ```powershell
     # Install uv if you don't have it
     powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
@@ -44,8 +46,6 @@ environment — it creates the virtualenv and installs dependencies in one go.
     uv venv
     uv pip install -e .
     ```
-  </Tab>
-</Tabs>
 
 `uv venv` creates a `.venv` in the project directory. `uv run protopoke`
 runs the TUI inside it without needing to activate anything; or activate the
@@ -60,16 +60,8 @@ contributors who run the test suite need the `dev` extra — see
 If you would rather not use uv, the standard library `venv` plus `pip`
 works everywhere.
 
-<Tabs>
-  <Tab title="Linux">
-    ```bash
-    python3 -m venv .venv
-    source .venv/bin/activate
+=== "Linux"
 
-    pip install -e .
-    ```
-  </Tab>
-  <Tab title="macOS">
     ```bash
     python3 -m venv .venv
     source .venv/bin/activate
@@ -77,13 +69,23 @@ works everywhere.
     pip install -e .
     ```
 
-    <Note>
-      macOS ships an old system Python. Install a current one with
-      `brew install python@3.12` (or [python.org](https://www.python.org/))
-      and use that interpreter for `python3 -m venv`.
-    </Note>
-  </Tab>
-  <Tab title="Windows">
+=== "macOS"
+
+    ```bash
+    python3 -m venv .venv
+    source .venv/bin/activate
+
+    pip install -e .
+    ```
+
+    !!! note
+
+        macOS ships an old system Python. Install a current one with
+        `brew install python@3.12` (or [python.org](https://www.python.org/))
+        and use that interpreter for `python3 -m venv`.
+
+=== "Windows"
+
     ```powershell
     py -3 -m venv .venv
     .venv\Scripts\activate
@@ -91,12 +93,10 @@ works everywhere.
     pip install -e .
     ```
 
-    <Tip>
-      The Textual-based TUI works best in **Windows Terminal**. The legacy
-      `conhost.exe` console has limited colour and key support.
-    </Tip>
-  </Tab>
-</Tabs>
+    !!! tip
+
+        The Textual-based TUI works best in **Windows Terminal**. The legacy
+        `conhost.exe` console has limited colour and key support.
 
 ## Optional extras
 
@@ -142,5 +142,5 @@ If `protopoke` is not on your `PATH`, make sure the virtualenv is activated
 
 ## Next steps
 
-- Using the terminal UI? → [User Interface](/ui/getting-started)
-- Scripting with Python? → [Core Library](/core/getting-started)
+- Using the terminal UI? → [User Interface](ui/getting-started.md)
+- Scripting with Python? → [Core Library](core/getting-started.md)

@@ -46,7 +46,7 @@ ProtoPoke has one engine and two front ends. Pick whichever fits the task.
 |---|---|---|
 | What | A full terminal UI (Textual) with Config, Traffic, Intercept, Forge, Notes, and Logs tabs. | The `ProtoPokeAPI` Python class — the single façade for scripting and automation. |
 | Best for | Interactive exploration, manual reverse engineering. | Automated tests, repeatable workflows, integration into other tools. |
-| Start here | [User Interface](/ui/getting-started) | [Core Library](/core/getting-started) |
+| Start here | [User Interface](ui/getting-started.md) | [Core Library](core/getting-started.md) |
 
 ---
 
@@ -60,11 +60,11 @@ extensibility, and hackability** over raw throughput.
 
 ## Quick links
 
-- [Installation](/installation)
-- [User Interface](/ui/getting-started)
-- [Core Library](/core/getting-started)
-- [Framer](/reference/framers)
-- [Protocol Definition](/reference/protocol-definitions)
-- [Replace Scripts](/reference/replace-scripts)
-- [DNS guide](/guides/dns)
-- [MCP Server](/mcp/overview)
+- [Installation](installation.md)
+- [User Interface](ui/getting-started.md)
+- [Core Library](core/getting-started.md)
+- [Framer](reference/framers.md)
+- [Protocol Definition](reference/protocol-definitions.md)
+- [Replace Scripts](reference/replace-scripts.md)
+- [DNS guide](guides/dns.md)
+- [MCP Server](mcp/overview.md)

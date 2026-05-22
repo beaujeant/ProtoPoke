@@ -9,8 +9,8 @@ frame in scope. It is the most powerful of the three replace-rule types
 state across frames, and stash values for later use in Forge.
 
 This page is the reference for writing those scripts. For how to *add* a
-script rule, see [Intercept in the UI](/ui/intercept#replace-rules) or
-[Intercept in the Core library](/core/intercept#script-rules).
+script rule, see [Intercept in the UI](../ui/intercept.md#replace-rules) or
+[Intercept in the Core library](../core/intercept.md#script-rules).
 
 ## The `apply()` function
 
@@ -45,7 +45,7 @@ visible to every other rule.
 
 This is how you extract state from live traffic and reuse it later. Values
 stored here are also accessible as `{{VARIABLE_NAME}}` placeholders in
-[Forge playbook frames](/core/forge#variables).
+[Forge playbook frames](../core/forge.md#variables).
 
 **Capture a session token from the server, reuse it in client frames:**
 
@@ -120,5 +120,5 @@ The repo ships a real, non-trivial script:
 parses a DNS message, walks the question/answer/authority/additional
 sections, and rewrites RDATA to `127.0.0.1` *only* for `TYPE=A`, `CLASS=IN`,
 `RDLENGTH=4` records — leaving AAAA, CNAME, MX, the question section, and
-compression pointers untouched. The [DNS guide](/guides/dns) walks
+compression pointers untouched. The [DNS guide](../guides/dns.md) walks
 through why a binary or regex rule cannot do this correctly and a script can.

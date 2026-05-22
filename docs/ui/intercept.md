@@ -67,7 +67,7 @@ the cached module of a script rule).
 |------|--------------|
 | **Binary** | Match a byte sequence with a readable hex pattern syntax (wildcards `??`, ranges `[03-09]`, repeats `.{2,8}`, alternation `(01\|02)`, anchors `^` `$`) and substitute a fixed replacement. |
 | **Regex** | Match and replace with a Python bytes-regex; supports `\xNN` escapes and `\g<N>` group backreferences. `re.DOTALL` is always on. |
-| **Script** | Run a Python function you write — full programmatic control, can parse fields, keep state, and stash values for Forge. See [Custom Replace Scripts](/reference/replace-scripts). |
+| **Script** | Run a Python function you write — full programmatic control, can parse fields, keep state, and stash values for Forge. See [Custom Replace Scripts](../reference/replace-scripts.md). |
 
 ### Options
 
@@ -84,18 +84,16 @@ When adding or editing a replace rule you set:
 
   All three default to on; turn one off to limit where the rule applies.
 
-<Tip>
-  **When a binary rule is not enough**
+!!! tip "When a binary rule is not enough"
 
-  Binary and regex patterns are blind to *structure* — they cannot
-  reliably edit nested length-prefixed fields without corrupting
-  neighbouring data. When that happens, switch to a **script** rule, which
-  can actually parse the message. The [DNS guide](/guides/dns) walks
-  through exactly this trade-off.
-</Tip>
+    Binary and regex patterns are blind to *structure* — they cannot
+    reliably edit nested length-prefixed fields without corrupting
+    neighbouring data. When that happens, switch to a **script** rule, which
+    can actually parse the message. The [DNS guide](../guides/dns.md) walks
+    through exactly this trade-off.
 
 ## Next
 
-- [Custom Replace Scripts](/reference/replace-scripts) — the `apply()` API
-- [Forge](/ui/forge) — send and replay traffic
-- [Core Library — Intercept](/core/intercept) — the same, via the API
+- [Custom Replace Scripts](../reference/replace-scripts.md) — the `apply()` API
+- [Forge](forge.md) — send and replay traffic
+- [Core Library — Intercept](../core/intercept.md) — the same, via the API

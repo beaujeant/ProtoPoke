@@ -78,4 +78,4 @@ tests/
 
 ## Project Structure
 
-See [Architecture](/development/architecture) for a detailed breakdown of the codebase.
+See [Architecture](architecture.md) for a detailed breakdown of the codebase.

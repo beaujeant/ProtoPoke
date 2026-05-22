@@ -62,7 +62,7 @@ When you create or edit a playbook you choose its destination:
   opens a new connection.
 - **Existing session** — point the playbook at a live proxy or forge session
   by its ID. Frames are injected into that session instead. This is what
-  makes [half-open sessions](/ui/config#half-open-sessions-tcp-socks5) useful:
+  makes [half-open sessions](config.md#half-open-sessions-tcp-socks5) useful:
   if the client disconnected, you can keep driving the upstream from a
   playbook.
 
@@ -91,7 +91,7 @@ extends a multi-frame selection.
 ### Two ways to get frames
 
 - **From scratch** — **+ Add frame**, then type bytes in the editor.
-- **From traffic** — on the [Traffic](/ui/traffic) tab, select captured
+- **From traffic** — on the [Traffic](traffic.md) tab, select captured
   frame(s) and click **→ Forge**. They land in a new or existing playbook,
   preserving their bytes and direction.
 
@@ -103,7 +103,7 @@ handy for assembling a sequence out of pieces from different captures.
 The editor on the right edits the selected frame's bytes. It has a
 **HEX / STR** toggle and supports `{{VARIABLE}}` placeholders, which are
 resolved at send time from the shared variable store (the same store that
-[custom replace scripts](/reference/replace-scripts) write to). Edits
+[custom replace scripts](../reference/replace-scripts.md) write to). Edits
 auto-save when you switch frames.
 
 ## Running a playbook
@@ -124,5 +124,5 @@ runs and confirm what actually went over the wire.
 
 ## Next
 
-- [Custom Replace Scripts](/reference/replace-scripts) — populate `{{VARIABLE}}` values
-- [Core Library — Forge](/core/forge) — playbooks and replay via the API
+- [Custom Replace Scripts](../reference/replace-scripts.md) — populate `{{VARIABLE}}` values
+- [Core Library — Forge](../core/forge.md) — playbooks and replay via the API

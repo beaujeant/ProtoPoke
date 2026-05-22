@@ -101,13 +101,13 @@ bruteforce_numeric_layout(session_id=S, size_bytes=26, direction="client_to_serv
   }
 ```
 
-<Note>
-These field tools use **compact encoding names** — `u8`, `i8`, `u16_le`,
-`u16_be`, `i16_le`, `i16_be`, `u32_le`, `u32_be`, `i32_le`, `i32_be`,
-`f32_le`, `f32_be`, `f64_le`, `f64_be` — distinct from the verbose
-`decode_field` type list (`uint16_le`, `float32_be`, …). Any `byte_length`
-argument must match the encoding width.
-</Note>
+!!! note
+
+    These field tools use **compact encoding names** — `u8`, `i8`, `u16_le`,
+    `u16_be`, `i16_le`, `i16_be`, `u32_le`, `u32_be`, `i32_le`, `i32_be`,
+    `f32_le`, `f32_be`, `f64_le`, `f64_be` — distinct from the verbose
+    `decode_field` type list (`uint16_le`, `float32_be`, …). Any `byte_length`
+    argument must match the encoding width.
 
 ### `analyze_byte_ranges`
 
@@ -297,7 +297,7 @@ add_finding(
 )
 ```
 
-See the [Knowledge Base guide](/mcp/knowledge) for the full schema.
+See the [Knowledge Base guide](knowledge.md) for the full schema.
 
 ## 7. Hand the operator a protocol definition
 
@@ -333,6 +333,6 @@ each frame decodes cleanly.
 
 ## Reference
 
-- All analysis tools: [Tool Reference → Analysis](/mcp/tools#analysis)
-- Knowledge base: [Knowledge Base](/mcp/knowledge)
-- Definition schema: [Protocol Definitions](/reference/protocol-definitions)
+- All analysis tools: [Tool Reference → Analysis](tools.md#analysis)
+- Knowledge base: [Knowledge Base](knowledge.md)
+- Definition schema: [Protocol Definitions](../reference/protocol-definitions.md)

@@ -175,5 +175,5 @@ for safety (max 32 members, 100 MB per member).
 
 ## Next
 
-- [Traffic](/core/traffic) — sessions, events, and decoding frames
-- [User Interface — Config](/ui/config) — the same, in the TUI
+- [Traffic](traffic.md) — sessions, events, and decoding frames
+- [User Interface — Config](../ui/config.md) — the same, in the TUI

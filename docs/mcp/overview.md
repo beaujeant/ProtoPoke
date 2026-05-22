@@ -63,7 +63,7 @@ Findings and free-form notes persist across AI sessions via the `.pp`
 project file.  Use `add_finding` / `add_note` to record what you
 learn; on session start, `list_findings` / `list_notes` recover the
 previous session's reasoning.  See the
-[Knowledge Base guide](/mcp/knowledge) for the schema and worked
+[Knowledge Base guide](knowledge.md) for the schema and worked
 example.
 
 An index of every recipe is served at `protopoke://recipes`. Clients
@@ -107,5 +107,5 @@ protopoke --mcp --mcp-profile analysis
 ```
 
 Connect an AI client to `http://127.0.0.1:7878/mcp`. See
-[Configuration](/mcp/configuration) for all CLI flags, the `full` vs
+[Configuration](configuration.md) for all CLI flags, the `full` vs
 `analysis` tool profiles, and integration guides.

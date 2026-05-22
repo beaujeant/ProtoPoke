@@ -48,15 +48,15 @@ Every byte that arrives goes through two layers before you see it:
    framer cuts the raw stream into discrete **frames** (one frame = one
    application message). UDP is already message-oriented, so each datagram
    is one frame. The framer is chosen per forwarder on the
-   [Config](/ui/config) tab. Built-in options: `raw`, `delimiter`,
+   [Config](config.md) tab. Built-in options: `raw`, `delimiter`,
    `length_prefix`, `line`, plus custom scripts. Full reference:
-   [Framers](/reference/framers).
+   [Framers](../reference/framers.md).
 
 2. **Protocol definition (parser)** — an optional YAML/JSON file that
    describes the protocol's message types and field layouts. When one is
    loaded, frames are decoded into named, typed fields and the detail pane's
    **Parsed** view comes alive. Full reference:
-   [Protocol Definitions](/reference/protocol-definitions).
+   [Protocol Definitions](../reference/protocol-definitions.md).
 
 A good workflow: start with the `raw` framer, look at the hex in the detail
 pane to spot message boundaries, pick the right framer, then iteratively
@@ -76,12 +76,12 @@ Frames pane *displays*, not what is captured.
 ## Sending a frame to Forge
 
 Select one or more frames (using shift and arrows) and click **→ Forge** 
-to copy them into the [Forge](/ui/forge) tab — either as a new playbook or 
+to copy them into the [Forge](forge.md) tab — either as a new playbook or 
 appended to an existing one. This is the "send from traffic" path: 
 capture something real, then replay or edit it.
 
 ## Next
 
-- [Intercept](/ui/intercept) — hold and rewrite frames live
-- [Framers](/reference/framers) / [Protocol Definitions](/reference/protocol-definitions)
-- [Core Library — Traffic](/core/traffic) — the same, via the API
+- [Intercept](intercept.md) — hold and rewrite frames live
+- [Framers](../reference/framers.md) / [Protocol Definitions](../reference/protocol-definitions.md)
+- [Core Library — Traffic](../core/traffic.md) — the same, via the API

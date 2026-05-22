@@ -305,7 +305,7 @@ you change; `ls tests/` to find the right file.
 | New framer / mutator / field type / match strategy | matching page under `docs/reference/` |
 | `ForwarderConfig` field / project key / API method | `docs/core/` (and the table above if navigation changes) |
 | New TUI tab / modal / major widget | matching page under `docs/ui/` |
-| New doc page | add it to `docs/docs.json` or it won't render |
+| New doc page | add it to the `nav` in `mkdocs.yml` or it won't appear in navigation |
 
 When the project layout, data flow, or extension points change, update this
 file too so the next AI session starts from accurate context.

@@ -40,8 +40,8 @@ they can mix transports (one TCP, one UDP, one SOCKS5).
 | **Read buffer size** | Bytes read per socket read. |
 | **Max sessions** | Concurrency cap (`0` = unlimited). |
 | **Half-open timeout** | Seconds an idle [half-open session](#half-open-sessions-tcp-socks5) may sit before its surviving connection is reaped (`0` = off). TCP/SOCKS5 only. |
-| **Framer** | How the byte stream is cut into frames — `raw`, `delimiter`, `length_prefix`, or a custom script. Configured via the framer sub-modal. See [Framers](/reference/framers). |
-| **Protocol definition** | Path to a YAML/JSON file for decoding frames into named fields. See [Protocol Definitions](/reference/protocol-definitions). |
+| **Framer** | How the byte stream is cut into frames — `raw`, `delimiter`, `length_prefix`, or a custom script. Configured via the framer sub-modal. See [Framers](../reference/framers.md). |
+| **Protocol definition** | Path to a YAML/JSON file for decoding frames into named fields. See [Protocol Definitions](../reference/protocol-definitions.md). |
 | **TLS** | TLS termination on the client side and/or TLS to the upstream — see below. |
 | **Log level** | Optional per-forwarder override of the global log level. |
 
@@ -61,7 +61,7 @@ they can mix transports (one TCP, one UDP, one SOCKS5).
 When one peer disconnects, ProtoPoke does **not** immediately tear down the
 other side. The session moves to `only server` or `only client` and the
 surviving connection stays open, so you can keep driving it from the
-[Forge](/ui/forge) tab. The session only reaches `closed` once both sides are
+[Forge](forge.md) tab. The session only reaches `closed` once both sides are
 gone. This is on by default; the legacy TCP half-close behaviour can be
 restored per-forwarder.
 
@@ -111,7 +111,7 @@ to the *same* state the UI shows. Configure host/port here, and click the
 **Profile** selector. That selector chooses the tool surface exposed to the
 AI — `Full` (everything) or `Analysis` (the reverse-engineering subset, which
 lowers per-turn token cost); changing it restarts the embedded server. See
-[MCP Server](/mcp/overview).
+[MCP Server](../mcp/overview.md).
 
 ## Projects
 
@@ -145,5 +145,5 @@ Loading is bounded for safety (max 32 members, 100 MB per member).
 
 ## Next
 
-- [Traffic](/ui/traffic) — read captured traffic, choose framers and parsers
-- [Core Library — Config](/core/config) — the same, via `ForwarderConfig`
+- [Traffic](traffic.md) — read captured traffic, choose framers and parsers
+- [Core Library — Config](../core/config.md) — the same, via `ForwarderConfig`
