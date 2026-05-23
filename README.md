@@ -1,5 +1,7 @@
 # ProtoPoke
 
+[![docs.protopoke.net](https://shields.io/badge/https%3A%2F%2F-docs.protopoke.net-blue.svg)](https://docs.protopoke.net/)
+
 A TCP / UDP / SOCKS5 proxy and protocol analysis tool — Burp Suite for arbitrary binary protocols.
 
 ![Traffic](docs/assets/traffic.png)
